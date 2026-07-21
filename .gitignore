@@ -1,0 +1,87 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+build/
+out/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors / IDE
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Frontend
+fonted/dist/
+*.local
+
+# Backend runtime artifacts
+backend/dist/
+backend/tmp/
+backend/uploads/
+backend/renders/
+backend/v2-renders/
+tmp/
+output/
+
+# Prisma
+# Keep migrations; ignore local generated Prisma cache only.
+backend/node_modules/.prisma/
+
+# Shared runtime artifacts
+# shared/ emits NodeNext .js/.d.ts files used by backend imports with .js
+# extensions. Keep them available; regenerate after editing shared TypeScript:
+#   npm --prefix backend run build:shared
+
+# Python CLI temporary artifacts
+backend/scripts/__pycache__/
+*.pyc
+__pycache__/
+*.py[cod]
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Experiment / render artifacts
+experiments/pipeline-lab/runs/
+experiments/pipeline-lab/debug/
+experiments/remotion-render-lab/runs/
+experiments/video-understanding-lab/runs/
+experiments/video-understanding-lab/debug/
+remotion/public/render-lab-cache/
+remotion/public/local-assets/
+remotion/public/v2-assets/
+remotion/preview.render-props.json
+
+# Misc
+*.pem
+.cache/
+.turbo/

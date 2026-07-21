@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Runtime / temp
+tmp/
+/tmp/
+*.pid
+
+# Prisma local
+node_modules/.prisma/
+
+# Python
+scripts/__pycache__/
+*.pyc
+
+# OS & IDE
+.DS_Store
+.idea/
+.vscode/

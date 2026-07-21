@@ -1,0 +1,103 @@
+export declare const REMOTION_TIMELINE_SPEC_SCHEMA_VERSION: "remotion_timeline_spec.v1";
+export type RemotionTimelineAssetType = 'video' | 'image' | 'audio';
+export type RemotionTimelineAssetSource = 'user_asset' | 'generated_asset' | 'stock_asset' | 'local_fixture' | 'fallback_asset';
+export interface RemotionTimelineCanvas {
+    width: number;
+    height: number;
+    fps: number;
+    duration_sec: number;
+    background?: string;
+}
+export interface RemotionTimelineAsset {
+    id: string;
+    type: RemotionTimelineAssetType;
+    src: string;
+    source: RemotionTimelineAssetSource;
+    label?: string;
+}
+export type RemotionTimelineSceneType = 'user_video' | 'ai_video' | 'image_motion' | 'remotion_card' | 'caption_scene' | 'data_viz';
+export type RemotionTimelineFit = 'cover' | 'contain';
+export type RemotionImageMotion = 'none' | 'slow_zoom_in' | 'slow_zoom_out' | 'pan_left' | 'pan_right';
+export interface RemotionTimelineScene {
+    id: string;
+    type: RemotionTimelineSceneType;
+    start_sec: number;
+    duration_sec: number;
+    asset_id?: string;
+    fit?: RemotionTimelineFit;
+    background?: string;
+    title?: string;
+    subtitle?: string;
+    body?: string;
+    accent_color?: string;
+    motion?: RemotionImageMotion;
+    visual_role?: 'hook' | 'proof' | 'feature' | 'transition' | 'cta';
+    note?: string;
+}
+export type RemotionTimelineTransitionType = 'cut' | 'fade' | 'slide' | 'wipe' | 'light_flash';
+export type RemotionTimelineTransitionDirection = 'from-left' | 'from-right' | 'from-top' | 'from-bottom';
+export interface RemotionTimelineTransition {
+    id: string;
+    from_scene_id: string;
+    to_scene_id: string;
+    type: RemotionTimelineTransitionType;
+    duration_sec: number;
+    direction?: RemotionTimelineTransitionDirection;
+}
+export type RemotionTimelineOverlayType = 'caption' | 'title' | 'label' | 'shape' | 'image_badge' | 'light_sweep';
+export type RemotionTimelineOverlayAnimation = 'none' | 'fade' | 'slide_up_fade' | 'pop' | 'pulse' | 'sweep';
+export interface RemotionTimelineOverlay {
+    id: string;
+    type: RemotionTimelineOverlayType;
+    start_sec: number;
+    end_sec: number;
+    scene_id?: string;
+    text?: string;
+    asset_id?: string;
+    x_pct: number;
+    y_pct: number;
+    width_pct?: number;
+    height_pct?: number;
+    color?: string;
+    background?: string;
+    opacity?: number;
+    animation?: RemotionTimelineOverlayAnimation;
+}
+export interface RemotionTimelineMaterialJob {
+    id: string;
+    scene_id: string;
+    type: 'reuse_asset' | 'generate_video' | 'request_user_material';
+    status: 'planned' | 'fulfilled' | 'failed';
+    prompt?: string;
+    input_image_url?: string;
+    output_asset_id?: string;
+    fallback_asset_id?: string;
+    fallback_kind?: 'reuse_asset' | 'static_image' | 'blank_card' | 'none';
+    provider?: 'ark_seedance' | 'manual' | 'none';
+}
+export interface RemotionTimelineAudioClip {
+    id: string;
+    asset_id: string;
+    start_sec: number;
+    end_sec: number;
+    volume?: number;
+}
+export interface RemotionTimelineRenderPolicy {
+    renderer: 'remotion_timeline';
+    allow_custom_component: false;
+    fallback_renderer?: 'overlay_compose';
+}
+export interface RemotionTimelineSpecV1 {
+    schema_version: typeof REMOTION_TIMELINE_SPEC_SCHEMA_VERSION;
+    task_id: string;
+    canvas: RemotionTimelineCanvas;
+    assets: RemotionTimelineAsset[];
+    scenes: RemotionTimelineScene[];
+    transitions: RemotionTimelineTransition[];
+    overlays: RemotionTimelineOverlay[];
+    material_jobs: RemotionTimelineMaterialJob[];
+    audio?: RemotionTimelineAudioClip[];
+    render_policy: RemotionTimelineRenderPolicy;
+    notes?: string[];
+}
+//# sourceMappingURL=remotion-timeline-spec.v1.d.ts.map

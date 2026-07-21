@@ -1,0 +1,17 @@
+{
+  "name": "bytedance-dpl304-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "desktop:dev": "node desktop/scripts/dev.mjs",
+    "v2:smoke": "npm run v2:timeline:smoke",
+    "v2:timeline:smoke": "npm --prefix backend run test:smoke:v2:remotion-timeline-service",
+    "v2:timeline:check": "npm --prefix backend run build && npm --prefix fonted run build && npm --prefix backend run test:smoke:v2:boundaries && npm --prefix backend run test:smoke:v2:ffmpeg-preflight && npm --prefix backend run test:smoke:v2:remotion-timeline-spec && npm --prefix backend run test:smoke:v2:remotion-timeline-planner && npm --prefix backend run test:smoke:v2:remotion-timeline-material && npm --prefix backend run test:smoke:v2:remotion-timeline-render && npm --prefix backend run test:smoke:v2:remotion-timeline-service && npm --prefix backend run test:smoke:v2:material-adapter && npm --prefix backend run test:smoke:v2:ark-seedance-adapter",
+    "v2:check": "npm run v2:timeline:check"
+  },
+  "devDependencies": {
+    "electron": "^39.2.7"
+  }
+}

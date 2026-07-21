@@ -1,0 +1,81 @@
+import {
+  createDefaultDirectorSlots,
+  directorIntentToUserIntent,
+  mergeDirectorSlots,
+} from '@shared/lib/director-understanding'
+import type {
+  DirectorContext,
+  DirectorContextSlots,
+  DirectorUserIntent,
+} from '@shared/types/director-context'
+
+import type { InputAttachment } from '@/stores/creationStore'
+
+export type { DirectorConversationRuntime } from '@shared/lib/director-understanding'
+
+function hasUserMaterial(attachments: InputAttachment[]): boolean {
+  return attachments.some((item) => item.type === 'video' || item.type === 'image')
+}
+
+export function buildDirectorContextFromUI(input: {
+  sampleUrl: string
+  sampleName?: string
+  attachments: InputAttachment[]
+  aspectRatio: DirectorContextSlots['aspectRatio']
+  durationSec?: number
+  styleIntensity: DirectorContextSlots['styleIntensity']
+  isSampleParsed: boolean
+  existing?: DirectorContext
+}): DirectorContext {
+  const baseSlots = input.existing?.slots ?? createDefaultDirectorSlots()
+  const runtimeSlots = {
+    sampleVideoStatus: input.isSampleParsed
+      ? ('parsed' as const)
+      : input.sampleUrl.trim()
+        ? ('attached' as const)
+        : ('missing' as const),
+    materialStatus: hasUserMaterial(input.attachments)
+      ? ('ready' as const)
+      : ('missing' as const),
+    aspectRatio: input.aspectRatio,
+    durationSec: input.durationSec,
+    styleIntensity: input.styleIntensity,
+  }
+
+  return {
+    sampleVideo: input.sampleUrl.trim()
+      ? {
+          id: 'sample_video',
+          url: input.sampleUrl,
+          name: input.sampleName,
+          styleRecipe: input.existing?.sampleVideo?.styleRecipe,
+          understanding: input.existing?.sampleVideo?.understanding,
+        }
+      : undefined,
+    materials: input.attachments.map((att) => ({
+      id: att.materialId ?? att.id.replace(/^att_/, ''),
+      type: att.type,
+      url: att.url,
+      name: att.name,
+      tags: att.tags ?? [],
+    })),
+    userIntent: input.existing?.userIntent ?? {
+      goal: 'analyze_sample',
+      aspectRatio: input.aspectRatio,
+      styleIntensity: input.styleIntensity,
+      durationSec: input.durationSec,
+    },
+    currentRenderPlan: input.existing?.currentRenderPlan,
+    directorState: input.existing?.directorState,
+    conversationSummary: input.existing?.conversationSummary,
+    slots: mergeDirectorSlots(baseSlots, runtimeSlots),
+  }
+}
+
+export function applyIntentFromAction(input: {
+  action: { intent: DirectorUserIntent; slots: DirectorContextSlots; result: import('@shared/types/director-context').DirectorIntentResult }
+  prompt: string
+  existingIntent?: DirectorUserIntent
+}): DirectorUserIntent {
+  return directorIntentToUserIntent(input.action.result, input.existingIntent ?? input.action.intent, input.prompt)
+}

@@ -1,0 +1,61 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// 用户表
+model User {
+  id               Int       @id @default(autoincrement())
+  userIdHash       String    @unique @map("user_id_hash")
+  username         String
+  concurrentLimit  Int       @default(1) @map("concurrent_limit")
+  availableCredits Int       @default(100) @map("available_credits")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  materials UserMaterial[]
+  tasks     ReplicationTask[]
+
+  @@map("users")
+}
+
+/// 用户素材表
+model UserMaterial {
+  id           String @id
+  userId       Int    @map("user_id")
+  materialType String @map("material_type")
+  ossUrl       String @map("oss_url")
+  label        String @default("")
+  aiTags       Json?  @map("ai_tags")
+  status       String @default("READY")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_materials")
+}
+
+/// 核心复刻任务表（全链路）
+model ReplicationTask {
+  id              String    @id
+  userId          Int       @map("user_id")
+  sampleVideoUrl  String    @map("sample_video_url")
+  globalPrompt    String?   @map("global_prompt")
+  structureJson   Json?     @map("structure_json")
+  renderPlanJson  Json?     @map("render_plan_json")
+  finalVideoUrl   String?   @map("final_video_url")
+  taskStatus      String    @default("QUEUED") @map("task_status")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  completedAt     DateTime? @map("completed_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([taskStatus])
+  @@map("replication_tasks")
+}

@@ -1,0 +1,1 @@
+{"version":3,"file":"render-plan-materials.d.ts","sourceRoot":"","sources":["render-plan-materials.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,WAAW,EAAE,YAAY,EAAE,MAAM,4BAA4B,CAAA;AA4B3E,iCAAiC;AACjC,wBAAgB,6BAA6B,CAAC,KAAK,EAAE;IACnD,IAAI,EAAE,YAAY,CAAA;IAClB,MAAM,EAAE,WAAW,EAAE,CAAA;IACrB,MAAM,CAAC,EAAE,MAAM,CAAA;CAChB,GAAG,YAAY,CAgFf"}

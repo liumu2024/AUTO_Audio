@@ -1,0 +1,41 @@
+# 本机联调：仅启动 PostgreSQL + Redis（前后端仍在宿主机运行）
+# 使用: script/docker/db-up.ps1  或  docker compose up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dpl304-postgres
+    restart: unless-stopped
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dpl304
+    volumes:
+      - dpl304_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d dpl304']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: dpl304-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - dpl304_redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  dpl304_pg_data:
+  dpl304_redis_data:

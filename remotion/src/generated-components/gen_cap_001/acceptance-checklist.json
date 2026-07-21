@@ -1,0 +1,11 @@
+{
+  "full_frame_render": "Renders image and video assets full frame with cover fit, no unexpected cropping by default",
+  "eased_motion_apply": "Applies smooth directional pan motion matched to configured direction vector for static assets to add dynamic movement",
+  "ripple_effect_apply": "Renders subtle ripple displacement effect using native SVG filters with no external dependencies",
+  "effect_prop_safety": "All numeric props from props.effects.props are validated with typeof checks before usage, no unsafe untyped access",
+  "interpolate_rules": "All Remotion interpolate calls use valid string 'clamp' values for extrapolateLeft and extrapolateRight",
+  "no_banned_apis": "No fetch, WebSocket, storage, eval, dynamic imports or other restricted browser APIs used in component code",
+  "import_validation": "Imports only from 'remotion' and uses type-only import for GeneratedComponentRenderProps from component-registry",
+  "segment_compatibility": "Works as intended across all 3 target segment_ids without layout or performance breaks",
+  "single_composite_behavior": "Only implements composite effect layer responsibility, no unrelated text, audio or mask logic included"
+}

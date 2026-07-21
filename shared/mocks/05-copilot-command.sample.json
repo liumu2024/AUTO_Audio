@@ -1,0 +1,10 @@
+{
+  "prompt": "开头更抓人一些，把商品信息提前",
+  "expected_stages": [
+    { "progress": 10, "stage": "解析指令", "log": "正在提取自然语言意图..." },
+    { "progress": 30, "stage": "匹配锚点", "log": "正在重组 Hook 与 CTA 段落..." },
+    { "progress": 60, "stage": "AIGC 补全", "log": "调用视觉模型生成缺失画面..." },
+    { "progress": 90, "stage": "渲染合成", "log": "FFmpeg 正在混流处理花字..." },
+    { "progress": 100, "stage": "完成", "log": "新视频生成完毕！" }
+  ]
+}

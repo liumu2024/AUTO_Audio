@@ -1,0 +1,35 @@
+{
+  "name": "dpl304-remotion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "preview": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts Dpl304Video"
+  },
+  "dependencies": {
+    "@react-three/fiber": "^9.6.1",
+    "@remotion/animated-emoji": "^4.0.469",
+    "@remotion/captions": "^4.0.469",
+    "@remotion/cli": "^4.0.469",
+    "@remotion/gif": "^4.0.469",
+    "@remotion/google-fonts": "^4.0.469",
+    "@remotion/layout-utils": "^4.0.469",
+    "@remotion/light-leaks": "^4.0.469",
+    "@remotion/lottie": "^4.0.469",
+    "@remotion/media": "^4.0.469",
+    "@remotion/media-utils": "^4.0.469",
+    "@remotion/noise": "^4.0.469",
+    "@remotion/renderer": "^4.0.469",
+    "@remotion/shapes": "^4.0.469",
+    "@remotion/three": "^4.0.469",
+    "@remotion/transitions": "^4.0.469",
+    "remotion": "^4.0.469",
+    "three": "^0.184.0",
+    "typescript": "~5.8.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3"
+  }
+}

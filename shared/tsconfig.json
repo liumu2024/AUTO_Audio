@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "typeRoots": ["../backend/node_modules/@types"],
+    "resolveJsonModule": true,
+    "rootDir": "."
+  },
+  "include": ["lib/**/*.ts", "types/**/*.ts"],
+  "exclude": ["**/*.d.ts", "node_modules"]
+}
