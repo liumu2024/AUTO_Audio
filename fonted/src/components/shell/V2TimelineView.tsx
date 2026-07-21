@@ -127,8 +127,16 @@ export function V2TimelineView() {
     setUploading(true)
     setError(null)
     try {
-      const uploaded = await api.uploadFile(file)
-      setInputImageUrl(uploaded.url)
+      const uploaded = await api.uploadFile(file, { requirePublicUrl: true })
+      const publicUrl = uploaded.publicUrl ?? uploaded.url
+      const publicAccess = classifyExternalUrlAccess(publicUrl)
+      if (!publicAccess.ok) {
+        throw new Error(
+          `Uploaded image is not externally reachable: ${publicAccess.reason}`,
+        )
+      }
+      setInputImageUrl(publicUrl)
+      if (uploaded.localPath) setImageSrc(uploaded.localPath)
       setPreview(null)
       setResult(null)
       setReviewedSignature(null)

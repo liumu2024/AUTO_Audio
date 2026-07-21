@@ -57,9 +57,21 @@ export interface AnalyzeTaskPayload {
 
 export interface UploadResult {
   url: string
+  publicUrl?: string
+  localUrl?: string
+  localPath?: string
   filename: string
   size: number
   mimetype: string
+  publication?: {
+    provider: 'local' | 'tos'
+    status: 'published' | 'local_only' | 'failed'
+    localUrl: string
+    publicUrl?: string
+    objectKey?: string
+    externallyReachable: boolean
+    error?: string
+  }
 }
 
 export type DirectorAgentStreamEvent =
@@ -219,9 +231,15 @@ export async function runV2Timeline(payload: V2TimelinePayload) {
   })
 }
 
-export async function uploadFile(file: File): Promise<UploadResult> {
+export async function uploadFile(
+  file: File,
+  options: { requirePublicUrl?: boolean } = {},
+): Promise<UploadResult> {
   const form = new FormData()
   form.append('file', file)
+  if (options.requirePublicUrl) {
+    form.append('requirePublicUrl', 'true')
+  }
 
   const res = await fetch(`${env.apiBase}/api/uploads`, {
     method: 'POST',

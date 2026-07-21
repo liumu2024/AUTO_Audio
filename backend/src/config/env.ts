@@ -39,6 +39,29 @@ export const env = {
     readEnv('PUBLIC_UPLOAD_BASE_URL') ??
     process.env.PUBLIC_BASE_URL ??
     `http://localhost:${process.env.PORT ?? 3001}`,
+  assetPublisherProvider:
+    readEnv('ASSET_PUBLISHER_PROVIDER') === 'tos' ? 'tos' : 'local',
+  assetPublisherPublicBaseUrl:
+    readEnv('ASSET_PUBLISHER_PUBLIC_BASE_URL') ??
+    readEnv('TOS_PUBLIC_BASE_URL') ??
+    readEnv('PUBLIC_ASSET_BASE_URL') ??
+    readEnv('PUBLIC_UPLOAD_BASE_URL'),
+  assetPublisherVerifyPublicUrl:
+    readEnv('ASSET_PUBLISHER_VERIFY_PUBLIC_URL') !== 'false',
+  assetPublisherVerifyTimeoutMs: readNumber(
+    'ASSET_PUBLISHER_VERIFY_TIMEOUT_MS',
+    10_000,
+  ),
+  tosAccessKeyId:
+    readEnv('TOS_ACCESS_KEY_ID') ??
+    readEnv('VOLCENGINE_ACCESS_KEY_ID'),
+  tosAccessKeySecret:
+    readEnv('TOS_ACCESS_KEY_SECRET') ??
+    readEnv('VOLCENGINE_ACCESS_KEY_SECRET'),
+  tosRegion: readEnv('TOS_REGION') ?? 'cn-beijing',
+  tosEndpoint: readEnv('TOS_ENDPOINT'),
+  tosBucket: readEnv('TOS_BUCKET'),
+  tosObjectPrefix: readEnv('TOS_OBJECT_PREFIX') ?? 'dpl304/uploads',
   agentTraceDir: defaultAgentTraceDir,
   enableAgentTrace: readEnv('ENABLE_AGENT_TRACE') !== 'false',
   traceVerbosity: readEnv('TRACE_VERBOSITY') === 'debug' ? 'debug' : 'compact',

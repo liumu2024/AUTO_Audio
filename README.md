@@ -202,6 +202,28 @@ configured. Ark Seedance image-to-video jobs need either `input_image_url` in
 the reviewed planner draft, the V2 frontend `I2V input image URL` field, or
 `V2_VIDEO_GENERATION_DEFAULT_IMAGE_URL`.
 
+For real image-to-video calls with locally uploaded images, configure the asset
+publisher instead of manually editing a per-file URL:
+
+```env
+ASSET_PUBLISHER_PROVIDER=tos
+ASSET_PUBLISHER_PUBLIC_BASE_URL=https://<bucket-or-cdn-domain>
+TOS_ACCESS_KEY_ID=...
+TOS_ACCESS_KEY_SECRET=...
+TOS_REGION=cn-beijing
+TOS_ENDPOINT=tos-cn-beijing.volces.com
+TOS_BUCKET=...
+TOS_OBJECT_PREFIX=dpl304/uploads
+ASSET_PUBLISHER_VERIFY_PUBLIC_URL=true
+ASSET_PUBLISHER_VERIFY_TIMEOUT_MS=10000
+```
+
+`POST /api/uploads` stores the file locally for Remotion and, when requested by
+the V2 page, publishes it to TOS for Seedance. The response contains `localPath`
+for local rendering and `publicUrl` for external providers. If public publishing
+is required but not configured, or if the uploaded object cannot be read from the
+published URL, upload fails before the provider call.
+
 ## Runtime Trace
 
 Runtime trace is written under one task-scoped directory by default:

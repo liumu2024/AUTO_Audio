@@ -77,7 +77,7 @@ The worker commands should run in separate terminals.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Health check. |
-| `POST` | `/api/uploads` | Upload sample or material files. |
+| `POST` | `/api/uploads` | Upload sample or material files; optionally publish them for external image-to-video providers. |
 | `POST` | `/api/tasks/analyze` | Create sample-understanding task. |
 | `GET` | `/api/tasks/:taskId` | Get task row. |
 | `GET` | `/api/tasks/:taskId/pipeline` | Get `PipelineBundle`. |
@@ -97,6 +97,30 @@ These directories are ignored and can be deleted:
 - `dist/`
 
 They are recreated by the app when needed.
+
+## Asset Publication
+
+Uploads are always stored under `backend/uploads/` for local Remotion use. When
+the multipart form includes `requirePublicUrl=true`, the upload controller also
+requires an externally reachable URL. In formal V2 image-to-video testing, set:
+
+```env
+ASSET_PUBLISHER_PROVIDER=tos
+ASSET_PUBLISHER_PUBLIC_BASE_URL=https://<bucket-or-cdn-domain>
+TOS_ACCESS_KEY_ID=...
+TOS_ACCESS_KEY_SECRET=...
+TOS_REGION=cn-beijing
+TOS_ENDPOINT=tos-cn-beijing.volces.com
+TOS_BUCKET=...
+TOS_OBJECT_PREFIX=dpl304/uploads
+ASSET_PUBLISHER_VERIFY_PUBLIC_URL=true
+ASSET_PUBLISHER_VERIFY_TIMEOUT_MS=10000
+```
+
+The upload response includes `localPath` for Remotion and `publicUrl` for
+Seedance. If the asset cannot be published or the URL still points to localhost
+or a private network, or the uploaded object cannot be read back from the
+published URL, the request fails before the video-generation adapter is called.
 
 ## Verification
 

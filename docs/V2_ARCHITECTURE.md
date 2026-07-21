@@ -107,4 +107,29 @@ backend/tmp/v2-agent-trace/<taskId>/
 npm.cmd run v2:check
 ```
 
+## Asset Publication Boundary
+
+Local uploads serve two different consumers and must not be treated as one URL:
+
+```text
+/api/uploads
+  -> backend/uploads/<file> for local Remotion rendering
+  -> optional TOS object for cloud image-to-video providers
+```
+
+When the caller passes `requirePublicUrl=true`, the upload request must return
+an externally reachable `publicUrl` or fail before any Seedance task is
+submitted. TOS publication also verifies that the published URL can be read back
+before handing it to the video-generation adapter. The frontend V2 timeline page
+uses this mode for image-to-video inputs and separately keeps `localPath` for
+Remotion preview/rendering.
+
+The active implementation lives in:
+
+```text
+backend/src/modules/upload/asset-publisher.ts
+backend/src/modules/upload/upload.controller.ts
+fonted/src/components/shell/V2TimelineView.tsx
+```
+
 该命令覆盖后端构建、前端构建、V2 边界检查、FFmpeg 预检、Timeline spec/validator、planner、素材解析、Remotion 渲染和 service 全链路 smoke。

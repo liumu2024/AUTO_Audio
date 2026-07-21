@@ -16,6 +16,7 @@
     "test:smoke:v2": "npm run test:smoke:v2:remotion-timeline-service",
     "test:smoke:v2:boundaries": "tsx scripts/check-v2-import-boundaries.ts",
     "test:smoke:v2:ffmpeg-preflight": "tsx scripts/smoke-v2-ffmpeg-preflight.ts",
+    "test:smoke:v2:asset-publisher": "tsx scripts/smoke-v2-asset-publisher.ts",
     "test:smoke:v2:remotion-timeline-spec": "npm run build:shared && tsx scripts/smoke-v2-remotion-timeline-spec.ts",
     "test:smoke:v2:remotion-timeline-planner": "npm run build:shared && tsx scripts/smoke-v2-remotion-timeline-planner.ts",
     "test:smoke:v2:remotion-timeline-material": "npm run build:shared && tsx scripts/smoke-v2-remotion-timeline-material-resolver.ts",
@@ -54,6 +55,7 @@
   "dependencies": {
     "@prisma/client": "^6.8.2",
     "@types/multer": "^2.1.0",
+    "@volcengine/tos-sdk": "^2.9.1",
     "bullmq": "^5.52.2",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",

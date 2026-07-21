@@ -131,7 +131,7 @@ export function createArkSeedanceMaterialGenerationAdapter(
     if (!urlAccess.ok) {
       throw new Error(
         `Seedance input_image_url is not externally reachable (${urlAccess.kind}): ${urlAccess.reason} ` +
-          'Set PUBLIC_ASSET_BASE_URL to a public upload host, or provide an already public image URL.',
+          'Upload the image through /api/uploads with requirePublicUrl=true and configure the asset publisher, or provide an already public image URL.',
       )
     }
 
