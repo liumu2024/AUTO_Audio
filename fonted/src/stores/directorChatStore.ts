@@ -38,7 +38,7 @@ const WELCOME_MESSAGE: DirectorChatMessage = {
   role: 'assistant',
   kind: 'text',
   content:
-    '你好，我是 AI 导演助理。先上传 1 个样例视频作为结构、风格和节奏来源，再补充图片、视频或音频作为成片素材；我会严格区分样例和素材。',
+    '你好，我是 AI 导演助理。你可以先和我聊想做什么、让我拆解样例、讨论风格方案，或者直接上传视频/图片开始执行；需要真正生成或渲染时，我再提醒你补齐必要素材。',
   createdAt: 0,
   status: 'done',
 }

@@ -197,6 +197,12 @@ function buildPrompt(input: {
 - 用户说“重新渲染”：这是使用当前 RenderPlan 出新 MP4，nextAction 用 RENDER。
 - 用户说“按提示修改后渲染/先修改再渲染”：优先从提示中抽取 slotsPatch，然后 nextAction 用 RENDER。
 
+Conversation freedom rules:
+- 如果用户是在聊天、咨询方案、解释结果、问你能做什么、讨论项目设计，不要因为缺样例或缺素材而要求上传；先自然回答问题，再给一个可选下一步。
+- 只有用户明确要执行“解析样例 / 生成方案 / 渲染导出 / 修改 RenderPlan”时，才检查样例、素材和任务上下文是否齐全。
+- assistantMessage 不要复述内部状态机、slot、nextAction 或置信度；这些只放在 debug/publicThoughts。
+- 缺少条件时也要像协作伙伴一样说明“现在能聊什么、下一步补什么”，不要只说固定模板。
+
 Revision / state machine rules:
 - directorState.phase tells you where the product currently is; do not answer as if starting from scratch.
 - currentRevision is the editable RenderPlan version, syncedRevision is the backend-saved version, renderedRevision is the MP4 version.
@@ -346,6 +352,11 @@ function applyHardGuards(input: {
     llmResult.intent === 'render' ||
     llmResult.nextAction === 'GENERATE_VIDEO' ||
     llmResult.nextAction === 'RENDER'
+  const needsSampleBeforeWork =
+    wantsOutput ||
+    llmResult.intent === 'analyze_sample' ||
+    llmResult.nextAction === 'ANALYZE_SAMPLE' ||
+    llmResult.nextAction === 'NEED_SAMPLE'
   const analyzeOnly = /只解析|先解析|不要生成|不生成|不要出片|不出片/.test(prompt)
 
   if (!runtime.backendEnabled) {
@@ -359,7 +370,7 @@ function applyHardGuards(input: {
     }
   }
 
-  if (!runtime.sampleUrl.trim()) {
+  if (!runtime.sampleUrl.trim() && needsSampleBeforeWork) {
     return {
       ...llmResult,
       intent: 'analyze_sample',

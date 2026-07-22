@@ -308,7 +308,7 @@ export function routeDirectorConversation(input: {
   const wantsOutput = signal.intent === 'generate_video' || signal.intent === 'render'
   if (
     mergedSlots.sampleVideoStatus === 'missing' &&
-    (signal.intent === 'analyze_sample' || wantsOutput || signal.intent === 'unknown')
+    (signal.intent === 'analyze_sample' || wantsOutput)
   ) {
     return {
       intent: signal.intent === 'unknown' ? 'analyze_sample' : signal.intent,

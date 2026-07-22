@@ -78,9 +78,39 @@ function case4() {
   passed += 1
 }
 
+function case5() {
+  const result = routeDirectorConversation({
+    prompt: '你能帮我做什么？',
+    slots: createDefaultDirectorSlots(),
+    runtime: { ...baseRuntime, sampleUrl: '' },
+  })
+  assert(result.nextAction !== 'NEED_SAMPLE', `case5 should allow free conversation: ${result.nextAction}`)
+  assert(
+    !result.missingSlots.includes('sampleVideoStatus'),
+    `case5 missing=${result.missingSlots.join(',')}`,
+  )
+  passed += 1
+}
+
+function case6() {
+  const result = routeDirectorConversation({
+    prompt: '分析样例视频',
+    slots: createDefaultDirectorSlots(),
+    runtime: { ...baseRuntime, sampleUrl: '' },
+  })
+  assert(result.nextAction === 'NEED_SAMPLE', `case6 should request sample: ${result.nextAction}`)
+  assert(
+    result.missingSlots.includes('sampleVideoStatus'),
+    `case6 missing=${result.missingSlots.join(',')}`,
+  )
+  passed += 1
+}
+
 case1()
 case2()
 case3()
 case4()
+case5()
+case6()
 
-console.log(`smoke-director-conversation: ${passed}/4 passed`)
+console.log(`smoke-director-conversation: ${passed}/6 passed`)
