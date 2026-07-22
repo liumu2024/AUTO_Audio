@@ -1,8 +1,8 @@
 # Frontend
 
 `fonted/` is the React + Vite editor UI. It owns user interaction, director
-chat, material selection, timeline/preview state, and editable `RenderPlanV1`
-state. It does not call Ark, Remotion CLI, local databases, or worker processes
+chat, material selection, V2 timeline preview state, and rendered output state.
+It does not call Ark, Remotion CLI, local databases, or worker processes
 directly.
 
 ## Main Areas
@@ -13,8 +13,8 @@ directly.
 | `src/components/canvas/` | Preview and generated-player surfaces. |
 | `src/components/layout/` | Editor layout and property panels. |
 | `src/services/director/` | Frontend director context, action execution, and action-to-tool wiring. |
-| `src/services/pipeline/` | Analysis/generation API calls, uploads, cache reuse, polling, restore. |
-| `src/stores/` | Zustand stores for creation, pipeline, render plan, timeline, task progress, and director state. |
+| `src/services/director/v2DirectorTimeline.ts` | Adapter from director actions to `/api/v2/timeline/preview` and `/api/v2/timeline/run`. |
+| `src/stores/` | Zustand stores for creation, V2 timeline, compatibility pipeline hydration, task progress, and director state. |
 | `src/types/` | Frontend-facing protocol aliases. Shared protocol source remains in `../shared`. |
 
 ## Current Agentic Frontend Flow
@@ -25,29 +25,23 @@ Chat / UI intent
   -> backend director router or rule fallback
   -> DirectorAction
   -> frontend action executor
-  -> sample/material analysis, RenderPlan generation, edit, or render
+  -> V2 timeline preview, material analysis, revision, or render
 ```
 
-The frontend may select a RenderPlan candidate and run validation/repair before
-submitting, but the backend still repeats the critical save/render checks.
+The frontend adapts V2 timeline specs into older timeline/pipeline stores only
+so existing panels can keep displaying outline and preview data. It does not
+submit the old V1 analyze/copilot task flow.
 
-## Analysis Cache
+## V2 Trace
 
-`src/services/pipeline/analysisCache.ts` stores only a small local mapping from
-an exact input fingerprint to a completed backend `taskId`.
+V2 preview/run responses return `traceDir`, which points to:
 
-Cache key inputs:
+```text
+backend/tmp/v2-agent-trace/<taskId>/
+```
 
-- sample media fingerprint;
-- material fingerprints;
-- prompt;
-- aspect ratio;
-- duration;
-- style intensity.
-
-On a cache hit, the frontend still asks the backend for the pipeline bundle. If
-the backend task is gone or incomplete, the cache entry is dropped and normal
-analysis runs.
+Old WebSocket task progress is skipped for `v2_` task IDs to avoid writing V1
+`agent-trace` artifacts during the migrated flow.
 
 ## Shared Imports
 

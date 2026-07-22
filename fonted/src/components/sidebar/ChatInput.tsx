@@ -140,14 +140,14 @@ export function ChatInput({
     type: 'rewrite_plan' | 'rerender' | 'revise_and_render',
   ) => {
     if (type === 'rewrite_plan') {
-      sendText('重新生成方案：根据当前样例解析和素材重写 RenderPlan，不要直接渲染。')
+      sendText('重新生成方案：根据当前样例解析和素材重排时间线方案，不要直接渲染。')
       return
     }
     if (type === 'rerender') {
-      sendText('按当前右侧 RenderPlan 重新渲染，直接输出新的 mp4。')
+      sendText('按当前右侧时间线方案重新渲染，直接输出新的 mp4。')
       return
     }
-    sendText(`先修改当前 RenderPlan，再重新渲染：${draft.trim() || '按当前输入框的修改要求'}`)
+    sendText(`先修改当前时间线方案，再重新渲染：${draft.trim() || '按当前输入框的修改要求'}`)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

@@ -4,12 +4,17 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { env } from '@/config/env'
 import * as api from '@/lib/api'
-import { runPipelineGeneration } from '@/services/pipeline/runGeneration'
+import {
+  renderV2DirectorTimeline,
+  v2MaterialsFromAttachments,
+} from '@/services/director/v2DirectorTimeline'
+import { useCreationStore } from '@/stores/creationStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { useMigrationProjectStore } from '@/stores/migrationProjectStore'
 import { usePropertyEditorStore } from '@/stores/propertyEditorStore'
 import { useRenderPlanStore } from '@/stores/renderPlanStore'
 import { useTaskStore } from '@/stores/taskStore'
+import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 
 export function EditorHeader() {
   const projectName = useEditorStore((s) => s.projectName)
@@ -17,6 +22,7 @@ export function EditorHeader() {
   const renderPlan = useRenderPlanStore((s) => s.plan)
   const renderPlanDirty = useRenderPlanStore((s) => s.isDirty)
   const renderPlanSyncStatus = useRenderPlanStore((s) => s.syncStatus)
+  const v2Spec = useV2TimelineStore((s) => s.spec)
   const activeTaskId = useTaskStore((s) => s.activeTaskId)
   const backendReady = useTaskStore((s) => s.backendReady)
   const isTaskRunning = useTaskStore((s) => s.isTaskRunning)
@@ -44,9 +50,14 @@ export function EditorHeader() {
     }
 
     if (useEditorStore.getState().timelineMode === 'generation') {
+      if (useV2TimelineStore.getState().spec) {
+        taskStore.addLog('[编辑] V2 Timeline 方案已保存在本次 preview trace 中。')
+        return true
+      }
+
       const currentRenderPlan = useRenderPlanStore.getState().plan
       if (!currentRenderPlan) {
-        taskStore.addLog('[编辑] 保存失败：当前没有可保存的 RenderPlan。')
+        taskStore.addLog('[编辑] 保存失败：当前没有可保存的旧版 RenderPlan。')
         return false
       }
 
@@ -59,13 +70,13 @@ export function EditorHeader() {
         )
         useRenderPlanStore.getState().setPlan(savedRenderPlan)
         taskStore.addLog(
-          `[编辑] RenderPlan revision ${savedRenderPlan.plan_revision ?? currentRenderPlan.plan_revision ?? 1} 已同步到后端。${changeSummary}`,
+          `[编辑] 旧版 RenderPlan revision ${savedRenderPlan.plan_revision ?? currentRenderPlan.plan_revision ?? 1} 已同步到后端。${changeSummary}`,
         )
         return true
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         useRenderPlanStore.getState().markSyncFailed(message)
-        taskStore.addLog(`[编辑] RenderPlan 保存失败：${message}`)
+        taskStore.addLog(`[编辑] 旧版 RenderPlan 保存失败：${message}`)
         return false
       }
     }
@@ -101,11 +112,11 @@ export function EditorHeader() {
       return
     }
     if (!env.useBackend || !backendReady) {
-      taskStore.addLog('[导出] 后端未就绪，请先启动后端、Redis、PostgreSQL 和 generator.worker。')
+      taskStore.addLog('[导出] 后端未就绪，请先启动 backend。')
       return
     }
-    if (!useRenderPlanStore.getState().plan) {
-      taskStore.addLog('[导出] 当前没有 RenderPlan，请先完成样例解析并进入生成编辑。')
+    if (!useV2TimelineStore.getState().spec) {
+      taskStore.addLog('[导出] 当前没有 V2 Timeline 方案，请先在左侧对话中生成方案。')
       return
     }
 
@@ -113,7 +124,16 @@ export function EditorHeader() {
     try {
       const saved = await saveCurrentWork()
       if (!saved) return
-      await runPipelineGeneration(taskId, '导出成片')
+      const creation = useCreationStore.getState()
+      await renderV2DirectorTimeline({
+        taskId,
+        prompt: creation.inputText || '导出当前 V2 Timeline 成片',
+        sampleVideoUrl: creation.sampleUrl,
+        sampleVideoName: creation.sampleName,
+        aspectRatio: creation.aspectRatio,
+        durationSec: creation.durationSec,
+        materials: v2MaterialsFromAttachments(creation.attachments),
+      })
     } catch (error) {
       taskStore.addLog(`[导出] 提交失败：${error instanceof Error ? error.message : String(error)}`)
     } finally {
@@ -126,9 +146,9 @@ export function EditorHeader() {
     exporting ||
     renderPlanSyncStatus === 'syncing' ||
     (env.useBackend && !activeTaskId) ||
-    (timelineMode === 'generation' && !renderPlan)
+    (timelineMode === 'generation' && !renderPlan && !v2Spec)
   const exportDisabled =
-    saving || exporting || isTaskRunning || copilotLoading || !activeTaskId || !renderPlan
+    saving || exporting || isTaskRunning || copilotLoading || !activeTaskId || !v2Spec
 
   return (
     <header className="relative flex h-14 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-950 px-4">
@@ -154,7 +174,7 @@ export function EditorHeader() {
           type="button"
           disabled={saveDisabled}
           onClick={() => void handleSave()}
-          title={renderPlanDirty ? '保存当前 RenderPlan' : '同步当前编辑'}
+          title={renderPlanDirty ? '保存当前旧版 RenderPlan' : '同步当前编辑'}
         >
           <Save className="h-3.5 w-3.5" />
           {saving ? '保存中' : '保存'}
@@ -165,7 +185,7 @@ export function EditorHeader() {
           type="button"
           disabled={exportDisabled}
           onClick={() => void handleExport()}
-          title="保存当前 RenderPlan 并提交生成成片"
+          title="渲染当前 V2 Timeline 成片"
         >
           {exporting ? '导出中' : '导出成片'}
         </Button>

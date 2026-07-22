@@ -14,6 +14,7 @@ export interface V2RemotionTimelinePlannerInput extends V2PlannerInput {
 }
 
 function resolveRepoPath(value: string): string {
+  if (/^https?:\/\//i.test(value) || value.startsWith('static:')) return value
   if (path.isAbsolute(value)) return value
   return path.resolve(process.cwd(), '..', value)
 }
@@ -53,15 +54,16 @@ export function buildDeterministicRemotionTimelineSpec(
   const fps = input.canvas?.fps ?? 24
   const [firstDuration, secondDuration, thirdDuration] = sceneDurationParts(durationSec)
   const copy = textFromPrompt(input.prompt)
-  const assets: RemotionTimelineAsset[] = [
-    {
+  const assets: RemotionTimelineAsset[] = []
+  if (input.mainVideoPath) {
+    assets.push({
       id: 'main_video_asset',
       type: 'video',
       src: resolveRepoPath(input.mainVideoPath),
       source: 'user_asset',
       label: 'User main video',
-    },
-  ]
+    })
+  }
   const hasImage = Boolean(input.imageSrc || input.inputImageUrl)
   if (hasImage) {
     assets.push({
@@ -95,8 +97,45 @@ export function buildDeterministicRemotionTimelineSpec(
         subtitle: 'Remotion scene',
         body: 'A generated card fills the structure when no image asset is provided.',
         accent_color: '#f59e0b',
-        visual_role: 'feature',
+      visual_role: 'feature',
+    }
+
+  const firstScene: RemotionTimelineScene = input.mainVideoPath
+    ? {
+        id: 'scene_001',
+        type: 'user_video',
+        start_sec: 0,
+        duration_sec: firstDuration,
+        asset_id: 'main_video_asset',
+        fit: 'cover',
+        title: 'Source video beat',
+        subtitle: 'User material',
+        visual_role: 'hook',
       }
+    : hasImage
+      ? {
+          id: 'scene_001',
+          type: 'image_motion',
+          start_sec: 0,
+          duration_sec: firstDuration,
+          asset_id: 'planner_image_asset',
+          fit: 'cover',
+          motion: 'slow_zoom_out',
+          title: 'Image opening beat',
+          subtitle: 'User material',
+          visual_role: 'hook',
+        }
+      : {
+          id: 'scene_001',
+          type: 'remotion_card',
+          start_sec: 0,
+          duration_sec: firstDuration,
+          title: 'Opening beat',
+          subtitle: 'Remotion scene',
+          body: 'Programmatic opening when no visual material is available.',
+          accent_color: '#22c55e',
+          visual_role: 'hook',
+        }
 
   const spec: RemotionTimelineSpecV1 = {
     schema_version: REMOTION_TIMELINE_SPEC_SCHEMA_VERSION,
@@ -110,17 +149,7 @@ export function buildDeterministicRemotionTimelineSpec(
     },
     assets,
     scenes: [
-      {
-        id: 'scene_001',
-        type: 'user_video',
-        start_sec: 0,
-        duration_sec: firstDuration,
-        asset_id: 'main_video_asset',
-        fit: 'cover',
-        title: 'Source video beat',
-        subtitle: 'User material',
-        visual_role: 'hook',
-      },
+      firstScene,
       secondScene,
       {
         id: 'scene_003',
@@ -177,17 +206,19 @@ export function buildDeterministicRemotionTimelineSpec(
         animation: 'pop',
       },
     ],
-    material_jobs: [
-      {
-        id: 'job_reuse_main_video',
-        scene_id: 'scene_001',
-        type: 'reuse_asset',
-        status: 'fulfilled',
-        output_asset_id: 'main_video_asset',
-        provider: 'none',
-        fallback_kind: 'none',
-      },
-    ],
+    material_jobs: input.mainVideoPath
+      ? [
+          {
+            id: 'job_reuse_main_video',
+            scene_id: 'scene_001',
+            type: 'reuse_asset',
+            status: 'fulfilled',
+            output_asset_id: 'main_video_asset',
+            provider: 'none',
+            fallback_kind: 'none',
+          },
+        ]
+      : [],
     render_policy: {
       renderer: 'remotion_timeline',
       allow_custom_component: false,

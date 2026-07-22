@@ -28,6 +28,7 @@ import { usePipelineStore } from '@/stores/pipelineStore'
 import { useRenderPlanStore } from '@/stores/renderPlanStore'
 import { useTaskStore } from '@/stores/taskStore'
 import { useTimelineStore } from '@/stores/timelineStore'
+import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 import type { DirectorAction, DirectorActionType } from '@shared/types/director-action'
 import type { DirectorSessionState, RenderPlanDiff } from '@shared/types/director-state'
 
@@ -136,6 +137,7 @@ function eventThought(event: DirectorAgentStreamEvent): string | null {
 function buildConversationSummary() {
   const bundle = usePipelineStore.getState().bundle
   const plan = useRenderPlanStore.getState().plan
+  const v2 = useV2TimelineStore.getState()
   const outline = bundle?.outline ?? []
   const outlineText = outline
     .slice(0, 8)
@@ -149,9 +151,17 @@ function buildConversationSummary() {
     })
     .join('；')
 
-  const renderText = plan
-    ? `当前已有 RenderPlan：${plan.scenes.length} 个场景，画幅 ${plan.canvas.ratio}，时长 ${plan.duration_sec}s。`
-    : '当前还没有生成 RenderPlan。'
+  const renderText = v2.spec
+    ? [
+        `当前已有 V2 时间线方案：${v2.spec.scenes.length} 个场景，画幅 ${v2.spec.canvas.width}x${v2.spec.canvas.height}，时长 ${v2.spec.canvas.duration_sec}s。`,
+        v2.preview?.traceDir ? `最近一次 preview trace：${v2.preview.traceDir}` : '',
+        v2.result?.traceDir ? `最近一次 render trace：${v2.result.traceDir}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+    : plan
+      ? `当前只有旧版 RenderPlan：${plan.scenes.length} 个场景，画幅 ${plan.canvas.ratio}，时长 ${plan.duration_sec}s。`
+      : '当前还没有生成时间线方案。'
 
   return [outlineText ? `样例拆解大纲：${outlineText}` : '', renderText]
     .filter(Boolean)

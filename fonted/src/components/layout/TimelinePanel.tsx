@@ -2,6 +2,7 @@ import { EditableTimeline } from '@/components/timeline/EditableTimeline'
 import { cn } from '@/lib/utils'
 import { useEditorStore, type TimelineMode } from '@/stores/editorStore'
 import { useRenderPlanStore } from '@/stores/renderPlanStore'
+import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 
 const TABS: Array<{ id: TimelineMode; label: string; hint: string }> = [
   {
@@ -12,7 +13,7 @@ const TABS: Array<{ id: TimelineMode; label: string; hint: string }> = [
   {
     id: 'generation',
     label: '生成编辑',
-    hint: '按画面 / 文字 / 效果 / 音频四轨编辑 RenderPlan',
+    hint: '按画面 / 文字 / 效果 / 音频四轨查看时间线方案',
   },
 ]
 
@@ -21,7 +22,8 @@ export function TimelinePanel() {
   const setMode = useEditorStore((s) => s.setTimelineMode)
   const generationEditEnabled = useEditorStore((s) => s.generationEditEnabled)
   const hasRenderPlan = useRenderPlanStore((s) => Boolean(s.plan?.scenes.length))
-  const canOpenGeneration = generationEditEnabled || hasRenderPlan
+  const hasV2Timeline = useV2TimelineStore((s) => Boolean(s.spec?.scenes.length))
+  const canOpenGeneration = generationEditEnabled || hasRenderPlan || hasV2Timeline
   const current = TABS.find((tab) => tab.id === mode) ?? TABS[0]
 
   return (
@@ -46,7 +48,7 @@ export function TimelinePanel() {
                 )}
                 title={
                   disabled
-                    ? '请先在对话中说「生成」，完成 RenderPlan 编排后再进入生成编辑'
+                    ? '请先在对话中说「生成」，完成时间线方案后再进入生成编辑'
                     : tab.hint
                 }
               >

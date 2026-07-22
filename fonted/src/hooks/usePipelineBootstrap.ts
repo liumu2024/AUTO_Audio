@@ -2,8 +2,6 @@ import { useEffect, useRef } from 'react'
 
 import { env } from '@/config/env'
 import * as api from '@/lib/api'
-import { readSavedTaskId } from '@/lib/session'
-import { restoreTaskContext } from '@/services/pipeline/restoreTask'
 import { useTaskStore } from '@/stores/taskStore'
 
 function isBackendUnreachable(error: unknown): boolean {
@@ -36,31 +34,13 @@ export function usePipelineBootstrap() {
         if (cancelled) return
         setBackendReady(true)
         setBootstrapError(null)
-
-        const savedTaskId = readSavedTaskId()
-        if (savedTaskId) {
-          const restored = await restoreTaskContext(savedTaskId)
-          if (cancelled) return
-          if (restored) return
-        }
-
-        try {
-          const latest = await api.getLatestTask()
-          if (!cancelled && latest.id) {
-            const restored = await restoreTaskContext(latest.id)
-            if (restored) return
-          }
-        } catch {
-          /* no prior task */
-        }
-
-        addLog(`[联调] 后端已连接 (${env.apiBase})，请上传样例视频并解析`)
+        addLog(`[联调] 后端已连接 (${env.apiBase})，主编辑器将使用 V2 Timeline 链路。`)
       } catch (e) {
         if (cancelled) return
 
         if (isBackendUnreachable(e)) {
           setBootstrapError(
-            `后端 ${env.apiBase} 未连接。请启动 backend / PostgreSQL / Redis / worker 后刷新。`,
+            `后端 ${env.apiBase} 未连接。请先启动 backend，或直接运行 npm.cmd run desktop:dev。`,
           )
           addLog('[联调] 后端不可达')
           console.warn('[usePipelineBootstrap] backend unreachable')

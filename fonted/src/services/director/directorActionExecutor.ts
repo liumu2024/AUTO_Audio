@@ -5,137 +5,63 @@ import {
   type DirectorActionExecutor,
   type DirectorActionOutcome,
 } from '@shared/lib/director-action-engine'
-import type { DirectorAction } from '@shared/types/director-action'
-import { buildRenderPlanFromStructure } from '@shared/lib/render-plan-builder'
-import {
-  applyRenderActionBatch,
-  renderActionsFromSlotsPatch,
-} from '@shared/lib/render-action-engine'
-import { injectMaterialsIntoRenderPlan } from '@shared/lib/render-plan-materials'
-import {
-  formatRenderPlanValidationFailure,
-  validateRenderPlanHard,
-} from '@shared/lib/render-plan-validator'
-import { repairRenderPlanDeterministically } from '@shared/lib/render-plan-repair'
-import { selectRenderPlanCandidate } from '@shared/lib/render-plan-candidates'
-import type { RenderAsset, RenderPlanV1 } from '@shared/types/render-plan.v1'
+import type { DirectorAction, DirectorToolResult } from '@shared/types/director-action'
 
-import { buildGenerationTimeline } from '@/lib/generation-timeline'
-import { runFullCreationPipeline } from '@/services/pipeline/runFullPipeline'
-import { runPipelineGeneration } from '@/services/pipeline/runGeneration'
-import { ensurePublicUrl } from '@/services/pipeline/uploadAssets'
-import type { InputAttachment } from '@/stores/creationStore'
-import { useCreationStore } from '@/stores/creationStore'
+import {
+  previewV2DirectorTimeline,
+  renderV2DirectorTimeline,
+} from '@/services/director/v2DirectorTimeline'
 import { useDirectorContextStore } from '@/stores/directorContextStore'
 import { useEditorStore } from '@/stores/editorStore'
-import { usePipelineStore } from '@/stores/pipelineStore'
-import { useRenderPlanStore } from '@/stores/renderPlanStore'
-import { useTimelineStore } from '@/stores/timelineStore'
+import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 
-function assetTypeFromMaterial(type: 'video' | 'image' | 'audio'): RenderAsset['type'] {
-  if (type === 'audio') return 'audio'
-  if (type === 'image') return 'image'
-  return 'video'
-}
-
-async function materialsToAssets(
-  materials: DirectorActionExecutionContext['materials'],
-): Promise<RenderAsset[]> {
-  return Promise.all(
-    materials.map(async (material) => ({
-      id: material.id,
-      type: assetTypeFromMaterial(material.type),
-      name: material.name,
-      url: await ensurePublicUrl(material.url, material.name),
-      source: 'user_material' as const,
-    })),
-  )
-}
-
-function ensureRenderPlan(input: {
-  taskId: string
-  bundle: NonNullable<ReturnType<typeof usePipelineStore.getState>['bundle']>
-  aspectRatio: DirectorActionExecutionContext['aspectRatio']
-  forceRebuild?: boolean
-}): RenderPlanV1 {
-  if (input.bundle.render_plan && !input.forceRebuild) return input.bundle.render_plan
-  return buildRenderPlanFromStructure({
-    taskId: input.taskId,
-    structure: input.bundle.structure,
-    materials: input.bundle.materials,
-    aspectRatio: input.aspectRatio,
-  })
-}
-
-function validatePlanOrRepair(input: {
-  plan: RenderPlanV1 | null | undefined
-  phase: 'before_save' | 'before_render'
-}) {
-  const result = validateRenderPlanHard({
-    renderPlan: input.plan,
-    phase: input.phase,
-  })
-  if (result.ok && input.plan) {
-    return { plan: input.plan, validation: result }
+function v2TimelineInput(ctx: DirectorActionExecutionContext) {
+  return {
+    taskId: ctx.activeTaskId,
+    prompt: ctx.prompt,
+    sampleVideoUrl: ctx.sampleVideoUrl,
+    sampleVideoName: ctx.sampleVideoName,
+    aspectRatio: ctx.aspectRatio,
+    durationSec: ctx.durationSec,
+    materials: ctx.materials,
+    plannerMode: 'llm' as const,
   }
+}
 
-  const repaired = repairRenderPlanDeterministically({
-    renderPlan: input.plan,
-    phase: input.phase,
-    validation: result,
-  })
-  if (repaired.plan && repaired.validation.ok) {
-    return {
-      plan: repaired.plan,
-      validation: {
-        ...repaired.validation,
-        warnings: [
-          ...repaired.validation.warnings,
-          ...repaired.report.actions.map((action) => action.message),
-        ],
-      },
-      repairReport: repaired.report,
-    }
+function okToolResult<T>(data: T, warnings: string[] = []): DirectorToolResult<T> {
+  return {
+    ok: true,
+    data,
+    warnings,
+    errors: [],
   }
-
-  throw new Error(formatRenderPlanValidationFailure(repaired.validation))
 }
 
 export function createDirectorActionExecutor(): DirectorActionExecutor {
   return {
     async analyzeSample(ctx): Promise<DirectorActionOutcome> {
-      await runFullCreationPipeline({
-        sampleVideoUrl: ctx.sampleVideoUrl,
-        sampleVideoName: ctx.sampleVideoName ?? 'sample-video.mp4',
-        globalPrompt: ctx.prompt,
-        aspectRatio: ctx.aspectRatio,
-        durationSec: ctx.durationSec,
-        styleIntensity: ctx.styleIntensity,
-        materials: ctx.materials,
-      })
+      const preview = await previewV2DirectorTimeline(v2TimelineInput(ctx))
 
-      useCreationStore.getState().setSampleParsed(true)
-      useEditorStore.getState().setGenerationEditEnabled(false)
       useEditorStore.getState().setTimelineMode('sample')
       useDirectorContextStore.getState().patchSlots({ sampleVideoStatus: 'parsed' })
 
-      const bundle = usePipelineStore.getState().bundle
-      const outlineCount = bundle?.outline.length ?? 0
+      const outlineCount = preview.review.metrics.scene_count
       return {
         phase: 'completed',
         action: 'ANALYZE_SAMPLE',
         message:
           outlineCount > 0
-            ? `我看完样例了，拆出了 ${outlineCount} 个主要结构段。它会作为节奏、风格和镜头组织参考，不会直接当成成片素材。`
-            : '我看完样例了，但这条视频没有形成很清晰的结构段落；后面可以更多依赖你的文字要求和素材来规划。',
+            ? `我已经先把样例拆成了 ${outlineCount} 个时间线段落。右侧可以先看结构和节奏判断，trace 也已经写到 ${preview.traceDir}，方便你之后检查。`
+            : `我看完了这个样例，但暂时没有拆出稳定段落。trace 在 ${preview.traceDir}，你可以补充一下想重点学习哪种节奏或画面关系。`,
+        toolResult: okToolResult(preview.review, preview.review.warnings_zh),
       }
     },
 
     async analyzeMaterials(ctx): Promise<DirectorActionOutcome> {
       const contextStore = useDirectorContextStore.getState()
       const analyzed = await Promise.all(
-        ctx.materials.map(async (material) => {
-          const url = await ensurePublicUrl(material.url, material.name)
+        ctx.materials.map((material) => {
+          const url = material.url
           return {
             id: material.id,
             type: material.type,
@@ -157,97 +83,53 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
       return {
         phase: 'completed',
         action: 'ANALYZE_MATERIALS',
-        message: `我整理了 ${analyzed.length} 个可用素材，后面生成方案时会优先用它们来填画面，而不是拿样例视频充当成片内容。`,
+        message: `我整理好了 ${analyzed.length} 个可用素材。后面做方案时，我会把样例当作结构和风格参考，把这些素材当作真正进入成片的画面来源。`,
         userFacingOnly: true,
       }
     },
 
     async generateRenderPlan(ctx): Promise<DirectorActionOutcome> {
-      const bundle = usePipelineStore.getState().bundle
-      const taskId = ctx.activeTaskId ?? bundle?.task_id
-      if (!bundle || !taskId) {
-        throw new Error('当前任务上下文未就绪，请先完成样例解析。')
-      }
-
-      const basePlan = ensureRenderPlan({
-        taskId,
-        bundle,
-        aspectRatio: ctx.aspectRatio,
-        forceRebuild: /重新生成方案|重写 RenderPlan/.test(ctx.prompt),
-      })
-      const assets = await materialsToAssets(ctx.materials)
-      let plan = assets.length
-        ? injectMaterialsIntoRenderPlan({
-            plan: basePlan,
-            assets,
-            prompt: ctx.prompt,
-          })
-        : basePlan
-
-      const slotActions = renderActionsFromSlotsPatch(
-        useDirectorContextStore.getState().context.slots,
-        plan,
-      )
-      if (slotActions.length) {
-        plan = applyRenderActionBatch(plan, { actions: slotActions })
-      }
-
-      const candidateSelection = selectRenderPlanCandidate({
-        plan,
-        prompt: ctx.prompt,
-        phase: 'before_save',
-      })
-      plan = candidateSelection.selected.plan
-
-      const checkedPlan = validatePlanOrRepair({ plan, phase: 'before_save' })
-      plan = checkedPlan.plan
-      useRenderPlanStore.getState().setPlan(plan)
-      useRenderPlanStore
-        .getState()
-        .markDirty(`已重新生成 RenderPlan revision ${(plan.plan_revision ?? 1) + 1}`)
-      useDirectorContextStore.getState().setRenderPlan(plan)
+      const preview = await previewV2DirectorTimeline(v2TimelineInput(ctx))
       useEditorStore.getState().setGenerationEditEnabled(true)
       useEditorStore.getState().setTimelineMode('generation')
-      const timeline = useTimelineStore.getState().project
-      useTimelineStore.getState().setProject(buildGenerationTimeline(timeline, plan))
 
       return {
         phase: 'completed',
         action: 'GENERATE_RENDER_PLAN',
         message:
-          '我已经把样例节奏和你的素材整理成一版可编辑方案了。你可以先在右侧看分段、画面和字幕安排，觉得方向对了再让我渲染。',
+          `我先排出了一版时间线方案：${preview.review.summary_zh} 你可以先看右侧分镜和时间线，觉得节奏或素材分配不对就直接告诉我改；trace 在 ${preview.traceDir}。`,
         userFacingOnly: true,
-        toolResult: {
-          ...checkedPlan.validation,
-          warnings: [
-            ...checkedPlan.validation.warnings,
-            `selected RenderPlan candidate ${candidateSelection.summary.selectedId}`,
-          ],
-        },
+        toolResult: okToolResult(preview.review, preview.review.warnings_zh),
       }
     },
 
     async reviseRenderPlan(ctx): Promise<DirectorActionOutcome> {
-      const renderPlanStore = useRenderPlanStore.getState()
-      const contextStore = useDirectorContextStore.getState()
-      const plan = renderPlanStore.plan ?? ctx.renderPlan
+      useDirectorContextStore.getState().setUserIntent({
+        aspectRatio: ctx.aspectRatio,
+        durationSec: ctx.durationSec,
+        styleIntensity: ctx.styleIntensity,
+        rawText: ctx.prompt,
+      })
 
-      if (plan) {
-        const actions = renderActionsFromSlotsPatch(contextStore.context.slots, plan)
-        if (actions.length) {
-          const next = applyRenderActionBatch(plan, { actions })
-          renderPlanStore.setPlan(next)
-          contextStore.setRenderPlan(next)
-        } else if (ctx.aspectRatio) {
-          renderPlanStore.setAspectRatio(ctx.aspectRatio)
-        }
-      } else {
-        contextStore.setUserIntent({
-          aspectRatio: ctx.aspectRatio,
-          durationSec: ctx.durationSec,
-          styleIntensity: ctx.styleIntensity,
-          rawText: ctx.prompt,
+      const current = useV2TimelineStore.getState()
+      if (current.spec) {
+        const preview = await previewV2DirectorTimeline({
+          ...v2TimelineInput(ctx),
+          taskId: current.taskId ?? ctx.activeTaskId,
+          prompt: [
+            current.lastPrompt ? `上一版意图：${current.lastPrompt}` : '',
+            `本次修改：${ctx.prompt}`,
+          ]
+            .filter(Boolean)
+            .join('\n'),
         })
+        return {
+          phase: 'completed',
+          action: 'REVISE_RENDER_PLAN',
+          message: `我已经按你的修改重新排了一版方案。现在先不自动渲染，你可以再看一眼右侧时间线；trace 在 ${preview.traceDir}。`,
+          userFacingOnly: true,
+          toolResult: okToolResult(preview.review, preview.review.warnings_zh),
+        }
       }
 
       return {
@@ -261,62 +143,14 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
     },
 
     async renderVideo(ctx): Promise<DirectorActionOutcome> {
-      const taskId = ctx.activeTaskId
-      if (!taskId) {
-        throw new Error('缺少 activeTaskId，无法提交渲染任务。')
-      }
-
-      const renderPlanStore = useRenderPlanStore.getState()
-      const contextStore = useDirectorContextStore.getState()
-      let plan = renderPlanStore.plan ?? ctx.renderPlan
-      if (plan) {
-        const actions = renderActionsFromSlotsPatch(contextStore.context.slots, plan)
-        if (actions.length) {
-          const next = applyRenderActionBatch(plan, { actions })
-          plan = next
-          renderPlanStore.setPlan(next)
-          useRenderPlanStore
-            .getState()
-            .markDirty(`已按提示更新 RenderPlan revision ${(next.plan_revision ?? 1) + 1}`)
-          contextStore.setRenderPlan(next)
-        }
-      }
-
-      const checkedPlan = validatePlanOrRepair({ plan, phase: 'before_render' })
-      plan = checkedPlan.plan
-      if (checkedPlan.repairReport?.repaired) {
-        renderPlanStore.setPlan(plan)
-        renderPlanStore.markDirty(
-          `已执行确定性 RenderPlan 修复 revision ${(plan.plan_revision ?? 1) + 1}`,
-        )
-        contextStore.setRenderPlan(plan)
-      }
+      const result = await renderV2DirectorTimeline(v2TimelineInput(ctx))
       useEditorStore.getState().setTimelineMode('generation')
-      await runPipelineGeneration(
-        taskId,
-        ctx.prompt,
-        ctx.materials.map(
-          (item): InputAttachment => ({
-            id: `att_${item.id}`,
-            name: item.name,
-            type: item.type,
-            url: item.url,
-            source: 'upload',
-            materialId: item.id,
-            tags: item.tags,
-          }),
-        ),
-      )
-
-      useDirectorContextStore
-        .getState()
-        .setRenderPlan(useRenderPlanStore.getState().plan ?? undefined)
 
       return {
         phase: 'completed',
         action: 'RENDER_VIDEO',
-        message: '这版视频已经渲染好了。你可以先看成片效果，如果某一段节奏、转场或字幕不顺，我可以继续按具体位置改。',
-        toolResult: checkedPlan.validation,
+        message: `这版视频已经渲染好了，右侧预览区已经更新。trace 在 ${result.traceDir}，后续如果要追中间过程可以从那里看。`,
+        toolResult: okToolResult(result.evaluation, result.evaluation.warnings),
       }
     },
 
@@ -329,27 +163,12 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
       }
     },
 
-    async requestPlugin(ctx, action: DirectorAction): Promise<DirectorActionOutcome> {
+    async requestPlugin(_ctx, action: DirectorAction): Promise<DirectorActionOutcome> {
       const capabilityId = action.payload?.pluginId ?? 'missing_capability'
-      const plan = useRenderPlanStore.getState().plan ?? ctx.renderPlan
-      if (plan) {
-        const next = applyRenderActionBatch(plan, {
-          actions: [
-            {
-              type: 'REQUEST_COMPONENT',
-              payload: {
-                capability_id: capabilityId,
-                reason: action.message,
-              },
-            },
-          ],
-        })
-        useRenderPlanStore.getState().setPlan(next)
-      }
       return {
         phase: 'message',
         action: 'REQUEST_PLUGIN',
-        message: action.message || `这里确实缺一个更合适的能力：${capabilityId}。我先把缺口记下来，后续可以选择补组件，或者用现有能力降级实现。`,
+        message: action.message || `这里确实缺一个更合适的能力：${capabilityId}。我先把缺口记下来，后面可以选择补一段生成能力，或者先用现有素材和动效做降级版本。`,
         userFacingOnly: true,
       }
     },

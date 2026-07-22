@@ -13,7 +13,7 @@ export interface ReferenceMaterialInputDto {
     url: string;
     tags?: string[];
 }
-/** POST /api/tasks/analyze 请求体 */
+/** Legacy V1 analyze-task payload. The active creation path uses V2 timeline APIs. */
 export interface AnalyzeTaskRequest {
     /** v1 payload: 唯一被理解的样例视频 */
     sampleVideo?: SampleVideoInputDto;

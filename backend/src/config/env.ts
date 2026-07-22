@@ -27,10 +27,6 @@ export const env = {
   databaseUrl: process.env.DATABASE_URL ?? '',
   redisUrl: process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
   wsPath: process.env.WS_PATH ?? '/ws/tasks',
-  /** Legacy local CLI fallback. The normal analyzer path uses Ark. */
-  pythonBin: process.env.PYTHON_BIN ?? 'python3',
-  cliAnalyzerScript:
-    process.env.CLI_ANALYZER_SCRIPT ?? './scripts/analyzer_cli.py',
   isDev: process.env.NODE_ENV !== 'production',
   publicBaseUrl:
     process.env.PUBLIC_BASE_URL ?? `http://localhost:${process.env.PORT ?? 3001}`,

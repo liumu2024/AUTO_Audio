@@ -18,6 +18,7 @@ VIDEO_UNDERSTANDING_RESPONSES_URL=https://ark.cn-beijing.volces.com/api/v3/respo
 REMOTION_ROOT=../remotion
 REMOTION_COMPOSITION_ID=Dpl304Video
 RENDER_OUTPUT_DIR=renders
+V2_VIDEO_GENERATION_MODEL=doubao-seedance-1-5-pro-251215
 ```
 
 | Variable | Purpose | Default |
@@ -27,58 +28,44 @@ RENDER_OUTPUT_DIR=renders
 | `VIDEO_UNDERSTANDING_MODEL` | Ark endpoint/model id | project-specific |
 | `REMOTION_ROOT` | Remotion package path from `backend/` | `../remotion` |
 | `REMOTION_COMPOSITION_ID` | Remotion composition id | `Dpl304Video` |
-| `RENDER_OUTPUT_DIR` | Render output directory | `renders` |
+| `RENDER_OUTPUT_DIR` | Legacy RenderPlan output directory | `renders` |
+| `V2_VIDEO_GENERATION_MODEL` | V2 AI-video model id | `doubao-seedance-1-5-pro-251215` |
+| `ASSET_PUBLISHER_PROVIDER` | Public asset publisher for external providers | `local` |
 
-## Understanding Module
+## V2 Timeline Module
 
-Trigger: `analyzer.worker` calls `ArkVideoAnalyzerService` when
-`VIDEO_UNDERSTANDING_API_KEY` or `ARK_API_KEY` is configured.
+Trigger: the director executor or V2 page calls `/api/v2/timeline/preview` and
+then `/api/v2/timeline/run`.
 
 Flow:
 
-1. `resolveVideoInput(videoUrl)` resolves local upload paths or remote URLs.
-2. `ArkFilesResponsesAnalyzer` uploads the sample video to Ark Files and calls
-   the Responses API.
-3. The analyzer normalizes the model output into sample-understanding data.
-4. `templateToMigrationProtocolV12()` adapts the result into the editor
-   structure.
+1. Resolve uploaded sample/material URLs into local paths and, when required,
+   public provider URLs.
+2. Planner creates or repairs `RemotionTimelineSpecV1`.
+3. Validator checks timing, assets, transitions, overlays, audio, and material
+   job boundaries.
+4. Preview returns a Chinese planning review and compact trace path.
+5. Run resolves material jobs, calls Seedance only for reviewed AI-video jobs,
+   normalizes all media, then renders through Remotion.
 
 Main files:
 
 | File | Purpose |
 | --- | --- |
-| `backend/src/modules/video-understanding/` | Ark integration and normalization |
-| `backend/src/workers/analyzer.worker.ts` | Queue worker |
-| `shared/lib/template-to-migration.adapter.ts` | Understanding to editor protocol |
-
-## Generation Module
-
-Generation is Remotion-only.
-
-Trigger: `generator.worker` loads the task structure and saved render plan, then
-calls `remotionVideoGenerator`.
-
-Flow:
-
-1. Load `MigrationProtocolV12` from the task row.
-2. Load the latest `RenderPlanV1`.
-3. Validate/sanitize the render plan for supported Remotion features.
-4. `remotionRenderer.renderMedia()` writes render props and invokes Remotion.
-5. Save `finalVideoUrl`, task status, and completed timestamp.
-
-Main files:
-
-| File | Purpose |
-| --- | --- |
-| `backend/src/modules/generator/generation-job.processor.ts` | Generation job orchestration |
-| `backend/src/modules/generator/remotion-generator.service.ts` | Remotion generator port implementation |
-| `backend/src/modules/render-engine/` | Render props and Remotion CLI bridge |
-| `remotion/src/RenderPlanVideo.tsx` | Actual Remotion composition |
+| `backend/src/pipeline-v2/controller.ts` | V2 preview/run HTTP handlers |
+| `backend/src/pipeline-v2/remotion-timeline-service.ts` | V2 orchestration |
+| `backend/src/pipeline-v2/remotion-timeline-llm-planner.ts` | LLM planner adapter |
+| `backend/src/pipeline-v2/ark-seedance-adapter.ts` | Ark Seedance image-to-video adapter |
+| `backend/src/pipeline-v2/ffmpeg-standardizer.ts` | Provider/local media standardization |
+| `shared/types/remotion-timeline-spec.v1.ts` | Active render contract |
+| `shared/lib/remotion-timeline-validator.ts` | Active validator |
+| `remotion/src/RemotionTimelineVideo.tsx` | V2 Remotion composition |
 
 ## Failure Policy
 
 | Stage | Missing dependency | Behavior |
 | --- | --- | --- |
-| Understanding | Missing Ark key | Analyzer job fails with a configuration error |
-| Generation | Missing `RenderPlanV1` | Generation job fails |
-| Generation | Remotion render error | Generation job fails and broadcasts the error |
+| Planning | Invalid planner JSON | Fallback deterministic timeline is used when allowed |
+| Material generation | Missing provider key or provider failure | Use planned fallback/static Remotion scene when available |
+| Material generation | Local image is not public | Upload fails before provider call when public URL is required |
+| Rendering | Remotion render error | `/api/v2/timeline/run` returns an explicit failure |

@@ -1,5 +1,3 @@
-import { UnrecoverableError } from 'bullmq'
-
 import { prisma } from '../../shared/prisma.service.js'
 import { TASK_STATUS } from '../../shared/types.js'
 import { broadcastTaskProgress } from '../websocket/ws.gateway.js'
@@ -34,9 +32,9 @@ function patchGeneratedVideo(
   }
 }
 
-function taskNotFoundError(taskId: string): UnrecoverableError {
-  return new UnrecoverableError(
-    `ReplicationTask ${taskId} not found. The DB may have been cleared while BullMQ still had a generator job — re-run analyze or drain video-generator-queue.`,
+function taskNotFoundError(taskId: string): Error {
+  return new Error(
+    `ReplicationTask ${taskId} not found. The DB may have been cleared while a legacy generator job still existed.`,
   )
 }
 
@@ -55,7 +53,7 @@ async function throwIfCancelled(taskId: string): Promise<void> {
       stage: 'Cancelled',
       log: 'Generation task was cancelled by user.',
     })
-    throw new UnrecoverableError(`Task ${taskId} was cancelled.`)
+    throw new Error(`Task ${taskId} was cancelled.`)
   }
 }
 
@@ -79,7 +77,7 @@ export async function processGenerationJob(
   }
 
   if (isCancelledStatus(task.taskStatus)) {
-    throw new UnrecoverableError(`Task ${taskId} was cancelled.`)
+    throw new Error(`Task ${taskId} was cancelled.`)
   }
 
   await prisma.replicationTask.update({

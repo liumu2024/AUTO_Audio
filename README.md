@@ -41,30 +41,29 @@ Read the V2 architecture notes:
 
 - [V2 Architecture](docs/V2_ARCHITECTURE.md)
 
-AI Video Studio is a local-first short-video understanding, planning, editing,
-and Remotion rendering prototype. It analyzes a sample video as structure and
-style reference, binds user materials into an editable `RenderPlanV1`, validates
-and repairs that plan within deterministic boundaries, then renders the final
-MP4 with Remotion.
+AI Video Studio is now a V2 timeline-first hybrid video-production prototype.
+It uses a director agent to turn user intent, sample references, and creative
+materials into a strict `RemotionTimelineSpecV1`. External video models can
+produce realistic missing shots, Remotion renders deterministic timeline
+graphics and transitions, and FFmpeg normalizes media before the final package.
 
-The `RenderPlanV1` path below is now considered the legacy v1 pipeline while V2
-is developed in parallel.
+The previous `RenderPlanV1` workflow is no longer an active creation path. Some
+types and read APIs remain only for historical data and older editor surfaces.
 
 ## Current Architecture
 
 ```text
 User intent + sample video + user materials
   -> Director agent routing
-  -> Sample understanding / material analysis
-  -> MigrationProtocolV12
-  -> RenderPlanV1 candidate generation and scoring
-  -> RenderPlan hard validation
-  -> Deterministic repair when safe
-  -> Frontend editing
-  -> Backend before-save / before-render validation
-  -> Remotion render
-  -> Render output quality gate
-  -> completed MP4 or explicit failure
+  -> V2 Timeline preview
+  -> RemotionTimelineSpecV1 validation and Chinese planning review
+  -> User review / revision
+  -> Material job resolution
+  -> AI video generation when planned and available
+  -> FFmpeg standardization
+  -> Remotion full timeline render
+  -> V2 evaluation trace
+  -> completed MP4 or explicit fallback/failure
 ```
 
 The system is not an open-ended video generator. Remotion is the only final
@@ -76,33 +75,33 @@ implemented effects. Missing media is never silently invented.
 | Path | Owner / Role |
 | --- | --- |
 | `desktop/` | Electron shell and one-command local launcher. It starts backend and frontend, but owns no video logic. |
-| `fonted/` | React + Vite editor, director chat, material library, timeline, preview, and RenderPlan editing. |
-| `backend/` | Express APIs, task persistence, local/Prisma adapters, analyzer/generator orchestration, Remotion calls, output quality checks. |
-| `shared/` | Cross-runtime protocols and deterministic tools: timeline derivation, RenderPlan builder, validator, repair, candidate scoring. |
+| `fonted/` | React + Vite editor, director chat, material library, V2 timeline preview, and render state. |
+| `backend/` | Express APIs, uploads/public asset publishing, V2 timeline preview/run services, Remotion calls, FFmpeg checks, and trace output. |
+| `shared/` | Cross-runtime protocols and deterministic tools: V2 timeline spec, validator, fixtures, material adapters, and legacy compatibility types. |
 | `remotion/` | Remotion compositions. Legacy consumes `RenderPlanV1`; V2 Timeline consumes `RemotionTimelineSpecV1`. |
 | `docs/` | Architecture and runtime boundary notes. |
-| `script/docker/` | PostgreSQL and Redis helpers for server-style development. |
+| `script/docker/` | PostgreSQL helper scripts for server-style development. |
 
 ## Core Contracts
 
 | Contract | Responsibility |
 | --- | --- |
-| `MigrationProtocolV12` | Semantic source of truth for editable structure, timing, intent, and sample-derived guidance. |
-| `RenderPlanV1` | Only renderable execution plan: scenes, assets, overlays, audio, effects, and transitions. |
-| `PipelineBundle` | Frontend hydration payload containing structure, timeline, outline, materials, render plan, and generation state. |
+| `RemotionTimelineSpecV1` | Active V2 render contract: canvas, assets, scenes, overlays, transitions, audio, and material jobs. |
+| `V2TimelinePlanningReview` | Human-readable Chinese review of the generated timeline before expensive generation/rendering. |
+| `PipelineBundle` | Compatibility hydration payload for existing frontend panels. V2 adapts timeline specs into this shape. |
 | `DirectorSessionState` | Agent-side execution state, action ledger, render revision status, and recoverable error context. |
+| `RenderPlanV1` | Legacy render contract retained for historical task reading and older UI pieces only. |
 
 ## Agentic Optimizations
 
 | Area | Current behavior |
 | --- | --- |
-| Intent routing | Director agent routes user messages into explicit actions and execution steps. |
-| RenderPlan validation | Hard validator checks schema, assets, scene timing, effect layers, overlays, audio, and placeholder URLs. |
-| Deterministic repair | Repairs only safe structural issues such as missing asset refs, invalid time ranges, unsupported effects, and non-renderable assets. |
-| Candidate scoring | Builds a small set of RenderPlan candidates and selects by transparent metrics: validation status, asset coverage, unique material use, timeline fit, effect readiness, and prompt fit. |
-| Cache reuse | Reuses completed analysis tasks only when sample, materials, prompt, aspect ratio, duration, and style intensity match exactly. |
-| Output quality | Rendered files are checked for readability, minimum size, video stream, dimensions, and duration drift before task completion. |
-| Optional LLM review | Disabled by default. When enabled, it can provide structured review findings but cannot bypass validator/repair or invent assets. |
+| Intent routing | Director agent routes user messages into natural chat, V2 preview, revision, material analysis, or render actions. |
+| Timeline validation | V2 validator checks scene timing, asset references, overlay ranges, transitions, audio ranges, and material job boundaries. |
+| Soft review gate | Planner output is converted into a Chinese planning review so the user can revise before costly generation. |
+| Material fallback | Planned AI-video jobs can fall back to static image motion or Remotion card scenes when generation is unavailable. |
+| Media normalization | FFmpeg preflight and standardization protect Remotion/FFmpeg composition from provider format drift. |
+| Output trace | Every V2 run writes a compact task-scoped trace under `backend/tmp/v2-agent-trace/<taskId>/`. |
 
 ## Local Desktop Run
 
@@ -123,9 +122,8 @@ npm.cmd run desktop:dev
 ```
 
 Desktop mode does not require PostgreSQL, Redis, Prisma setup, or separate
-worker terminals. Electron starts the backend API and Vite frontend, while the
-backend runs analyzer and generator jobs in-process. Local desktop task data is
-stored outside the repo under Electron user data.
+worker terminals. Electron starts the backend API and Vite frontend; the active
+creation path is the V2 Timeline preview/run API.
 
 Use this smoke check when you only want to verify startup:
 
@@ -135,7 +133,7 @@ $env:DPL304_DESKTOP_SMOKE_MS='8000'; npm.cmd run desktop:dev
 
 ## Server-Style Development
 
-Use this mode when you specifically want PostgreSQL, Redis, and BullMQ workers:
+Use this mode when you specifically want PostgreSQL-backed task storage:
 
 ```powershell
 .\script\docker\db-up.ps1
@@ -143,8 +141,6 @@ Use this mode when you specifically want PostgreSQL, Redis, and BullMQ workers:
 npm.cmd --prefix backend run db:generate
 npm.cmd --prefix backend run db:push
 npm.cmd --prefix backend run dev
-npm.cmd --prefix backend run worker:analyzer
-npm.cmd --prefix backend run worker:generator
 npm.cmd --prefix fonted run dev
 ```
 
@@ -171,14 +167,13 @@ FFMPEG_BIN=C:\Users\Administrator\AppData\Local\Microsoft\WinGet\Links\ffmpeg.ex
 # REMOTION_BROWSER_EXECUTABLE=C:\Program Files\Google\Chrome\Application\chrome.exe
 ```
 
-Optional LLM RenderPlan review is off by default:
+Legacy RenderPlan review is off by default and is not part of the V2 main path:
 
 ```env
 ENABLE_RENDER_PLAN_LLM_REVIEW=false
 ```
 
-Set it to `true` only when you want advisory review findings. Hard validation
-and deterministic repair remain the final gates.
+Set it to `true` only when explicitly inspecting the legacy RenderPlan path.
 
 V2 generated main-video model configuration:
 
@@ -226,7 +221,7 @@ published URL, upload fails before the provider call.
 
 ## Runtime Trace
 
-Runtime trace is written under one task-scoped directory by default:
+Legacy V1 trace, when explicitly running old tooling, is written under:
 
 ```text
 backend/tmp/agent-trace/<taskId>/

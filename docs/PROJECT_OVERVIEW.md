@@ -1,31 +1,34 @@
 # Project Overview
 
-This repository is a prototype AI video editor for sample-based short-video
-replication. The current implementation keeps generation local and deterministic
-through Remotion.
+This repository is a prototype AI video editor for timeline-first hybrid short
+video generation. The active V2 path uses an agent to plan a strict
+`RemotionTimelineSpecV1`, optional video models to create realistic missing
+shots, FFmpeg to normalize media, and Remotion to render deterministic timeline
+composition.
 
 ## What Works
 
-- Upload a sample video and optional reference materials.
-- Run Ark multimodal understanding.
-- Convert understanding output into editable `MigrationProtocolV12`.
-- Derive timeline, outline, material matches, and `RenderPlanV1`.
-- Edit scene intent, visual material, motion, subtitles, effects, transitions,
-  and audio in the frontend.
-- Render MP4 through Remotion from the saved render plan.
+- Upload a sample video as structure/style reference.
+- Upload local image/video/audio materials and publish image inputs when an
+  external video model needs a public URL.
+- Generate a V2 timeline planning review before expensive rendering.
+- Resolve planned material jobs through reuse, AI-video generation, or fallback
+  scenes.
+- Normalize provider/local media with FFmpeg and render MP4 through Remotion.
 
 ## Main Flow
 
 ```mermaid
 flowchart TB
-  A["Sample video"] --> B["Ark understanding"]
-  B --> C["TemplateSchemaV1"]
-  C --> D["MigrationProtocolV12"]
-  D --> E["PipelineBundle"]
-  E --> F["Frontend editor"]
-  F --> G["Edited RenderPlanV1"]
-  G --> H["Generator worker"]
-  H --> I["Remotion MP4"]
+  A["User intent + sample + materials"] --> B["Director routing"]
+  B --> C["V2 timeline preview"]
+  C --> D["RemotionTimelineSpecV1"]
+  D --> E["Chinese planning review"]
+  E --> F["User revision or render"]
+  F --> G["Material jobs"]
+  G --> H["AI video / reuse / fallback"]
+  H --> I["FFmpeg standardization"]
+  I --> J["Remotion MP4"]
 ```
 
 ## Repository Map
@@ -33,11 +36,9 @@ flowchart TB
 | Path | Purpose |
 | --- | --- |
 | `backend/src/app.ts` | Express API entry |
-| `backend/src/workers/analyzer.worker.ts` | Understanding queue worker |
-| `backend/src/workers/generator.worker.ts` | Remotion generation queue worker |
-| `backend/src/modules/video-understanding/` | Ark understanding integration |
-| `backend/src/modules/generator/` | Generation job processor and Remotion generator |
-| `backend/src/modules/render-engine/` | Remotion CLI bridge and props conversion |
+| `backend/src/pipeline-v2/` | V2 timeline planning, validation, material generation, standardization, rendering, trace |
+| `backend/src/modules/upload/` | Local uploads and optional public asset publishing |
+| `backend/src/modules/video-task/` | Historical task list/detail/cancel compatibility APIs |
 | `fonted/src/` | React editor UI |
 | `shared/types/` | Shared protocol types |
 | `shared/lib/` | Adapters and derivation helpers |
@@ -45,11 +46,12 @@ flowchart TB
 
 ## Current Limits
 
-- The sample video is used for understanding, not as a default fill material.
+- The sample video is used as structure/style reference, not as a default fill material.
 - Render output depends on assets that Remotion can read through local paths or
   accessible URLs.
-- Complex multi-layer video compositing is not the default render model.
-- Understanding requires a valid Ark key unless a precomputed structure is used.
+- External video generation needs a public HTTPS image URL, not localhost.
+- Remotion handles deterministic composition; realistic missing shots belong to
+  the configured video model or fallback material.
 
 ## Useful Docs
 

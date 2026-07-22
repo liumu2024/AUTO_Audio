@@ -1,24 +1,10 @@
-import { Queue } from 'bullmq'
 import { PrismaClient } from '@prisma/client'
 import { readdir, rm, stat, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { getBullmqConnection, QUEUE_NAMES } from '../src/config/redis.js'
-
 const prisma = new PrismaClient()
 
-async function drainBullmqQueues(): Promise<Record<string, string>> {
-  const connection = getBullmqConnection()
-  const drained: Record<string, string> = {}
-  for (const name of Object.values(QUEUE_NAMES)) {
-    const queue = new Queue(name, { connection })
-    await queue.obliterate({ force: true })
-    await queue.close()
-    drained[name] = 'obliterated'
-  }
-  return drained
-}
 const backendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 async function clearDir(dir: string): Promise<number> {
@@ -49,7 +35,8 @@ async function main(): Promise<void> {
 
   const uploadsRemoved = await clearDir(path.join(backendRoot, 'uploads'))
   const rendersRemoved = await clearDir(path.join(backendRoot, 'renders'))
-  const bullmq = await drainBullmqQueues()
+  const v2RendersRemoved = await clearDir(path.join(backendRoot, 'v2-renders'))
+  const tmpRemoved = await clearDir(path.join(backendRoot, 'tmp'))
 
   console.log(
     JSON.stringify(
@@ -58,7 +45,8 @@ async function main(): Promise<void> {
         user_materials_deleted: materials.count,
         uploads_files_removed: uploadsRemoved,
         renders_entries_removed: rendersRemoved,
-        bullmq,
+        v2_renders_entries_removed: v2RendersRemoved,
+        tmp_entries_removed: tmpRemoved,
       },
       null,
       2,

@@ -1,7 +1,7 @@
 export interface V2PlannerInput {
   taskId: string
   prompt: string
-  mainVideoPath: string
+  mainVideoPath?: string
   inputImageUrl?: string
   referenceVideoPath?: string
   durationSec?: number

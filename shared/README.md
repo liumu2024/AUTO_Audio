@@ -1,23 +1,36 @@
 # Shared
 
 `shared/` contains protocol types and deterministic logic used by backend,
-frontend, Remotion-adjacent tooling, and smoke scripts.
+frontend, Remotion-adjacent tooling, and smoke scripts. The active creation
+contract is `RemotionTimelineSpecV1`; `RenderPlanV1` remains for legacy
+compatibility only.
 
 ## Layout
 
 | Path | Responsibility |
 | --- | --- |
-| `types/` | Cross-runtime contracts: migration, pipeline, director, RenderPlan, capability, timeline. |
-| `lib/pipeline-builder.ts` | Derive outline and timeline models from `MigrationProtocolV12`. |
-| `lib/render-plan-builder.ts` | Build initial `RenderPlanV1` from structure and materials. |
-| `lib/render-plan-materials.ts` | Bind user materials into an existing RenderPlan. |
-| `lib/render-plan-validator.ts` | Hard structural validation before save/render. |
-| `lib/render-plan-repair.ts` | Deterministic repair for known recoverable RenderPlan errors. |
-| `lib/render-plan-candidates.ts` | Generate and score a small set of RenderPlan candidates. |
+| `types/` | Cross-runtime contracts: V2 timeline, director, compatibility pipeline, capability, and legacy RenderPlan. |
+| `lib/remotion-timeline-validator.ts` | Active V2 timeline structural validation. |
+| `lib/remotion-timeline-fixtures.ts` | V2 timeline fixtures used by smoke tests. |
+| `lib/pipeline-builder.ts` | Compatibility outline/timeline derivation for older frontend panels. |
+| `lib/render-plan-builder.ts` | Legacy `RenderPlanV1` builder, retained outside the V2 main path. |
+| `lib/render-plan-materials.ts` | Legacy RenderPlan material binder. |
+| `lib/render-plan-validator.ts` | Legacy RenderPlan structural validation. |
+| `lib/render-plan-repair.ts` | Legacy deterministic RenderPlan repair. |
+| `lib/render-plan-candidates.ts` | Legacy RenderPlan candidate scoring. |
 | `lib/director-action-engine.ts` | Convert director intent into executable action plans. |
 | `mocks/` | Development fixtures and smoke-test data only. |
 
-## RenderPlan Tool Boundaries
+## V2 Tool Boundaries
+
+| Tool | Can Do | Must Not Do |
+| --- | --- | --- |
+| Timeline validator | Check scene timing, asset references, transitions, overlays, audio, and material job boundaries. | Create missing media or change creative intent. |
+| Material adapter | Convert local uploaded assets into local render paths and public provider URLs. | Treat localhost/private URLs as provider-readable. |
+| Material resolver | Reuse supplied assets or call configured AI video providers for planned jobs. | Exceed the reviewed timeline plan silently. |
+| Remotion timeline renderer | Render deterministic composition, overlays, transitions, image motion, and text cards. | Invent realistic video content. |
+
+## Legacy RenderPlan Tool Boundaries
 
 | Tool | Can Do | Must Not Do |
 | --- | --- | --- |

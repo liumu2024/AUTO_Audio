@@ -1,13 +1,10 @@
 import { env } from '@/config/env'
 import type { MigrationProtocolV12 } from '@/types/migration-protocol'
-import type { UserMaterialDto } from '@/types/pipeline'
 import type { RenderPlanV1 } from '@/types/render-plan'
 import type { DirectorAction } from '@shared/types/director-action'
 import type { DirectorSessionState } from '@shared/types/director-state'
 import type { DirectorConversationRuntime } from '@shared/lib/director-understanding'
 import type { DirectorContext } from '@shared/types/director-context'
-import type { DirectorUserIntent } from '@shared/types/director-context'
-import type { ParsedCreativeIntent } from '@shared/types/template-schema.v1'
 import type { RemotionTimelineSpecV1 } from '@shared/types/remotion-timeline-spec.v1'
 
 export interface TaskListItemDto {
@@ -33,26 +30,6 @@ export interface ReplicationTaskDto {
   taskStatus: string
   createdAt: string
   completedAt: string | null
-}
-
-export interface AnalyzeTaskPayload {
-  videoUrl: string
-  sampleVideo?: {
-    id?: string
-    name?: string
-    url: string
-  }
-  referenceMaterials?: Array<{
-    id: string
-    name: string
-    type: 'video' | 'image' | 'audio'
-    url: string
-    tags?: string[]
-  }>
-  creativeIntent?: ParsedCreativeIntent
-  directorIntent?: DirectorUserIntent
-  globalPrompt?: string
-  materials?: UserMaterialDto[]
 }
 
 export interface UploadResult {
@@ -132,7 +109,8 @@ export interface DirectorAgentChatPayload {
 }
 
 export interface V2TimelinePayload {
-  mainVideoPath: string
+  taskId?: string
+  mainVideoPath?: string
   prompt: string
   inputImageUrl?: string
   imageSrc?: string
@@ -152,13 +130,15 @@ export interface V2TimelinePlanningReview {
   schema_version: string
   risk_level: 'low' | 'medium' | 'high'
   summary_zh: string
-  scene_reviews: Array<{
-    scene_id: string
+  scenes: Array<{
+    id: string
     type: string
-    owner: 'user_material' | 'ai_video_model' | 'remotion_runtime'
-    time_range_sec: [number, number]
-    source_summary_zh: string
-    render_role_zh: string
+    owner_zh: string
+    source_zh: string
+    role_zh: string
+    start_sec: number
+    duration_sec: number
+    transition_after?: string
   }>
   metrics: Record<string, number>
   warnings_zh: string[]
@@ -178,6 +158,7 @@ export interface V2TimelineRunResult {
   ok: boolean
   taskId: string
   plannerSource: string
+  spec: RemotionTimelineSpecV1
   outputPath: string
   outputUrl?: string
   traceDir: string
@@ -257,13 +238,6 @@ export async function uploadFile(
   return res.json() as Promise<UploadResult>
 }
 
-export async function createAnalyzeTask(payload: AnalyzeTaskPayload) {
-  return request<{ taskId: string; status: string }>('/api/tasks/analyze', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
 export async function getTaskPipeline(taskId: string) {
   return request<import('@/types/pipeline').PipelineBundle>(
     `/api/tasks/${taskId}/pipeline`,
@@ -274,10 +248,6 @@ export async function listTasks(limit = 48) {
   return request<{ tasks: TaskListItemDto[] }>(
     `/api/tasks?limit=${limit}`,
   )
-}
-
-export async function getLatestTask() {
-  return request<ReplicationTaskDto>('/api/tasks/latest')
 }
 
 export async function getTask(taskId: string) {
@@ -312,12 +282,6 @@ export async function patchTaskStructure(
   })
 }
 
-export async function getTaskRenderPlan(taskId: string) {
-  return request<{ renderPlan: RenderPlanV1 }>(
-    `/api/tasks/${taskId}/render-plan`,
-  )
-}
-
 export async function patchTaskRenderPlan(
   taskId: string,
   renderPlan: RenderPlanV1,
@@ -327,20 +291,6 @@ export async function patchTaskRenderPlan(
     {
       method: 'PATCH',
       body: JSON.stringify({ renderPlan }),
-    },
-  )
-}
-
-export async function submitCopilotTask(
-  taskId: string,
-  prompt: string,
-  renderPlan?: RenderPlanV1,
-) {
-  return request<{ taskId: string; status: string }>(
-    `/api/tasks/${taskId}/copilot`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ prompt, renderPlan }),
     },
   )
 }

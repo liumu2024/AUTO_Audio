@@ -293,14 +293,16 @@ export function V2TimelineView() {
                     </div>
                   </dl>
                   <div className="mt-4 space-y-3 border-t border-zinc-800 pt-4">
-                    {preview.review.scene_reviews.map((scene) => (
-                      <div key={scene.scene_id} className="rounded-md border border-zinc-800 bg-zinc-950/40 p-3 text-sm">
+                    {preview.review.scenes.map((scene) => (
+                      <div key={scene.id} className="rounded-md border border-zinc-800 bg-zinc-950/40 p-3 text-sm">
                         <div className="flex items-center justify-between gap-3">
-                          <span className="font-mono text-zinc-100">{scene.scene_id}</span>
-                          <span className="text-xs text-zinc-500">{scene.time_range_sec.join('s - ')}s</span>
+                          <span className="font-mono text-zinc-100">{scene.id}</span>
+                          <span className="text-xs text-zinc-500">
+                            {scene.start_sec}s - {Number((scene.start_sec + scene.duration_sec).toFixed(3))}s
+                          </span>
                         </div>
-                        <div className="mt-2 text-zinc-300">{scene.render_role_zh}</div>
-                        <div className="mt-1 text-xs text-zinc-500">{scene.source_summary_zh}</div>
+                        <div className="mt-2 text-zinc-300">{scene.role_zh}</div>
+                        <div className="mt-1 text-xs text-zinc-500">{scene.source_zh}</div>
                       </div>
                     ))}
                   </div>

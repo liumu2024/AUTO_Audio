@@ -1,76 +1,74 @@
 # Backend
 
-The backend owns task APIs, task persistence, analyzer/generator orchestration,
-RenderPlan persistence, Remotion invocation, WebSocket progress, and final
-output quality gates.
+The backend owns upload APIs, V2 timeline preview/run APIs, public asset
+publishing, Remotion invocation, FFmpeg preflight/standardization, trace output,
+and compatibility reads for historical tasks.
 
 ## Module Boundaries
 
 | Path | Responsibility |
 | --- | --- |
 | `src/app.ts` | Express app, static uploads/renders, API route wiring, WebSocket server. |
-| `src/config/` | Environment and Redis/BullMQ configuration. |
+| `src/config/` | Environment configuration. |
 | `src/shared/prisma.service.ts` | Selects Prisma or local JSON adapter depending on runtime mode. |
 | `src/shared/local-prisma.service.ts` | Desktop local storage adapter. It stores data; it does not interpret video semantics. |
-| `src/modules/video-task/` | Task creation, cancellation, list/detail APIs, queue or in-process job dispatch. |
-| `src/modules/video-understanding/` | Ark Files/Responses integration and normalization. |
-| `src/modules/sample-understanding/` | Sample-understanding schema, grounding, normalization, and prompts. |
-| `src/modules/render-plan/` | RenderPlan read/write, server-side validation/repair, optional LLM review. |
-| `src/modules/generator/` | Generator job processor and Remotion generator port. |
-| `src/modules/render-engine/` | Render props creation, Remotion CLI call, output quality inspection. |
-| `src/workers/` | Analyzer and generator worker entrypoints for BullMQ or local in-process execution. |
+| `src/modules/video-task/` | Historical task list/detail/cancel APIs. It no longer creates V1 analyzer/generator jobs. |
+| `src/modules/video-understanding/` | Legacy Ark Files/Responses integration retained for older analysis modules. |
+| `src/modules/sample-understanding/` | Legacy sample-understanding schema, grounding, normalization, and prompts. |
+| `src/modules/render-plan/` | Legacy RenderPlan read/write and validation endpoints retained for old editor surfaces. |
+| `src/modules/render-engine/` | Legacy RenderPlan Remotion renderer retained for compatibility. |
+| `src/pipeline-v2/` | Active V2 timeline planning, material resolution, AI video adapter, FFmpeg standardization, Remotion rendering, and trace. |
 
-## RenderPlan Gates
+## Active V2 Gates
 
-The backend treats `RenderPlanV1` as the only renderable plan.
+The backend treats `RemotionTimelineSpecV1` as the active renderable plan.
 
-1. `PATCH /api/tasks/:taskId/render-plan` validates with `before_save`.
-2. `POST /api/tasks/:taskId/copilot` persists any submitted plan through the
-   same save gate.
-3. Generator jobs load the saved plan and run `before_render` validation/repair
-   before calling Remotion.
-4. Optional LLM review can add advisory findings only. It does not decide
-   whether a plan is valid.
+1. `POST /api/v2/timeline/preview` creates or repairs a timeline spec and
+   returns a Chinese planning review.
+2. The frontend lets the user revise before an expensive render run.
+3. `POST /api/v2/timeline/run` resolves material jobs, normalizes assets, and
+   renders through Remotion.
+4. V2 trace is written under `backend/tmp/v2-agent-trace/<taskId>/`.
+
+`RenderPlanV1` endpoints remain legacy compatibility APIs. They are not called
+by the migrated director chat or export flow.
 
 ## Render Output Gate
 
-After Remotion returns an output path, the generator checks:
+After Remotion returns an output path, the V2 service records evaluation data
+and checks:
 
 - file exists and is readable;
 - file size is above the minimum threshold;
 - a video stream exists;
 - dimensions are valid;
-- actual duration is close to the expected RenderPlan duration when ffprobe is
+- actual duration is close to the expected timeline duration when ffprobe is
   available.
 
-The task is marked `COMPLETED` only after this check passes.
+The frontend marks the run complete only after `/api/v2/timeline/run` returns a
+rendered output and trace path.
 
 ## Desktop Local Mode
 
-When `DPL304_LOCAL_MODE=true`, PostgreSQL, Redis, Prisma setup, and external
-BullMQ worker processes are not required. The backend:
+When `DPL304_LOCAL_MODE=true`, PostgreSQL, Prisma setup, and external worker
+processes are not required. The backend:
 
 - uses the local JSON adapter;
-- dispatches analyzer/generator jobs in-process;
-- still uses the same API, RenderPlan gates, Remotion renderer, and quality
-  checks.
+- exposes the same V2 preview/run APIs as server mode;
+- writes runtime artifacts under `tmp/`, `uploads/`, and `v2-renders/`.
 
 The desktop launcher sets this mode automatically.
 
 ## Server Mode
 
-Use this mode when developing against PostgreSQL, Redis, and BullMQ:
+Use this mode when developing against PostgreSQL:
 
 ```powershell
 npm.cmd install
 npm.cmd run db:generate
 npm.cmd run db:push
 npm.cmd run dev
-npm.cmd run worker:analyzer
-npm.cmd run worker:generator
 ```
-
-The worker commands should run in separate terminals.
 
 ## Key APIs
 
@@ -78,14 +76,14 @@ The worker commands should run in separate terminals.
 | --- | --- | --- |
 | `GET` | `/health` | Health check. |
 | `POST` | `/api/uploads` | Upload sample or material files; optionally publish them for external image-to-video providers. |
-| `POST` | `/api/tasks/analyze` | Create sample-understanding task. |
+| `POST` | `/api/v2/timeline/preview` | Create a V2 timeline spec and Chinese planning review. |
+| `POST` | `/api/v2/timeline/run` | Resolve materials, standardize media, render, and return output/trace. |
 | `GET` | `/api/tasks/:taskId` | Get task row. |
 | `GET` | `/api/tasks/:taskId/pipeline` | Get `PipelineBundle`. |
 | `PATCH` | `/api/tasks/:taskId/structure` | Save edited `MigrationProtocolV12`. |
-| `PATCH` | `/api/tasks/:taskId/render-plan` | Save edited `RenderPlanV1` through validation/repair. |
-| `POST` | `/api/tasks/:taskId/copilot` | Enqueue or run Remotion generation. |
-| `POST` | `/api/tasks/:taskId/cancel` | Cancel queued/running generation. |
-| `WS` | `/ws/tasks?taskId=...` | Progress events. |
+| `PATCH` | `/api/tasks/:taskId/render-plan` | Legacy RenderPlan compatibility save. |
+| `POST` | `/api/tasks/:taskId/cancel` | Cancel a historical task or an active Remotion render. |
+| `WS` | `/ws/tasks?taskId=...` | Legacy progress events. V2 runs use direct API responses and task-store logs. |
 
 ## Runtime Artifacts
 

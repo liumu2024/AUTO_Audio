@@ -22,8 +22,6 @@ import {
   cancelTask,
   deleteTask,
   patchTaskStructure,
-  postAnalyzeTask,
-  postCopilot,
 } from './modules/video-task/task.controller.js'
 import { attachWebSocketServer } from './modules/websocket/ws.gateway.js'
 import {
@@ -49,7 +47,6 @@ app.post(
   postUpload,
 )
 
-app.post('/api/tasks/analyze', postAnalyzeTask)
 app.post('/api/director/chat', postDirectorAgentChat)
 app.get('/api/tasks', getTasksList)
 app.get('/api/tasks/latest', getLatestTask)
@@ -58,7 +55,6 @@ app.get('/api/tasks/:taskId/render-plan', getRenderPlan)
 app.get('/api/tasks/:taskId', getTask)
 app.patch('/api/tasks/:taskId/structure', patchTaskStructure)
 app.patch('/api/tasks/:taskId/render-plan', patchRenderPlan)
-app.post('/api/tasks/:taskId/copilot', postCopilot)
 app.post('/api/tasks/:taskId/cancel', cancelTask)
 app.delete('/api/tasks/:taskId', deleteTask)
 app.use('/v2-renders', express.static(path.resolve(process.cwd(), 'v2-renders')))
