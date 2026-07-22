@@ -219,7 +219,7 @@ function buildRevisionAckMessage(slots) {
             : slots.generationMode === 'custom'
                 ? '自定义生成'
                 : '按样例风格复刻';
-    return `已记录：画幅 ${slots.aspectRatio}，${mode}，${subtitle}，风格强度 ${slots.styleIntensity}。确认要出方案时请说“生成成片”。`;
+    return `我先按你的偏好记下来了：画幅 ${slots.aspectRatio}，${mode}，${subtitle}，风格强度 ${slots.styleIntensity}。后面要继续出方案，直接告诉我“生成一版方案”就行。`;
 }
 export function routeDirectorConversation(input) {
     const runtimeSlots = deriveRuntimeSlotStatus(input.runtime);
@@ -239,7 +239,7 @@ export function routeDirectorConversation(input) {
             missingSlots: ['backend'],
             requiresConfirmation: false,
             nextAction: 'NEED_BACKEND',
-            assistantMessage: '需要先启动后端、analyzer worker 和 generator worker，我才能执行解析或渲染任务。',
+            assistantMessage: '现在执行端还没准备好，所以我暂时不能真正解析或渲染。不过你可以先把想法说给我，我可以先帮你梳理风格和流程。',
         };
     }
     const wantsOutput = signal.intent === 'generate_video' || signal.intent === 'render';
@@ -253,7 +253,7 @@ export function routeDirectorConversation(input) {
             missingSlots: ['sampleVideoStatus'],
             requiresConfirmation: false,
             nextAction: 'NEED_SAMPLE',
-            assistantMessage: '请先上传 1 个样例视频。样例只作为结构、风格和节奏来源，不会直接进入成片。',
+            assistantMessage: '要开始拆样例的话，还需要先给我一条参考视频。你也可以先不上传，继续和我聊风格、结构或生成思路。',
         };
     }
     if (signal.intent === 'analyze_sample' && mergedSlots.sampleVideoStatus !== 'parsed') {
@@ -265,7 +265,7 @@ export function routeDirectorConversation(input) {
             missingSlots: [],
             requiresConfirmation: false,
             nextAction: 'ANALYZE_SAMPLE',
-            assistantMessage: '我会先解析样例视频，拆出结构、节奏、镜头语言和可复用视觉效果。解析完成后会停在样例分析视图，不会自动生成成片。',
+            assistantMessage: '好，我先看这条样例，把它的段落结构、节奏变化和可借鉴的镜头方式拆出来；这一步只做理解，不会直接出片。',
         };
     }
     if (wantsOutput) {
@@ -286,8 +286,8 @@ export function routeDirectorConversation(input) {
                 requiresConfirmation: false,
                 nextAction: 'ASK_USER',
                 assistantMessage: missingSlots.includes('materialStatus')
-                    ? '样例风格已经可以作为参考，但还缺成片素材。请上传至少 1 个图片或视频作为 reference material。'
-                    : '需要先完成样例解析，并恢复当前任务上下文后，才能生成或渲染成片。',
+                    ? '样例这边已经能作为风格参考了。要继续做成片，还需要你给我一些真正会出现在成片里的图片或视频素材。'
+                    : '现在还缺当前任务的上下文。先把样例解析跑完或恢复到已有任务，我再接着帮你生成或渲染。',
             };
         }
         return {
@@ -299,8 +299,8 @@ export function routeDirectorConversation(input) {
             requiresConfirmation: false,
             nextAction: signal.intent === 'render' ? 'RENDER' : 'GENERATE_VIDEO',
             assistantMessage: signal.intent === 'render'
-                ? '我会提交 Remotion 渲染任务。渲染期间你仍然可以查看样例分析和编辑区。'
-                : '我会把样例风格和你的素材编排成可编辑 RenderPlan，先进入生成编辑视图，不会直接导出 MP4。',
+                ? '好，我按当前方案去渲染一版。渲染时你可以继续看右侧方案，等输出回来我们再一起挑问题。'
+                : '我先把样例节奏和你的素材整理成一版可编辑方案，右侧会展示分段和画面安排；确认后再渲染成 MP4。',
         };
     }
     if (signal.intent === 'revise_plan' || Object.keys(slotsPatchFromText).length > 0) {
@@ -324,8 +324,8 @@ export function routeDirectorConversation(input) {
         requiresConfirmation: signal.confidence < 0.55,
         nextAction: signal.confidence < 0.55 ? 'ASK_USER' : 'ACKNOWLEDGE',
         assistantMessage: mergedSlots.sampleVideoStatus === 'parsed'
-            ? '样例已经解析完成。你可以让我讲解拆解结果、继续上传成片素材，或说“生成成片”进入可编辑方案。'
-            : '你可以先上传样例视频让我解析，或者告诉我想做哪类风格，我会帮你规划流程。',
+            ? '样例我已经理解过了。你可以继续问我这条样例的节奏、镜头和风格，也可以补素材后让我整理成一版方案。'
+            : '可以，我们先聊也行。你可以描述想做的风格、用途和时长；等需要真正执行时，再上传样例或素材。',
     };
 }
 export function directorIntentToUserIntent(result, current, prompt) {

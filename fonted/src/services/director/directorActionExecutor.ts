@@ -126,8 +126,8 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
         action: 'ANALYZE_SAMPLE',
         message:
           outlineCount > 0
-            ? `样例解析完成：识别到 ${outlineCount} 个结构段落。`
-            : '样例解析已完成，但没有形成结构大纲。',
+            ? `我看完样例了，拆出了 ${outlineCount} 个主要结构段。它会作为节奏、风格和镜头组织参考，不会直接当成成片素材。`
+            : '我看完样例了，但这条视频没有形成很清晰的结构段落；后面可以更多依赖你的文字要求和素材来规划。',
       }
     },
 
@@ -157,7 +157,7 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
       return {
         phase: 'completed',
         action: 'ANALYZE_MATERIALS',
-        message: `已分析 ${analyzed.length} 个创作素材，可用于后续 RenderPlan 编排。`,
+        message: `我整理了 ${analyzed.length} 个可用素材，后面生成方案时会优先用它们来填画面，而不是拿样例视频充当成片内容。`,
         userFacingOnly: true,
       }
     },
@@ -215,7 +215,7 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
         phase: 'completed',
         action: 'GENERATE_RENDER_PLAN',
         message:
-          'RenderPlan 已根据样例结构与创作素材生成。如需导出成片，请明确说「渲染」或「导出」。',
+          '我已经把样例节奏和你的素材整理成一版可编辑方案了。你可以先在右侧看分段、画面和字幕安排，觉得方向对了再让我渲染。',
         userFacingOnly: true,
         toolResult: {
           ...checkedPlan.validation,
@@ -254,8 +254,8 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
         phase: 'completed',
         action: 'REVISE_RENDER_PLAN',
         message: ctx.prompt.trim()
-          ? '已记录参数调整，RenderPlan 已更新。不会自动渲染；确认后请说「渲染」或「导出」。'
-          : '已记录导演偏好。不会自动触发渲染。',
+          ? '我已经按你的描述调整了当前方案。先不自动渲染，方便你再看一眼；确认没问题后直接说“渲染”就行。'
+          : '我先把这个偏好记到当前方案里，不会自动开始渲染。',
         userFacingOnly: true,
       }
     },
@@ -315,7 +315,7 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
       return {
         phase: 'completed',
         action: 'RENDER_VIDEO',
-        message: '渲染任务已提交并完成。你可以在「生成编辑」面板继续微调。',
+        message: '这版视频已经渲染好了。你可以先看成片效果，如果某一段节奏、转场或字幕不顺，我可以继续按具体位置改。',
         toolResult: checkedPlan.validation,
       }
     },
@@ -349,7 +349,7 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
       return {
         phase: 'message',
         action: 'REQUEST_PLUGIN',
-        message: action.message || `已记录缺失能力 ${capabilityId}，等待插件审批或 fallback。`,
+        message: action.message || `这里确实缺一个更合适的能力：${capabilityId}。我先把缺口记下来，后续可以选择补组件，或者用现有能力降级实现。`,
         userFacingOnly: true,
       }
     },

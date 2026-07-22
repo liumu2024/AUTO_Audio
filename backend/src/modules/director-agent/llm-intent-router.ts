@@ -366,7 +366,7 @@ function applyHardGuards(input: {
       missingSlots: ['backend'],
       requiresConfirmation: false,
       nextAction: 'NEED_BACKEND',
-      assistantMessage: '需要先启动后端、analyzer worker 和 generator worker，我才能执行解析或渲染任务。',
+      assistantMessage: '现在执行端还没准备好，所以我暂时不能真正解析或渲染。不过你可以先把想法说给我，我可以先帮你梳理风格和流程。',
     }
   }
 
@@ -378,7 +378,7 @@ function applyHardGuards(input: {
       missingSlots: ['sampleVideoStatus'],
       requiresConfirmation: false,
       nextAction: 'NEED_SAMPLE',
-      assistantMessage: '请先上传 1 个样例视频。样例只用于学习结构、风格和节奏，不会直接进入成片。',
+      assistantMessage: '要开始拆样例的话，还需要先给我一条参考视频。你也可以先不上传，继续和我聊风格、结构或生成思路。',
     }
   }
 
@@ -390,7 +390,7 @@ function applyHardGuards(input: {
       missingSlots: [],
       requiresConfirmation: false,
       nextAction: 'ANALYZE_SAMPLE',
-      assistantMessage: '明白，这次只解析样例，不生成成片。解析完成后我会停在样例风格拆解视图。',
+      assistantMessage: '明白，这次我只看样例，不往成片走。我会把它的段落、节奏和镜头方式先拆出来。',
     }
   }
 
@@ -408,8 +408,8 @@ function applyHardGuards(input: {
         requiresConfirmation: false,
         nextAction: 'ASK_USER',
         assistantMessage: missingSlots.includes('materialStatus')
-          ? '样例已经能作为风格参考了，但还缺真正用于成片的素材。请上传图片或视频作为 reference material；样例本身不会被当作成片素材。'
-          : '现在还不能直接生成。需要先完成样例解析，并保留当前任务上下文，再进入 RenderPlan 生成。',
+          ? '样例这边已经能作为风格参考了。要继续做成片，还需要你给我一些真正会出现在成片里的图片或视频素材。'
+          : '现在还缺当前任务的上下文。先把样例解析跑完或恢复到已有任务，我再接着帮你生成或渲染。',
       }
     }
   }
@@ -424,7 +424,7 @@ function applyHardGuards(input: {
       slotsPatch,
       nextAction: 'ACKNOWLEDGE',
       assistantMessage:
-        `${llmResult.assistantMessage} 我先记下这个偏好；当前还没有生成编辑方案，等你说“生成成片”后会应用到 RenderPlan。`,
+        `${llmResult.assistantMessage} 我先把这个偏好记住；现在还没有可编辑方案，等你让我生成一版方案时会一起带进去。`,
     }
   }
 
@@ -458,7 +458,7 @@ function ruleFallback(input: {
       nextAction: 'ACKNOWLEDGE',
       assistantMessage:
         input.context.conversationSummary?.trim() ||
-        '样例已经解析完成：我会把它作为结构、节奏和风格参考；成片需要你再补充 reference materials，之后说“生成成片”即可进入可编辑方案。',
+        '样例我已经理解过了。你可以继续问我它的节奏、镜头和风格，也可以补素材后让我整理成一版成片方案。',
     }
     return {
       source: 'rule_fallback',
@@ -481,7 +481,7 @@ function ruleFallback(input: {
       requiresConfirmation: false,
       nextAction: 'ACKNOWLEDGE',
       assistantMessage:
-        '风景混剪建议按“样例拆风格、素材做成片”的方式走：先解析参考视频的节奏、转场、画面运动和特效；再上传自己的风景镜头作为 reference materials；最后生成 RenderPlan，把卡点、调色、分屏、黑白转彩色或水波扩散这类效果映射到 Remotion 插件。Remotion 不需要大模型才能渲染，但需要前面的理解层把风格和参数说清楚。',
+        '风景混剪可以先拆参考视频的节奏、转场、画面运动和情绪走向，再用你自己的风景素材去填画面。后面出方案时，我会把这些风格线索翻译成更具体的镜头时长、字幕、转场和覆盖层安排，而不是直接照搬样例。',
     }
     return {
       source: 'rule_fallback',

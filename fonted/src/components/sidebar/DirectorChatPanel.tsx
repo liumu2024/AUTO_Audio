@@ -396,13 +396,13 @@ export function DirectorChatPanel() {
         const outline = usePipelineStore.getState().bundle?.outline ?? []
         updateMessage(progressId, {
           content:
-            '样例结构、槽位和风格理解已完成。我会停在样例分析视图，等你补充素材或确认方向后再生成 RenderPlan。',
+            '我把样例拆完了，先把它当成一张风格和节奏地图放在右侧。你可以让我继续讲它的镜头、转场或节奏，也可以补素材后再往成片方案走。',
           status: 'done',
         })
         if (outline.length) {
           pushOutlineResult(
             outline,
-            `样例解析完成：识别到 ${outline.length} 个结构段落。补充创作素材后，说“生成成片”即可编排 RenderPlan。`,
+            `我整理出了 ${outline.length} 个结构段，下面这张卡片是它的节奏地图。它只作为参考；真正出片还需要用你补充的素材来填画面。`,
           )
         } else {
           addAssistantMessage({
@@ -419,7 +419,7 @@ export function DirectorChatPanel() {
         })
         addAssistantMessage({
           content:
-            'RenderPlan 已生成。你可以在“生成编辑”里调整画面、字幕和音频；确认后再说“渲染”或“导出”。',
+            '方案已经放到右侧了。你可以直接告诉我哪一段要更快、更慢、换素材或改字幕；确认满意后再让我渲染。',
         })
       } else if (actionPlan.type === 'RENDER_VIDEO') {
         updateMessage(progressId, {
@@ -428,7 +428,7 @@ export function DirectorChatPanel() {
           status: 'done',
         })
         pushGenerationResult(
-          '成片已渲染完成。样例仍只作为风格参考，成片素材来自当前创作素材。',
+          '视频已经出来了，先看整体节奏和转场是否顺。如果有哪一段不对，直接按时间点或片段编号告诉我，我继续改。',
         )
       } else {
         updateMessage(progressId, {
