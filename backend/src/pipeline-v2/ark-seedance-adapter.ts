@@ -124,15 +124,28 @@ export function createArkSeedanceMaterialGenerationAdapter(
     const imageUrl = input.inputImageUrl ?? options.defaultImageUrl ?? env.v2VideoGenerationDefaultImageUrl
     if (!apiKey) throw new Error('V2_VIDEO_GENERATION_API_KEY or ARK_API_KEY is not configured.')
     if (!submitUrl) throw new Error('V2_VIDEO_GENERATION_SUBMIT_URL is not configured.')
-    if (!imageUrl) {
-      throw new Error('Seedance image-to-video generation requires input_image_url or V2_VIDEO_GENERATION_DEFAULT_IMAGE_URL.')
+    if (imageUrl) {
+      const urlAccess = classifyExternalUrlAccess(imageUrl)
+      if (!urlAccess.ok) {
+        throw new Error(
+          `Seedance input_image_url is not externally reachable (${urlAccess.kind}): ${urlAccess.reason} ` +
+            'Upload the image through /api/uploads with requirePublicUrl=true and configure the asset publisher, or provide an already public image URL.',
+        )
+      }
     }
-    const urlAccess = classifyExternalUrlAccess(imageUrl)
-    if (!urlAccess.ok) {
-      throw new Error(
-        `Seedance input_image_url is not externally reachable (${urlAccess.kind}): ${urlAccess.reason} ` +
-          'Upload the image through /api/uploads with requirePublicUrl=true and configure the asset publisher, or provide an already public image URL.',
-      )
+    const content: Array<Record<string, unknown>> = [
+      {
+        type: 'text',
+        text: input.prompt,
+      },
+    ]
+    if (imageUrl) {
+      content.push({
+        type: 'image_url',
+        image_url: {
+          url: imageUrl,
+        },
+      })
     }
 
     const response = await fetchImpl(submitUrl, {
@@ -143,18 +156,7 @@ export function createArkSeedanceMaterialGenerationAdapter(
       },
       body: JSON.stringify({
         model,
-        content: [
-          {
-            type: 'text',
-            text: input.prompt,
-          },
-          {
-            type: 'image_url',
-            image_url: {
-              url: imageUrl,
-            },
-          },
-        ],
+        content,
       }),
       signal: AbortSignal.timeout(Math.min(timeoutMs, 60_000)),
     })

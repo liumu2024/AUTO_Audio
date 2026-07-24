@@ -1,7 +1,7 @@
 import { EditableTimeline } from '@/components/timeline/EditableTimeline'
 import { cn } from '@/lib/utils'
+import { useEffect } from 'react'
 import { useEditorStore, type TimelineMode } from '@/stores/editorStore'
-import { useRenderPlanStore } from '@/stores/renderPlanStore'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 
 const TABS: Array<{ id: TimelineMode; label: string; hint: string }> = [
@@ -12,26 +12,31 @@ const TABS: Array<{ id: TimelineMode; label: string; hint: string }> = [
   },
   {
     id: 'generation',
-    label: '生成编辑',
-    hint: '按画面 / 文字 / 效果 / 音频四轨查看时间线方案',
+    label: '方案编辑',
+    hint: '按画面 / 文字 / 转场 / 音频查看并调整当前方案',
   },
 ]
 
 export function TimelinePanel() {
   const mode = useEditorStore((s) => s.timelineMode)
   const setMode = useEditorStore((s) => s.setTimelineMode)
-  const generationEditEnabled = useEditorStore((s) => s.generationEditEnabled)
-  const hasRenderPlan = useRenderPlanStore((s) => Boolean(s.plan?.scenes.length))
-  const hasV2Timeline = useV2TimelineStore((s) => Boolean(s.spec?.scenes.length))
-  const canOpenGeneration = generationEditEnabled || hasRenderPlan || hasV2Timeline
-  const current = TABS.find((tab) => tab.id === mode) ?? TABS[0]
+  const hasV2Sample = useV2TimelineStore((s) => Boolean(s.sampleSession))
+  const hasSampleAnalysis = hasV2Sample
+  const tabs = TABS.filter((tab) => tab.id !== 'sample' || hasSampleAnalysis)
+  const current = tabs.find((tab) => tab.id === mode) ?? TABS[1]!
+
+  useEffect(() => {
+    if (!hasSampleAnalysis && mode === 'sample') {
+      setMode('generation')
+    }
+  }, [hasSampleAnalysis, mode, setMode])
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden border-t border-zinc-800 bg-zinc-950">
       <div className="flex shrink-0 items-center justify-between border-b border-zinc-800/80 px-3 py-1.5">
         <div className="flex items-center gap-2">
-          {TABS.map((tab) => {
-            const disabled = tab.id === 'generation' && !canOpenGeneration
+          {tabs.map((tab) => {
+            const disabled = false
             return (
               <button
                 key={tab.id}
@@ -48,7 +53,7 @@ export function TimelinePanel() {
                 )}
                 title={
                   disabled
-                    ? '请先在对话中说「生成」，完成时间线方案后再进入生成编辑'
+                    ? '请先在对话中生成 V2 Timeline 方案'
                     : tab.hint
                 }
               >

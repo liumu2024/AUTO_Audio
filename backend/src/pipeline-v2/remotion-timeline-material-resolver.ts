@@ -129,6 +129,7 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
   const failedJobs: V2TimelineMaterialResolutionReport['failed_jobs'] = []
   const resolvedAssets: RemotionTimelineAsset[] = []
   const generationTrace: V2TimelineMaterialResolutionReport['generation_trace'] = []
+  const blankCardFallbackJobs = new Set<string>()
 
   for (const job of spec.material_jobs) {
     const startedAt = Date.now()
@@ -215,6 +216,24 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
       continue
     }
 
+    if (job.fallback_kind === 'blank_card') {
+      fulfilledJobs.push(job.id)
+      blankCardFallbackJobs.add(job.id)
+      generationTrace.push({
+        id: job.id,
+        scene_id: job.scene_id,
+        type: job.type,
+        prompt: job.prompt,
+        input_image_url: job.input_image_url,
+        output_asset_id: job.output_asset_id,
+        provider_task_id: generated.providerTaskId,
+        status: 'fallback',
+        elapsed_ms: Date.now() - startedAt,
+        error: generated.error ?? 'Generation failed; kept the existing Remotion fallback scene.',
+      })
+      continue
+    }
+
     failedJobs.push({ id: job.id, reason: generated.error ?? 'Material generation failed.' })
     generationTrace.push({
       id: job.id,
@@ -237,6 +256,13 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
     assets: mergedAssets,
     scenes: spec.scenes.map((scene) => {
       const job = spec.material_jobs.find((item) => item.scene_id === scene.id && item.output_asset_id)
+      if (job && blankCardFallbackJobs.has(job.id)) {
+        return {
+          ...scene,
+          type: 'remotion_card',
+          asset_id: undefined,
+        }
+      }
       if (!job?.output_asset_id || !resolvedAssetIds.has(job.output_asset_id)) return scene
       return {
         ...scene,
@@ -249,6 +275,9 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
         ? {
             ...job,
             status: 'fulfilled',
+            output_asset_id: blankCardFallbackJobs.has(job.id)
+              ? undefined
+              : job.output_asset_id,
           }
         : job,
     ),

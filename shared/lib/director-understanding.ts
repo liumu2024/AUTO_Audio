@@ -1,6 +1,3 @@
-import type { AssetAnalysisV1 } from '../types/asset-analysis.v1.js'
-import type { MigrationProtocolV12 } from '../types/migration-protocol.v1.2.js'
-import type { UserMaterialDto } from '../types/pipeline.js'
 import type {
   DirectorAspectRatio,
   DirectorContentDomain,
@@ -8,13 +5,13 @@ import type {
   DirectorConversationIntent,
   DirectorGoal,
   DirectorIntentResult,
+  DirectorMaterialSummary,
   DirectorMaterialStatus,
+  DirectorReferenceSummary,
   DirectorSampleVideoStatus,
   DirectorUserIntent,
-  MaterialAnalysis,
-  SampleStyleRecipe,
 } from '../types/director-context.js'
-import type { TemplateSchemaV1 } from '../types/template-schema.v1.js'
+import type { V2SampleUnderstandingResult } from '../types/v2-sample-understanding.js'
 
 export interface DirectorConversationRuntime {
   backendEnabled: boolean
@@ -23,14 +20,31 @@ export interface DirectorConversationRuntime {
   isSampleParsed: boolean
   hasPipeline: boolean
   activeTaskId?: string | null
+  hasV2Timeline?: boolean
+  v2TaskId?: string | null
+  v2SceneCount?: number
+  v2TraceDir?: string | null
   hasVisualMaterial: boolean
   materialCount: number
 }
 
 const words = {
-  analyze: ['解析', '拆解', '分析样例', '理解样例', '识别结构', '样例视频'],
+  analyze: [
+    '解析',
+    '拆解',
+    '分析样例',
+    '理解样例',
+    '识别结构',
+    '样例视频',
+    '分析视频',
+    '分析这个视频',
+    '解析视频',
+    '解析这个视频',
+    '视频结构',
+    '创作手法',
+  ],
   analyzeOnly: ['只解析', '先解析', '不要生成', '不生成', '不要出片', '不出片'],
-  generate: ['生成', '成片', '做成', '开始做', '出片', '生成视频', '重新生成方案', '重写 RenderPlan'],
+  generate: ['生成', '成片', '做成', '开始做', '出片', '生成视频', '重新生成方案', '重写时间线方案'],
   render: ['渲染', '重新渲染', '导出', '输出mp4', '输出 MP4', 'render', 'export'],
   revise: ['修改', '调整', '改成', '换成', '改为', '不要', '去掉', '保留'],
   material: ['素材', '镜头', '片段', '上传', '候选素材'],
@@ -43,19 +57,67 @@ const words = {
   styleReplicate: ['按样例风格', '样例风格', '学习样例', '复刻样例', '保持样例'],
   montage: ['混剪', 'montage'],
   beatSync: ['卡点', '节奏', '强拍', 'beat', '鼓点'],
-  horizontal: ['横屏', '16:9'],
+  horizontal: ['横屏', '16:9', '16：9'],
   square: ['方形', '方屏', '1:1'],
-  vertical: ['竖屏', '抖音', '快手', '9:16'],
+  vertical: ['竖屏', '抖音', '快手', '9:16', '9：16'],
   strong: ['强一点', '夸张', '强烈', '炸裂', '更明显'],
   light: ['轻一点', '克制', '淡一点', '柔和', '细腻'],
 }
 
+const cleanWords: Record<string, string[]> = {
+  generate: ['生成', '生成视频', '生成方案', '做一个', '做一条', '制作', '出片', '成片', '帮我做'],
+  render: ['渲染', '导出', '输出mp4', '输出 MP4'],
+  revise: ['修改', '调整', '改成', '换成', '不要', '去掉', '保留'],
+  material: ['素材', '镜头', '片段', '上传', '图片', '视频'],
+  analyze: ['解析', '分析样例', '理解样例', '分析视频', '视频结构', '创作手法'],
+}
+
 function includesAny(text: string, candidates: string[]): boolean {
-  return candidates.some((word) => text.toLowerCase().includes(word.toLowerCase()))
+  const expanded = [
+    ...candidates,
+    ...(candidates === words.generate ? cleanWords.generate : []),
+    ...(candidates === words.render ? cleanWords.render : []),
+    ...(candidates === words.revise ? cleanWords.revise : []),
+    ...(candidates === words.material ? cleanWords.material : []),
+    ...(candidates === words.analyze ? cleanWords.analyze : []),
+  ]
+  return expanded.some((word) => text.toLowerCase().includes(word.toLowerCase()))
 }
 
 function hasAnalyzeOnly(text: string): boolean {
   return includesAny(text, words.analyzeOnly)
+}
+
+function asksToReanalyzeSample(text: string): boolean {
+  return /重新理解|重新解析|重新分析|再次理解|再次解析|再分析.*(样例|视频)|再看.*(样例|视频)/.test(text)
+}
+
+function asksToAnalyzeSample(text: string): boolean {
+  return (
+    includesAny(text, words.analyze) ||
+    /分析.*(样例|视频|主要内容|创作手法|视频结构|镜头|转场|节奏)/.test(text) ||
+    /(这个|这个样例|这个视频).*(分析|解析|理解|拆解|看一下|看下)/.test(text)
+  )
+}
+
+function hasCurrentV2Timeline(runtime: DirectorConversationRuntime): boolean {
+  return Boolean(runtime.hasV2Timeline)
+}
+
+function isQualityFeedback(text: string): boolean {
+  return /没用到|没有用到|没用完|没有用完|太简单|看不到|不清楚|不满意|不符合|不对|不好|很差/.test(text)
+}
+
+function asksForConcreteRevision(text: string): boolean {
+  return /按.*重排|重新生成|生成一版|重排|改成|修改为|调整为|换成|用上|补上|增加|减少|渲染|导出/.test(text)
+}
+
+function asksOpenQuestion(text: string): boolean {
+  return /为什么|怎么|如何|是什么|是否|是不是|能否|可以吗|讲讲|解释|说明|区别|关系/.test(text)
+}
+
+function hasExecutionWording(text: string): boolean {
+  return /帮我|请|直接|现在|开始|按|用|重新|继续|生成一版|生成方案|渲染吧|导出吧|解析这个|分析这个|修改为|调整为|改成|换成/.test(text)
 }
 
 export function createDefaultDirectorSlots(
@@ -126,14 +188,14 @@ export function parseDirectorIntent(text: string): DirectorUserIntent {
   const lower = rawText.toLowerCase()
 
   let goal: DirectorGoal = 'analyze_sample'
-  if (hasAnalyzeOnly(rawText) || includesAny(rawText, words.analyze)) {
+  if (hasAnalyzeOnly(rawText) || asksToAnalyzeSample(rawText)) {
     goal = 'analyze_sample'
   } else if (includesAny(rawText, words.render)) {
     goal = 'render'
   } else if (includesAny(rawText, words.generate) || /\bgenerate\b|\bmake\b/.test(lower)) {
-    goal = 'generate_video'
+    goal = 'generate_timeline'
   } else if (includesAny(rawText, words.revise) || /\brevise\b|\bchange\b|\badjust\b/.test(lower)) {
-    goal = 'revise_plan'
+    goal = 'revise_timeline'
   } else if (includesAny(rawText, words.material)) {
     goal = 'analyze_materials'
   }
@@ -224,33 +286,36 @@ function classifyConversationIntent(
       ? { intent: 'clarify', confidence: 0.45 }
       : { intent: 'analyze_sample', confidence: 0.7 }
   }
-  if (/先修改当前 RenderPlan，再重新渲染|修改后渲染/.test(raw)) {
+  if (/先修改当前时间线方案，再重新渲染|修改后渲染/.test(raw)) {
     return { intent: 'render', confidence: 0.95 }
   }
-  if (/重新生成方案|重写 RenderPlan/.test(raw)) {
-    return { intent: 'generate_video', confidence: 0.94 }
+  if (/重新生成方案|重排时间线/.test(raw)) {
+    return { intent: 'generate_timeline', confidence: 0.94 }
   }
-  if (hasAnalyzeOnly(raw) || includesAny(raw, words.analyze)) {
+  if (hasAnalyzeOnly(raw) || asksToAnalyzeSample(raw)) {
     return { intent: 'analyze_sample', confidence: hasAnalyzeOnly(raw) ? 0.96 : 0.9 }
+  }
+  if (asksOpenQuestion(raw) && !hasExecutionWording(raw)) {
+    return { intent: 'clarify', confidence: 0.74 }
   }
   if (includesAny(raw, words.render)) return { intent: 'render', confidence: 0.92 }
   if (includesAny(raw, words.generate) || /\bgenerate\b|\bmake\b/.test(lower)) {
-    return { intent: 'generate_video', confidence: 0.88 }
+    return { intent: 'generate_timeline', confidence: 0.88 }
   }
   if (includesAny(raw, words.material)) return { intent: 'analyze_materials', confidence: 0.8 }
   if (includesAny(raw, words.revise) || /\brevise\b|\bchange\b|\badjust\b/.test(lower)) {
-    return { intent: 'revise_plan', confidence: 0.78 }
+    return { intent: 'revise_timeline', confidence: 0.78 }
   }
 
   const slotsPatch = parseDirectorSlotsFromText(raw)
-  if (Object.keys(slotsPatch).length > 0) return { intent: 'revise_plan', confidence: 0.7 }
+  if (Object.keys(slotsPatch).length > 0) return { intent: 'revise_timeline', confidence: 0.7 }
   return { intent: 'unknown', confidence: 0.35 }
 }
 
 function goalFromConversationIntent(intent: DirectorConversationIntent): DirectorGoal {
   if (intent === 'render') return 'render'
-  if (intent === 'generate_video') return 'generate_video'
-  if (intent === 'revise_plan') return 'revise_plan'
+  if (intent === 'generate_timeline') return 'generate_timeline'
+  if (intent === 'revise_timeline') return 'revise_timeline'
   if (intent === 'analyze_materials') return 'analyze_materials'
   return 'analyze_sample'
 }
@@ -305,13 +370,26 @@ export function routeDirectorConversation(input: {
     }
   }
 
-  const wantsOutput = signal.intent === 'generate_video' || signal.intent === 'render'
+  const wantsOutput = signal.intent === 'generate_timeline' || signal.intent === 'render'
+  if (signal.intent === 'render' && hasCurrentV2Timeline(input.runtime)) {
+    return {
+      intent: 'render',
+      confidence: Math.max(signal.confidence, 0.9),
+      contentDomain,
+      slotsPatch,
+      missingSlots: [],
+      requiresConfirmation: false,
+      nextAction: 'RENDER',
+      assistantMessage: '好，我按右侧这版时间线直接渲染，不重新生成方案。',
+    }
+  }
+
   if (
     mergedSlots.sampleVideoStatus === 'missing' &&
-    (signal.intent === 'analyze_sample' || wantsOutput)
+    signal.intent === 'analyze_sample'
   ) {
     return {
-      intent: signal.intent === 'unknown' ? 'analyze_sample' : signal.intent,
+      intent: 'analyze_sample',
       confidence: Math.max(signal.confidence, 0.75),
       contentDomain,
       slotsPatch,
@@ -323,7 +401,10 @@ export function routeDirectorConversation(input: {
     }
   }
 
-  if (signal.intent === 'analyze_sample' && mergedSlots.sampleVideoStatus !== 'parsed') {
+  if (
+    signal.intent === 'analyze_sample' &&
+    (mergedSlots.sampleVideoStatus !== 'parsed' || asksToReanalyzeSample(input.prompt))
+  ) {
     return {
       intent: 'analyze_sample',
       confidence: Math.max(signal.confidence, 0.85),
@@ -337,11 +418,25 @@ export function routeDirectorConversation(input: {
     }
   }
 
+  if (signal.intent === 'render' && !hasCurrentV2Timeline(input.runtime)) {
+    return {
+      intent: 'render',
+      confidence: Math.max(signal.confidence, 0.82),
+      contentDomain,
+      slotsPatch,
+      missingSlots: ['v2Timeline'],
+      requiresConfirmation: false,
+      nextAction: 'ASK_USER',
+      assistantMessage:
+        '现在还没有可以直接渲染的时间线方案。你可以先让我按文字和素材生成一版方案；确认分镜、素材和字幕后，我再渲染成 MP4。',
+    }
+  }
+
   if (wantsOutput) {
     const missingSlots: string[] = []
-    if (mergedSlots.sampleVideoStatus !== 'parsed') missingSlots.push('sampleVideoStatus')
-    if (!input.runtime.hasVisualMaterial) missingSlots.push('materialStatus')
-    if (!input.runtime.hasPipeline || !input.runtime.activeTaskId) missingSlots.push('activeTask')
+    if (signal.intent === 'render' && !hasCurrentV2Timeline(input.runtime)) {
+      missingSlots.push('v2Timeline')
+    }
 
     if (missingSlots.length) {
       return {
@@ -352,9 +447,8 @@ export function routeDirectorConversation(input: {
         missingSlots,
         requiresConfirmation: false,
         nextAction: 'ASK_USER',
-        assistantMessage: missingSlots.includes('materialStatus')
-          ? '样例这边已经能作为风格参考了。要继续做成片，还需要你给我一些真正会出现在成片里的图片或视频素材。'
-          : '现在还缺当前任务的上下文。先把样例解析跑完或恢复到已有任务，我再接着帮你生成或渲染。',
+        assistantMessage:
+          '现在还没有可渲染的 V2 时间线方案。你可以先按文字、可选样例参考或可用素材生成一版方案，再让我渲染。',
       }
     }
 
@@ -365,23 +459,37 @@ export function routeDirectorConversation(input: {
       slotsPatch,
       missingSlots: [],
       requiresConfirmation: false,
-      nextAction: signal.intent === 'render' ? 'RENDER' : 'GENERATE_VIDEO',
+      nextAction: signal.intent === 'render' ? 'RENDER' : 'GENERATE_TIMELINE',
       assistantMessage:
         signal.intent === 'render'
           ? '好，我按当前方案去渲染一版。渲染时你可以继续看右侧方案，等输出回来我们再一起挑问题。'
-          : '我先把样例节奏和你的素材整理成一版可编辑方案，右侧会展示分段和画面安排；确认后再渲染成 MP4。',
+          : '我先把你的创作意图整理成一版可编辑时间线；会结合可选样例参考和可用素材，右侧会展示分段和画面安排，确认后再渲染成 MP4。',
     }
   }
 
-  if (signal.intent === 'revise_plan' || Object.keys(slotsPatchFromText).length > 0) {
+  if (isQualityFeedback(input.prompt) && !asksForConcreteRevision(input.prompt)) {
     return {
-      intent: 'revise_plan',
+      intent: 'clarify',
+      confidence: 0.82,
+      contentDomain,
+      slotsPatch,
+      missingSlots: [],
+      requiresConfirmation: false,
+      nextAction: 'ACKNOWLEDGE',
+      assistantMessage:
+        '这个反馈我记下了，我先不直接覆盖右侧现有方案。问题更像是素材覆盖和分镜说明不够清楚：如果你要我重排，可以直接说“按这个问题重排一版”，也可以指定哪些图片必须出现、希望保留几段。',
+    }
+  }
+
+  if (signal.intent === 'revise_timeline' || Object.keys(slotsPatchFromText).length > 0) {
+    return {
+      intent: 'revise_timeline',
       confidence: Math.max(signal.confidence, 0.72),
       contentDomain,
       slotsPatch,
       missingSlots: [],
       requiresConfirmation: false,
-      nextAction: 'REVISE_PLAN',
+      nextAction: 'REVISE_TIMELINE',
       assistantMessage: buildRevisionAckMessage(mergedSlots),
     }
   }
@@ -396,8 +504,8 @@ export function routeDirectorConversation(input: {
     nextAction: signal.confidence < 0.55 ? 'ASK_USER' : 'ACKNOWLEDGE',
     assistantMessage:
       mergedSlots.sampleVideoStatus === 'parsed'
-        ? '样例我已经理解过了。你可以继续问我这条样例的节奏、镜头和风格，也可以补素材后让我整理成一版方案。'
-        : '可以，我们先聊也行。你可以描述想做的风格、用途和时长；等需要真正执行时，再上传样例或素材。',
+        ? '样例我已经理解过了。你可以继续问这条样例的节奏、镜头和风格，也可以直接按文字生成方案，或补充素材后再生成。'
+        : '可以，我们先聊也行。你可以描述想做的风格、用途和时长；准备好后可直接按文字生成，也可选上传样例或素材。',
   }
 }
 
@@ -423,177 +531,46 @@ export function directorIntentToUserIntent(
   }
 }
 
-function motifTextFromTemplate(template: TemplateSchemaV1 | undefined): string {
-  const structure = template?.structure ?? []
-  return [
-    JSON.stringify(template?.style_features ?? {}),
-    JSON.stringify(template?.transitions ?? []),
-    ...structure.map((segment) =>
-      [segment.purpose, segment.camera, segment.motion, segment.subtitle]
-        .filter(Boolean)
-        .join(' '),
-    ),
-  ]
-    .join(' ')
-    .toLowerCase()
-}
-
-function motifsFromText(motifText: string): string[] {
-  const motifs: string[] = []
-  if (/grayscale|black.?white|黑白|去色/.test(motifText)) motifs.push('grayscale_base')
-  if (/portal|光环|圆环|局部彩色/.test(motifText)) motifs.push('color_portal')
-  if (/ripple|wave|波纹|水波|涟漪/.test(motifText)) motifs.push('ripple_displacement')
-  if (/sweep|cinematic|扫光|电影感/.test(motifText)) motifs.push('cinematic_light_sweep')
-  if (/split|collage|分屏|拼贴/.test(motifText)) motifs.push('editorial_collage')
-  return motifs.length ? motifs : ['template_structure', 'material_montage']
-}
-
-function presetsFromMotifs(motifs: string[]): string[] {
-  const presets = [
-    motifs.includes('grayscale_base') ? 'primitive_color_transform' : undefined,
-    motifs.includes('color_portal') ? 'primitive_mask_reveal' : undefined,
-    motifs.includes('color_portal') ? 'primitive_ring_overlay' : undefined,
-    motifs.includes('ripple_displacement') ? 'primitive_ripple_displacement' : undefined,
-    motifs.includes('cinematic_light_sweep') ? 'primitive_light_sweep_overlay' : undefined,
-    motifs.includes('editorial_collage') ? 'primitive_collage_layout' : undefined,
-    motifs.includes('cinematic_light_sweep') || motifs.includes('grayscale_base')
-      ? 'primitive_texture_grade'
-      : undefined,
-  ].filter((item): item is string => Boolean(item))
-
-  return presets.length ? presets : ['primitive_texture_grade', 'primitive_light_sweep_overlay']
-}
-
-export function buildSampleStyleRecipe(
-  template: TemplateSchemaV1 | undefined,
-): SampleStyleRecipe {
-  const structure = template?.structure ?? []
-  const motifs = motifsFromText(motifTextFromTemplate(template))
-  const recommendedPresets = presetsFromMotifs(motifs)
-
+export function summarizeDirectorReference(
+  understanding: V2SampleUnderstandingResult,
+): DirectorReferenceSummary {
   return {
-    style_id: template?.id ?? 'sample_style_recipe',
-    reference_source: 'sample_video',
-    pacing:
-      template?.style_features?.pace === 'fast'
-        ? 'fast_cut'
-        : template?.style_features?.pace === 'slow'
-          ? 'slow_cinematic'
-          : 'medium',
-    visual_motifs: motifs,
-    recommended_presets: recommendedPresets,
-    timeline_pattern: structure.length
-      ? structure.map((segment, index) => ({
-          phase: segment.purpose || `段落_${index + 1}`,
-          duration_sec: Math.max(0.5, segment.end - segment.start),
-          effect_preset: recommendedPresets[index % recommendedPresets.length],
-          purpose: segment.subtitle || segment.purpose || '复刻样例节奏',
-          transition_to_next:
-            template?.transitions.find(
-              (transition) => transition.from_segment_id === segment.id,
-            )?.presentation ?? undefined,
-        }))
-      : [
-          {
-            phase: '开场氛围',
-            duration_sec: 4,
-            effect_preset: recommendedPresets[0],
-            purpose: '建立画面情绪',
-          },
-          {
-            phase: '视觉高潮',
-            duration_sec: 6,
-            effect_preset: recommendedPresets[0],
-            purpose: '呈现主要视觉亮点',
-          },
-        ],
-    notes: ['样例视频仅作为风格参考，不得作为成片素材来源。'],
+    source: 'sample_video',
+    summary: understanding.summary_zh,
+    atmosphere: understanding.atmosphere_zh,
+    editing: understanding.editing_zh,
+    rhythm: understanding.rhythm_zh,
+    reusableStyle: understanding.reusable_style_zh,
+    segmentCount: understanding.segments.length,
+    warnings: understanding.warnings_zh,
   }
 }
 
-export function buildSampleStyleRecipeFromMigration(
-  structure: MigrationProtocolV12 | undefined,
-): SampleStyleRecipe {
-  const anchors = structure?.semantic_anchors ?? []
-  const motifText = anchors
-    .map((anchor) =>
-      [
-        anchor.logic_intent.marketing_role,
-        anchor.logic_intent.creative_role,
-        anchor.logic_intent.emotion_vibe,
-        anchor.replication_instructions.visual_generation_prompt,
-        anchor.replication_instructions.overlay_rewrite_instruction,
-      ]
-        .filter(Boolean)
-        .join(' '),
-    )
-    .join(' ')
-    .toLowerCase()
-  const motifs = motifsFromText(motifText)
-  const recommendedPresets = presetsFromMotifs(motifs)
-
-  return {
-    style_id: structure?.metadata.video_id ?? 'sample_style_recipe',
-    reference_source: 'sample_video',
-    pacing: anchors.length >= 5 ? 'fast_cut' : 'medium',
-    visual_motifs: motifs,
-    recommended_presets: recommendedPresets,
-    timeline_pattern: anchors.map((anchor, index) => ({
-      phase:
-        anchor.logic_intent.creative_role ??
-        anchor.logic_intent.marketing_role ??
-        `段落_${index + 1}`,
-      duration_sec: Math.max(0.5, anchor.end_sec - anchor.start_sec),
-      effect_preset: recommendedPresets[index % recommendedPresets.length],
-      purpose:
-        anchor.replication_instructions.overlay_rewrite_instruction ||
-        anchor.replication_instructions.visual_generation_prompt ||
-        '复刻样例节奏',
-    })),
-    notes: ['样例视频仅作风格参考；成片素材来自用户上传的 reference materials。'],
-  }
+export interface DirectorMaterialSummaryInput {
+  id: string
+  type: 'video' | 'image' | 'audio'
+  name?: string
+  tags?: string[]
+  durationSec?: number
 }
 
-function segmentFromAssetAnalysis(analysis: AssetAnalysisV1 | undefined) {
-  return (analysis?.segments ?? []).map((segment) => ({
-    start_sec: segment.start_sec,
-    end_sec: segment.end_sec,
-    shot_type: segment.shot_type,
-    motion: segment.motion,
-    quality_score: segment.score,
-    recommended_usage: [
-      ...(segment.tags ?? []),
-      ...(segment.emotion_tags ?? []),
-    ].slice(0, 5),
-  }))
-}
-
-export function buildMaterialAnalysis(material: UserMaterialDto): MaterialAnalysis {
-  const assetAnalysis = material.asset_analysis
-  const segments = segmentFromAssetAnalysis(assetAnalysis)
-  const type =
-    material.material_type === 'VIDEO'
-      ? 'video'
-      : material.material_type === 'AUDIO'
-        ? 'audio'
-        : 'image'
-
+export function summarizeDirectorMaterial(
+  material: DirectorMaterialSummaryInput,
+): DirectorMaterialSummary {
+  const durationSec = material.durationSec ?? (material.type === 'audio' ? 15 : material.type === 'image' ? 5 : 8)
   return {
     asset_id: material.id,
     source: 'user_material',
-    type,
-    usable_segments:
-      segments.length > 0
-        ? segments
-        : [
-            {
-              start_sec: 0,
-              end_sec: assetAnalysis?.duration_sec ?? 5,
-              quality_score: 0.6,
-              recommended_usage: material.ai_tags ?? [],
-            },
-          ],
-    tags: material.ai_tags ?? [],
-    summary: `${material.label || material.id} 是可用于填槽和成片编排的用户素材。`,
+    type: material.type,
+    usable_segments: [
+      {
+        start_sec: 0,
+        end_sec: durationSec,
+        quality_score: 0.6,
+        recommended_usage: material.tags ?? [],
+      },
+    ],
+    tags: material.tags ?? [],
+    summary: `${material.name || material.id} 是可用于时间线编排的用户素材。`,
   }
 }

@@ -176,7 +176,7 @@ export function MaterialLibraryManager({
   embedded?: boolean
 }) {
   const materials = useMaterialLibraryStore((s) => s.materials)
-  const addFromFile = useMaterialLibraryStore((s) => s.addFromFile)
+  const addFromFileWithHash = useMaterialLibraryStore((s) => s.addFromFileWithHash)
   const updateMaterial = useMaterialLibraryStore((s) => s.updateMaterial)
   const deleteMaterial = useMaterialLibraryStore((s) => s.deleteMaterial)
 
@@ -268,9 +268,7 @@ export function MaterialLibraryManager({
 
   const handleUpload = (files: FileList | null) => {
     if (!files?.length) return
-    for (const file of Array.from(files)) {
-      addFromFile(file)
-    }
+    void Promise.all(Array.from(files).map((file) => addFromFileWithHash(file)))
   }
 
   return (

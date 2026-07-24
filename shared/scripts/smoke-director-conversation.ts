@@ -73,7 +73,7 @@ function case4() {
     slots: createDefaultDirectorSlots({ sampleVideoStatus: 'parsed' }),
     runtime: parsedRuntime,
   })
-  assert(result.nextAction !== 'GENERATE_VIDEO', `case4 should not auto-generate: ${result.nextAction}`)
+  assert(result.nextAction !== 'GENERATE_TIMELINE', `case4 should not auto-generate: ${result.nextAction}`)
   assert(result.nextAction !== 'RENDER', 'case4 should not render')
   passed += 1
 }

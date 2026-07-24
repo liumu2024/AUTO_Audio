@@ -2,14 +2,9 @@ import { useDraggable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { Film, Music2, Sparkles, Type } from 'lucide-react'
 
-import { AudioWaveform } from '@/components/timeline/AudioWaveform'
-import {
-  effectShortLabel,
-  extractWaveformForAnchor,
-} from '@/lib/render-effect-ui'
 import { cn } from '@/lib/utils'
-import { useRenderPlanStore } from '@/stores/renderPlanStore'
-import { useTimelineStore } from '@/stores/timelineStore'
+import { usePlaybackStore } from '@/stores/playbackStore'
+import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 import type { TimelineClip } from '@/types/timeline'
 
 interface TimelineClipBlockProps {
@@ -45,28 +40,20 @@ const TRACK_STYLES = {
 } as const
 
 export function TimelineClipBlock({ clip, pixelsPerSecond }: TimelineClipBlockProps) {
-  const selectedClipId = useTimelineStore((s) => s.selectedClipId)
-  const selectClip = useTimelineStore((s) => s.selectClip)
-  const renderPlan = useRenderPlanStore((s) => s.plan)
-  const scene = useRenderPlanStore((s) => s.getSceneByAnchor(clip.anchor_id))
-  const isSelected = selectedClipId === clip.id
+  const v2SelectedClipId = useV2TimelineStore((s) => s.selectedClipId)
+  const selectV2Clip = useV2TimelineStore((s) => s.selectClip)
+  const seek = usePlaybackStore((s) => s.seek)
+  const isSelected = v2SelectedClipId === clip.id
 
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
       id: clip.id,
       data: { type: 'clip', clip },
+      disabled: true,
     })
 
   const style = TRACK_STYLES[clip.track_id as keyof typeof TRACK_STYLES] ?? TRACK_STYLES.video
   const Icon = style.icon
-  const effectPreset =
-    clip.track_id === 'video' || clip.track_id === 'effect'
-      ? scene?.effects?.preset
-      : undefined
-  const waveformSamples =
-    clip.track_id === 'audio'
-      ? extractWaveformForAnchor(renderPlan, clip.anchor_id)
-      : []
   const width = (clip.end_sec - clip.start_sec) * pixelsPerSecond
   const left = clip.start_sec * pixelsPerSecond
 
@@ -90,12 +77,12 @@ export function TimelineClipBlock({ clip, pixelsPerSecond }: TimelineClipBlockPr
       )}
       onClick={(e) => {
         e.stopPropagation()
-        selectClip(clip.id)
+        seek(clip.start_sec)
+        selectV2Clip(clip.id)
       }}
       {...listeners}
       {...attributes}
     >
-      {clip.track_id === 'audio' && <AudioWaveform samples={waveformSamples} />}
       <Icon className={cn('relative z-10 mt-0.5 h-3 w-3 shrink-0', style.text)} />
       <span
         className={cn(
@@ -105,12 +92,6 @@ export function TimelineClipBlock({ clip, pixelsPerSecond }: TimelineClipBlockPr
       >
         {clip.label}
       </span>
-      {effectPreset ? (
-        <span className="absolute bottom-0.5 right-1 z-10 flex max-w-[54px] items-center gap-0.5 truncate rounded bg-black/45 px-1 py-0.5 text-[8px] font-medium text-violet-100 ring-1 ring-white/10">
-          <Sparkles className="h-2.5 w-2.5 shrink-0" />
-          <span className="truncate">{effectShortLabel(effectPreset)}</span>
-        </span>
-      ) : null}
     </button>
   )
 }

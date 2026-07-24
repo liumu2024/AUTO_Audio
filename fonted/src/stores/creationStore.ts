@@ -18,6 +18,8 @@ interface CreationState {
   sampleName: string
   inputText: string
   attachments: InputAttachment[]
+  pendingAttachmentIds: string[]
+  showSampleInInputTray: boolean
   aspectRatio: DirectorAspectRatio
   durationSec?: number
   styleIntensity: 'light' | 'medium' | 'strong'
@@ -28,6 +30,7 @@ interface CreationState {
   setInputText: (text: string) => void
   addAttachment: (item: InputAttachment) => void
   removeAttachment: (id: string) => void
+  clearInputTray: () => void
   setAspectRatio: (aspectRatio: DirectorAspectRatio) => void
   setDurationSec: (durationSec?: number) => void
   setStyleIntensity: (styleIntensity: 'light' | 'medium' | 'strong') => void
@@ -42,11 +45,17 @@ interface CreationState {
   }) => void
 }
 
+function attachmentDedupKey(item: InputAttachment): string {
+  return item.materialId ?? item.id.replace(/^att_(lib_)?/, '')
+}
+
 export const useCreationStore = create<CreationState>((set, get) => ({
   sampleUrl: '',
   sampleName: '',
   inputText: '',
   attachments: [],
+  pendingAttachmentIds: [],
+  showSampleInInputTray: false,
   aspectRatio: '9:16',
   durationSec: undefined,
   styleIntensity: 'medium',
@@ -57,25 +66,60 @@ export const useCreationStore = create<CreationState>((set, get) => ({
     set({
       sampleUrl,
       sampleName: name ?? get().sampleName,
+      showSampleInInputTray: Boolean(sampleUrl),
     }),
   setInputText: (inputText) => set({ inputText }),
   addAttachment: (item) => {
-    if (get().attachments.some((a) => a.id === item.id)) return
-    set((s) => ({ attachments: [...s.attachments, item] }))
+    const existing = get().attachments.find((a) => attachmentDedupKey(a) === attachmentDedupKey(item))
+    if (existing) {
+      set((s) => ({
+        attachments: s.attachments.map((attachment) =>
+          attachment.id === existing.id
+            ? {
+                ...attachment,
+                name: item.name,
+                type: item.type,
+                url: item.url,
+                source: item.source,
+                materialId: item.materialId,
+                tags: item.tags,
+              }
+            : attachment,
+        ),
+        pendingAttachmentIds: [...new Set([...s.pendingAttachmentIds, existing.id])],
+      }))
+      return
+    }
+    set((s) => ({
+      attachments: [...s.attachments, item],
+      pendingAttachmentIds: [...new Set([...s.pendingAttachmentIds, item.id])],
+    }))
   },
   removeAttachment: (id) =>
-    set((s) => ({ attachments: s.attachments.filter((a) => a.id !== id) })),
+    set((s) => ({
+      attachments: s.attachments.filter((a) => a.id !== id),
+      pendingAttachmentIds: s.pendingAttachmentIds.filter((item) => item !== id),
+    })),
+  clearInputTray: () => set({ pendingAttachmentIds: [], showSampleInInputTray: false }),
   setAspectRatio: (aspectRatio) => set({ aspectRatio }),
   setDurationSec: (durationSec) => set({ durationSec }),
   setStyleIntensity: (styleIntensity) => set({ styleIntensity }),
   setAnalyzing: (isAnalyzing) => set({ isAnalyzing }),
   setSampleParsed: (isSampleParsed) => set({ isSampleParsed }),
-  clearSample: () => set({ sampleUrl: '', sampleName: '' }),
+  clearSample: () =>
+    set({
+      sampleUrl: '',
+      sampleName: '',
+      showSampleInInputTray: false,
+      isSampleParsed: false,
+    }),
   restoreFromServer: ({ sampleUrl, sampleName, inputText, isSampleParsed }) =>
     set({
       sampleUrl,
       sampleName: sampleName ?? '',
       inputText: inputText ?? '',
       isSampleParsed: isSampleParsed ?? false,
+      pendingAttachmentIds: [],
+      showSampleInInputTray: false,
     }),
 }))

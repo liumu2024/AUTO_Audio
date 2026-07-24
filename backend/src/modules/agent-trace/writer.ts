@@ -186,13 +186,9 @@ function primaryComponentArtifact(artifact: AgentTraceArtifactRef): boolean {
     name.endsWith('.effect-validation.json')
 }
 
-function primaryRenderPlanArtifact(artifact: AgentTraceArtifactRef): boolean {
+function primaryTimelineArtifact(artifact: AgentTraceArtifactRef): boolean {
   const name = artifactFileName(artifact)
-  return (
-    name.includes('render-plan-validation') ||
-    name.includes('render-plan-repair') ||
-    name === 'render-plan.json'
-  )
+  return name.includes('timeline-') || name.includes('timeline.')
 }
 
 function primaryRenderArtifact(artifact: AgentTraceArtifactRef): boolean {
@@ -258,11 +254,11 @@ function buildReadOrder(artifacts: AgentTraceArtifactRef[]): AgentTraceIndexV1['
     },
     {
       step: 5,
-      title: 'Render plan',
-      purpose: '查看 RenderPlan 及校验/修复记录，判断进入 Remotion 前是否发生降级。',
+      title: 'V2 timeline planning',
+      purpose: '查看时间线方案与校验记录，确认进入 Remotion 前的可渲染性。',
       files: curatedFilesFor(
-        artifacts.filter((artifact) => artifact.phase === 'render_plan'),
-        primaryRenderPlanArtifact,
+        artifacts.filter((artifact) => artifact.phase === 'timeline_planning'),
+        primaryTimelineArtifact,
       ),
     },
     {
@@ -293,7 +289,7 @@ const PHASE_LABELS: Record<AgentTracePhase, string> = {
   director_chat: '导演对话',
   sample_understanding: '样例理解',
   effect_planning: '效果规划',
-  render_plan: '渲染计划',
+  timeline_planning: 'V2 时间线规划',
   component_authoring: '组件生成',
   render: 'Remotion 渲染',
   quality_gate: '质量评估',
@@ -328,7 +324,7 @@ function recommendedArtifactsForPhase(
   if (phase === 'sample_understanding') return curatedFilesFor(artifacts, primarySampleArtifact)
   if (phase === 'effect_planning') return curatedFilesFor(artifacts, primaryEffectArtifact)
   if (phase === 'component_authoring') return curatedFilesFor(artifacts, primaryComponentArtifact)
-  if (phase === 'render_plan') return curatedFilesFor(artifacts, primaryRenderPlanArtifact)
+  if (phase === 'timeline_planning') return curatedFilesFor(artifacts, primaryTimelineArtifact)
   if (phase === 'render') return curatedFilesFor(artifacts, primaryRenderArtifact)
   if (phase === 'quality_gate') return curatedFilesFor(artifacts, primaryQualityArtifact)
   return artifacts.filter((artifact) => artifact.category === 'summary' || artifact.category === 'audit')
@@ -339,7 +335,7 @@ function buildStageSummary(manifest: AgentTraceManifestV1): unknown {
     'sample_understanding',
     'effect_planning',
     'component_authoring',
-    'render_plan',
+    'timeline_planning',
     'render',
     'quality_gate',
     'task',
@@ -508,7 +504,7 @@ function inferArtifactPhase(relativePath: string): AgentTracePhase | undefined {
     'director_chat',
     'sample_understanding',
     'effect_planning',
-    'render_plan',
+    'timeline_planning',
     'component_authoring',
     'render',
     'quality_gate',
@@ -557,7 +553,7 @@ function inferArtifactCategory(input: {
   if (lower.includes('curl') || lower.includes('ark-files') || lower.includes('request')) {
     return 'api_raw_io'
   }
-  if (input.phase === 'render_plan') return 'audit'
+  if (input.phase === 'timeline_planning') return 'audit'
   return 'debug'
 }
 

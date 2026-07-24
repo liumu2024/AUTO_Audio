@@ -1,8 +1,8 @@
 # Backend
 
 The backend owns upload APIs, V2 timeline preview/run APIs, public asset
-publishing, Remotion invocation, FFmpeg preflight/standardization, trace output,
-and compatibility reads for historical tasks.
+publishing, Remotion invocation, FFmpeg preflight/standardization, and V2 trace
+output.
 
 ## Module Boundaries
 
@@ -12,11 +12,6 @@ and compatibility reads for historical tasks.
 | `src/config/` | Environment configuration. |
 | `src/shared/prisma.service.ts` | Selects Prisma or local JSON adapter depending on runtime mode. |
 | `src/shared/local-prisma.service.ts` | Desktop local storage adapter. It stores data; it does not interpret video semantics. |
-| `src/modules/video-task/` | Historical task list/detail/cancel APIs. It no longer creates V1 analyzer/generator jobs. |
-| `src/modules/video-understanding/` | Legacy Ark Files/Responses integration retained for older analysis modules. |
-| `src/modules/sample-understanding/` | Legacy sample-understanding schema, grounding, normalization, and prompts. |
-| `src/modules/render-plan/` | Legacy RenderPlan read/write and validation endpoints retained for old editor surfaces. |
-| `src/modules/render-engine/` | Legacy RenderPlan Remotion renderer retained for compatibility. |
 | `src/pipeline-v2/` | Active V2 timeline planning, material resolution, AI video adapter, FFmpeg standardization, Remotion rendering, and trace. |
 
 ## Active V2 Gates
@@ -29,9 +24,6 @@ The backend treats `RemotionTimelineSpecV1` as the active renderable plan.
 3. `POST /api/v2/timeline/run` resolves material jobs, normalizes assets, and
    renders through Remotion.
 4. V2 trace is written under `backend/tmp/v2-agent-trace/<taskId>/`.
-
-`RenderPlanV1` endpoints remain legacy compatibility APIs. They are not called
-by the migrated director chat or export flow.
 
 ## Render Output Gate
 
@@ -78,12 +70,7 @@ npm.cmd run dev
 | `POST` | `/api/uploads` | Upload sample or material files; optionally publish them for external image-to-video providers. |
 | `POST` | `/api/v2/timeline/preview` | Create a V2 timeline spec and Chinese planning review. |
 | `POST` | `/api/v2/timeline/run` | Resolve materials, standardize media, render, and return output/trace. |
-| `GET` | `/api/tasks/:taskId` | Get task row. |
-| `GET` | `/api/tasks/:taskId/pipeline` | Get `PipelineBundle`. |
-| `PATCH` | `/api/tasks/:taskId/structure` | Save edited `MigrationProtocolV12`. |
-| `PATCH` | `/api/tasks/:taskId/render-plan` | Legacy RenderPlan compatibility save. |
-| `POST` | `/api/tasks/:taskId/cancel` | Cancel a historical task or an active Remotion render. |
-| `WS` | `/ws/tasks?taskId=...` | Legacy progress events. V2 runs use direct API responses and task-store logs. |
+| `WS` | `/ws/tasks?taskId=...` | Optional task progress and trace events. V2 runs remain driven by their direct API responses. |
 
 ## Runtime Artifacts
 

@@ -33,10 +33,55 @@ interface LocalReplicationTask {
   completedAt: string | null
 }
 
+interface LocalV2TimelineDraft {
+  id: string
+  userId: number
+  revision: number
+  creationMode: string
+  plannerInputJson: unknown
+  specJson: unknown
+  plannerSource: string | null
+  reviewJson: unknown
+  traceDir: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+interface LocalV2TimelineRevision {
+  id: string
+  draftId: string
+  revision: number
+  kind: string
+  specJson: unknown
+  plannerSource: string | null
+  reviewJson: unknown
+  traceDir: string | null
+  createdAt: string
+}
+
+interface LocalV2TimelineRenderRun {
+  id: string
+  draftId: string
+  sourceRevision: number
+  sourceSpecJson: unknown
+  resolvedSpecJson: unknown
+  status: string
+  outputPath: string | null
+  outputUrl: string | null
+  traceDir: string | null
+  materialResolutionJson: unknown
+  evaluationJson: unknown
+  createdAt: string
+  completedAt: string | null
+}
+
 interface LocalDbState {
   users: LocalUser[]
   userMaterials: LocalUserMaterial[]
   replicationTasks: LocalReplicationTask[]
+  v2TimelineDrafts: LocalV2TimelineDraft[]
+  v2TimelineRevisions: LocalV2TimelineRevision[]
+  v2TimelineRenderRuns: LocalV2TimelineRenderRun[]
 }
 
 function localDataDir(): string {
@@ -64,6 +109,9 @@ function defaultState(): LocalDbState {
     ],
     userMaterials: [],
     replicationTasks: [],
+    v2TimelineDrafts: [],
+    v2TimelineRevisions: [],
+    v2TimelineRenderRuns: [],
   }
 }
 
@@ -74,7 +122,15 @@ function loadState(): LocalDbState {
     saveState(state)
     return state
   }
-  return JSON.parse(readFileSync(filePath, 'utf8')) as LocalDbState
+  const saved = JSON.parse(readFileSync(filePath, 'utf8')) as Partial<LocalDbState>
+  const defaults = defaultState()
+  return {
+    ...defaults,
+    ...saved,
+    v2TimelineDrafts: saved.v2TimelineDrafts ?? [],
+    v2TimelineRevisions: saved.v2TimelineRevisions ?? [],
+    v2TimelineRenderRuns: saved.v2TimelineRenderRuns ?? [],
+  }
 }
 
 function saveState(state: LocalDbState): void {
@@ -107,6 +163,29 @@ function userOut(user: LocalUser): Record<string, unknown> {
 
 function materialOut(material: LocalUserMaterial): Record<string, unknown> {
   return clone(material) as unknown as Record<string, unknown>
+}
+
+function v2DraftOut(draft: LocalV2TimelineDraft): Record<string, unknown> {
+  return {
+    ...clone(draft),
+    createdAt: new Date(draft.createdAt),
+    updatedAt: new Date(draft.updatedAt),
+  }
+}
+
+function v2RevisionOut(revision: LocalV2TimelineRevision): Record<string, unknown> {
+  return {
+    ...clone(revision),
+    createdAt: new Date(revision.createdAt),
+  }
+}
+
+function v2RenderRunOut(run: LocalV2TimelineRenderRun): Record<string, unknown> {
+  return {
+    ...clone(run),
+    createdAt: new Date(run.createdAt),
+    completedAt: ensureDate(run.completedAt),
+  }
 }
 
 function applySelect(
@@ -303,6 +382,182 @@ function makeLocalPrisma() {
           const [deleted] = state.replicationTasks.splice(index, 1)
           return taskOut(deleted!)
         }),
+    },
+    v2TimelineDraft: {
+      create: async (args: { data: Partial<LocalV2TimelineDraft> }) =>
+        write(() => {
+          const now = new Date().toISOString()
+          const draft: LocalV2TimelineDraft = {
+            id: String(args.data.id),
+            userId: Number(args.data.userId),
+            revision: Number(args.data.revision ?? 1),
+            creationMode: String(args.data.creationMode),
+            plannerInputJson: args.data.plannerInputJson ?? null,
+            specJson: args.data.specJson ?? null,
+            plannerSource: (args.data.plannerSource as string | null | undefined) ?? null,
+            reviewJson: args.data.reviewJson ?? null,
+            traceDir: (args.data.traceDir as string | null | undefined) ?? null,
+            createdAt: now,
+            updatedAt: now,
+          }
+          if (state.v2TimelineDrafts.some((item) => item.id === draft.id)) {
+            throw new Error('V2 timeline draft already exists')
+          }
+          state.v2TimelineDrafts.push(draft)
+          return v2DraftOut(draft)
+        }),
+      findFirst: async (args: { where?: Record<string, unknown> }) => {
+        const draft = state.v2TimelineDrafts.find((item) =>
+          Object.entries(args.where ?? {}).every(([key, value]) => item[key as keyof LocalV2TimelineDraft] === value),
+        )
+        return draft ? v2DraftOut(draft) : null
+      },
+      findMany: async (args: {
+        where?: Record<string, unknown>
+        orderBy?: Record<string, 'asc' | 'desc'>
+        take?: number
+      }) => {
+        const drafts = state.v2TimelineDrafts.filter((item) =>
+          Object.entries(args.where ?? {}).every(
+            ([key, value]) => item[key as keyof LocalV2TimelineDraft] === value,
+          ),
+        )
+        const [field, direction] = Object.entries(args.orderBy ?? {})[0] ?? []
+        if (field) {
+          const factor = direction === 'asc' ? 1 : -1
+          drafts.sort((left, right) =>
+            String(left[field as keyof LocalV2TimelineDraft] ?? '').localeCompare(
+              String(right[field as keyof LocalV2TimelineDraft] ?? ''),
+            ) * factor,
+          )
+        }
+        return drafts
+          .slice(0, args.take ?? undefined)
+          .map((draft) => v2DraftOut(draft))
+      },
+      updateMany: async (args: {
+        where: Record<string, unknown>
+        data: Partial<LocalV2TimelineDraft>
+      }) =>
+        write(() => {
+          let count = 0
+          for (const draft of state.v2TimelineDrafts) {
+            const matches = Object.entries(args.where).every(
+              ([key, value]) => draft[key as keyof LocalV2TimelineDraft] === value,
+            )
+            if (!matches) continue
+            Object.assign(draft, clone(args.data), { updatedAt: new Date().toISOString() })
+            count += 1
+          }
+          return { count }
+        }),
+      deleteMany: async (args: { where: Record<string, unknown> }) =>
+        write(() => {
+          const deletedIds = new Set(
+            state.v2TimelineDrafts
+              .filter((draft) =>
+                Object.entries(args.where).every(
+                  ([key, value]) => draft[key as keyof LocalV2TimelineDraft] === value,
+                ),
+              )
+              .map((draft) => draft.id),
+          )
+          state.v2TimelineDrafts = state.v2TimelineDrafts.filter(
+            (draft) => !deletedIds.has(draft.id),
+          )
+          state.v2TimelineRevisions = state.v2TimelineRevisions.filter(
+            (revision) => !deletedIds.has(revision.draftId),
+          )
+          state.v2TimelineRenderRuns = state.v2TimelineRenderRuns.filter(
+            (run) => !deletedIds.has(run.draftId),
+          )
+          return { count: deletedIds.size }
+        }),
+    },
+    v2TimelineRevision: {
+      create: async (args: { data: Partial<LocalV2TimelineRevision> }) =>
+        write(() => {
+          const revision: LocalV2TimelineRevision = {
+            id: String(args.data.id),
+            draftId: String(args.data.draftId),
+            revision: Number(args.data.revision),
+            kind: String(args.data.kind),
+            specJson: args.data.specJson ?? null,
+            plannerSource: (args.data.plannerSource as string | null | undefined) ?? null,
+            reviewJson: args.data.reviewJson ?? null,
+            traceDir: (args.data.traceDir as string | null | undefined) ?? null,
+            createdAt: new Date().toISOString(),
+          }
+          if (
+            state.v2TimelineRevisions.some(
+              (item) => item.draftId === revision.draftId && item.revision === revision.revision,
+            )
+          ) {
+            throw new Error('V2 timeline revision already exists')
+          }
+          state.v2TimelineRevisions.push(revision)
+          return v2RevisionOut(revision)
+        }),
+      findFirst: async (args: { where?: Record<string, unknown> }) => {
+        const revision = state.v2TimelineRevisions.find((item) =>
+          Object.entries(args.where ?? {}).every(([key, value]) => item[key as keyof LocalV2TimelineRevision] === value),
+        )
+        return revision ? v2RevisionOut(revision) : null
+      },
+    },
+    v2TimelineRenderRun: {
+      create: async (args: { data: Partial<LocalV2TimelineRenderRun> }) =>
+        write(() => {
+          const run: LocalV2TimelineRenderRun = {
+            id: String(args.data.id),
+            draftId: String(args.data.draftId),
+            sourceRevision: Number(args.data.sourceRevision),
+            sourceSpecJson: args.data.sourceSpecJson ?? null,
+            resolvedSpecJson: args.data.resolvedSpecJson ?? null,
+            status: String(args.data.status ?? 'running'),
+            outputPath: (args.data.outputPath as string | null | undefined) ?? null,
+            outputUrl: (args.data.outputUrl as string | null | undefined) ?? null,
+            traceDir: (args.data.traceDir as string | null | undefined) ?? null,
+            materialResolutionJson: args.data.materialResolutionJson ?? null,
+            evaluationJson: args.data.evaluationJson ?? null,
+            createdAt: new Date().toISOString(),
+            completedAt: null,
+          }
+          state.v2TimelineRenderRuns.push(run)
+          return v2RenderRunOut(run)
+        }),
+      update: async (args: {
+        where: Record<string, unknown>
+        data: Partial<LocalV2TimelineRenderRun>
+      }) =>
+        write(() => {
+          const run = state.v2TimelineRenderRuns.find((item) => item.id === args.where.id)
+          if (!run) throw new Error('V2 timeline render run not found')
+          const data = args.data as Record<string, unknown>
+          Object.assign(run, clone(args.data))
+          if (data.completedAt instanceof Date) run.completedAt = data.completedAt.toISOString()
+          return v2RenderRunOut(run)
+        }),
+      findFirst: async (args: {
+        where?: Record<string, unknown>
+        orderBy?: Record<string, 'asc' | 'desc'>
+      }) => {
+        const runs = state.v2TimelineRenderRuns.filter((run) =>
+          Object.entries(args.where ?? {}).every(
+            ([key, value]) => run[key as keyof LocalV2TimelineRenderRun] === value,
+          ),
+        )
+        const [field, direction] = Object.entries(args.orderBy ?? {})[0] ?? []
+        if (field) {
+          const factor = direction === 'asc' ? 1 : -1
+          runs.sort((left, right) =>
+            String(left[field as keyof LocalV2TimelineRenderRun] ?? '').localeCompare(
+              String(right[field as keyof LocalV2TimelineRenderRun] ?? ''),
+            ) * factor,
+          )
+        }
+        return runs[0] ? v2RenderRunOut(runs[0]) : null
+      },
     },
     $disconnect: async () => undefined,
   }

@@ -20,6 +20,7 @@ model User {
 
   materials UserMaterial[]
   tasks     ReplicationTask[]
+  v2TimelineDrafts V2TimelineDraft[]
 
   @@map("users")
 }
@@ -58,4 +59,64 @@ model ReplicationTask {
   @@index([userId])
   @@index([taskStatus])
   @@map("replication_tasks")
+}
+
+model V2TimelineDraft {
+  id            String   @id
+  userId        Int      @map("user_id")
+  revision      Int      @default(1)
+  creationMode  String   @map("creation_mode")
+  plannerInputJson Json  @map("planner_input_json")
+  specJson      Json     @map("spec_json")
+  plannerSource String?  @map("planner_source")
+  reviewJson    Json?    @map("review_json")
+  traceDir      String?  @map("trace_dir")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user       User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  revisions  V2TimelineRevision[]
+  renderRuns V2TimelineRenderRun[]
+
+  @@index([userId])
+  @@map("v2_timeline_drafts")
+}
+
+model V2TimelineRevision {
+  id            String   @id
+  draftId       String   @map("draft_id")
+  revision      Int
+  kind          String
+  specJson      Json     @map("spec_json")
+  plannerSource String?  @map("planner_source")
+  reviewJson    Json?    @map("review_json")
+  traceDir      String?  @map("trace_dir")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  draft V2TimelineDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@unique([draftId, revision])
+  @@index([draftId, createdAt])
+  @@map("v2_timeline_revisions")
+}
+
+model V2TimelineRenderRun {
+  id                    String    @id
+  draftId               String    @map("draft_id")
+  sourceRevision        Int       @map("source_revision")
+  sourceSpecJson        Json      @map("source_spec_json")
+  resolvedSpecJson      Json?     @map("resolved_spec_json")
+  status                String
+  outputPath            String?   @map("output_path")
+  outputUrl             String?   @map("output_url")
+  traceDir              String?   @map("trace_dir")
+  materialResolutionJson Json?    @map("material_resolution_json")
+  evaluationJson        Json?     @map("evaluation_json")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  completedAt           DateTime? @map("completed_at")
+
+  draft V2TimelineDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@index([draftId, createdAt])
+  @@map("v2_timeline_render_runs")
 }

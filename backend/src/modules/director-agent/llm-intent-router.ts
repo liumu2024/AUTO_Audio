@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { env } from '../../config/env.js'
+import { routeConversationSurface } from './surface-router.js'
 import {
   deriveRuntimeSlotStatus,
   parseDirectorSlotsFromText,
@@ -23,8 +24,8 @@ const ContentDomainSchema = z.enum([
 const IntentSchema = z.enum([
   'analyze_sample',
   'analyze_materials',
-  'revise_plan',
-  'generate_video',
+  'revise_timeline',
+  'generate_timeline',
   'render',
   'clarify',
   'unknown',
@@ -32,9 +33,9 @@ const IntentSchema = z.enum([
 const NextActionSchema = z.enum([
   'ASK_USER',
   'ANALYZE_SAMPLE',
-  'GENERATE_VIDEO',
+  'GENERATE_TIMELINE',
   'RENDER',
-  'REVISE_PLAN',
+  'REVISE_TIMELINE',
   'ACKNOWLEDGE',
   'NEED_BACKEND',
   'NEED_SAMPLE',
@@ -77,39 +78,89 @@ export interface LlmIntentRouterOutput {
   fallbackReason?: string
 }
 
-function summarizeCurrentPlan(context: DirectorContext) {
-  const plan = context.currentRenderPlan
-  if (!plan) return undefined
+function summarizeCurrentTimeline(context: DirectorContext) {
+  const timeline = context.currentTimeline ?? context.directorState?.timeline
+  if (!timeline) return undefined
   return {
-    ratio: plan.canvas.ratio,
-    duration_sec: plan.duration_sec,
-    scene_count: plan.scenes.length,
-    scenes: plan.scenes.slice(0, 8).map((scene) => ({
-      id: scene.id,
-      name: scene.name,
-      role: scene.role,
-      start_sec: scene.start_sec,
-      end_sec: scene.end_sec,
-      intent: scene.intent,
-      effect: scene.effects?.preset,
-    })),
+    kind: timeline.kind,
+    status: timeline.status,
+    draftId: timeline.draftId,
+    currentRevision: timeline.currentRevision,
+    savedRevision: timeline.savedRevision,
+    renderedRevision: timeline.renderedRevision,
+    lastRunId: timeline.lastRunId,
+    sceneCount: context.currentTimeline?.sceneCount,
+    selectedClipId: timeline.selectedClipId,
+    selectedSceneId: timeline.selectedSceneId,
+    lastChangeSummary: timeline.lastChangeSummary,
   }
 }
 
-function compactContext(input: {
+function hasEditableTimelineContext(
+  context: DirectorContext,
+  runtime: DirectorConversationRuntime,
+) {
+  if (hasCurrentV2Timeline(runtime)) return true
+  if (context.currentTimeline ?? context.directorState?.timeline) return true
+  return /当前已有 V2 时间线方案|最近一次 preview trace|最近一次 render trace/.test(
+    context.conversationSummary ?? '',
+  )
+}
+
+function hasCurrentV2Timeline(runtime: DirectorConversationRuntime) {
+  return Boolean(runtime.hasV2Timeline)
+}
+
+export function compactDirectorContextForPrompt(input: {
   prompt: string
   context: DirectorContext
   runtime: DirectorConversationRuntime
 }) {
+  const isV2 = hasCurrentV2Timeline(input.runtime)
+  const state = input.context.directorState
+  const compactDirectorState = state
+    ? {
+        phase: state.phase,
+        sampleStatus: state.sampleStatus,
+        materialStatus: state.materialStatus,
+        timeline: summarizeCurrentTimeline(input.context),
+        lastError: state.lastError
+          ? {
+              code: state.lastError.code,
+              message: state.lastError.message,
+              suggestions: state.lastError.suggestions.map((suggestion) => suggestion.label),
+            }
+          : undefined,
+        recentActions: state.actionLedger.slice(-5).map((item) => ({
+          type: item.type,
+          status: item.status,
+          revisionBefore: item.revisionBefore,
+          revisionAfter: item.revisionAfter,
+          message: item.message,
+        })),
+      }
+    : undefined
+
   return {
     prompt: input.prompt,
     runtime: input.runtime,
+    v2Capabilities: {
+      creationModes: ['sample_replicate', 'material_brief', 'text_to_video'],
+      videoGenerationProvider: env.v2VideoGenerationProvider,
+      videoGenerationConfigured:
+        env.v2VideoGenerationProvider !== 'none' &&
+        Boolean(env.v2VideoGenerationApiKey),
+      textToVideoAvailable:
+        env.v2VideoGenerationProvider !== 'none' &&
+        Boolean(env.v2VideoGenerationApiKey),
+      imageToVideoRequiresPublicImageUrl: true,
+    },
     slots: input.context.slots,
     sampleVideo: input.context.sampleVideo
       ? {
           id: input.context.sampleVideo.id,
           name: input.context.sampleVideo.name,
-          hasUnderstanding: Boolean(input.context.sampleVideo.understanding),
+          hasReferenceSummary: Boolean(input.context.sampleVideo.reference),
           hasStyleRecipe: Boolean(input.context.sampleVideo.styleRecipe),
           styleRecipe: input.context.sampleVideo.styleRecipe
             ? {
@@ -128,41 +179,14 @@ function compactContext(input: {
       name: item.name,
       type: item.type,
       tags: item.tags ?? [],
-      hasAnalysis: Boolean(item.analysis || item.assetAnalysis),
+      hasSummary: Boolean(item.summary),
     })),
-    currentRenderPlan: summarizeCurrentPlan(input.context),
-    directorState: input.context.directorState
-      ? {
-          phase: input.context.directorState.phase,
-          sampleStatus: input.context.directorState.sampleStatus,
-          materialStatus: input.context.directorState.materialStatus,
-          renderPlanStatus: input.context.directorState.renderPlanStatus,
-          currentRevision: input.context.directorState.currentRevision,
-          syncedRevision: input.context.directorState.syncedRevision,
-          renderedRevision: input.context.directorState.renderedRevision,
-          selectedClipId: input.context.directorState.selectedClipId,
-          selectedSceneId: input.context.directorState.selectedSceneId,
-          lastDiff: input.context.directorState.lastDiff,
-          lastError: input.context.directorState.lastError
-            ? {
-                code: input.context.directorState.lastError.code,
-                message: input.context.directorState.lastError.message,
-                suggestions: input.context.directorState.lastError.suggestions.map(
-                  (suggestion) => suggestion.label,
-                ),
-              }
-            : undefined,
-          recentActions: input.context.directorState.actionLedger.slice(-5).map((item) => ({
-            type: item.type,
-            status: item.status,
-            revisionBefore: item.revisionBefore,
-            revisionAfter: item.revisionAfter,
-            message: item.message,
-          })),
-        }
-      : undefined,
+    currentEditableTimeline: summarizeCurrentTimeline(input.context),
+    directorState: compactDirectorState,
     userIntent: input.context.userIntent,
-    conversationSummary: input.context.conversationSummary,
+    // V2 receives only its structured timeline context. A legacy free-text
+    // summary can carry old outline/diff wording, so it is excluded entirely.
+    ...(isV2 ? {} : { conversationSummary: input.context.conversationSummary }),
   }
 }
 
@@ -175,15 +199,15 @@ function buildPrompt(input: {
 
 你要同时完成两件事：
 1. 像专业混剪导演一样自然回应用户，不要模板腔，不要机械说“当前停留在...”，除非用户真的问状态。
-2. 输出严格 JSON，让系统知道下一步是否要解析样例、生成 RenderPlan、渲染、修改方案或追问。
+2. 输出严格 JSON，让系统知道下一步是否要解析样例、生成 V2 时间线方案、渲染、修改方案或追问。
 
 业务边界必须遵守：
 - sample video 只是结构、风格、节奏来源，不是成片素材。
 - reference materials / materials 才是成片候选素材。
 - 用户说“只解析/先解析/不要生成/不出片”时，不得生成或渲染。
 - 风景、音乐、氛围向视频不要强行套 Hook/Demo/CTA，可以使用“开篇、推进、高潮、收束”等创作角色。
-- 如果缺样例、缺素材、缺当前任务上下文，必须追问或说明缺什么，不要假装已经能执行。
-- 你只做意图路由和自然回复，不写 RenderPlan，不编造不存在的 Remotion preset。
+- 执行前只校验对应分支：解析或复刻样例时需要样例视频；渲染时需要当前 V2 时间线；生成方案可直接使用文字，也可选用样例或素材。
+- 你只做意图路由和自然回复，不直接写最终时间线 JSON，不编造不存在的 Remotion preset。
 - publicThoughts 是给用户看的简短工作说明，最多 4 条，不要暴露私密推理链。
 - assistantMessage 要像真实导演助理说话：具体、短、结合上下文，有下一步建议。
 
@@ -191,29 +215,35 @@ function buildPrompt(input: {
 - 用户问“你是什么/你能做什么”：nextAction 用 ACKNOWLEDGE，assistantMessage 介绍能力。
 - 用户问“讲讲分析结果/你看到了什么”：nextAction 用 ACKNOWLEDGE，根据 sample style recipe 或当前计划摘要解释。
 - 用户问“怎么做某种风格”：nextAction 用 ACKNOWLEDGE，给创作流程建议。
-- 用户说“生成成片/按这个做”：如果样例已解析且有用户素材，nextAction 用 GENERATE_VIDEO；否则 ASK_USER。
-- 用户说“渲染/导出”：只有已经有 RenderPlan/任务上下文时才 RENDER，否则 ASK_USER。
-- 用户说“重新生成方案”：这是重写 RenderPlan，nextAction 用 GENERATE_VIDEO，不要直接渲染。
-- 用户说“重新渲染”：这是使用当前 RenderPlan 出新 MP4，nextAction 用 RENDER。
+- 用户说“生成成片/按这个做”：有样例时走 sample_replicate；有图片或视频素材时走 material_brief；只有文字时走 text_to_video。三种情况都可用 GENERATE_TIMELINE，除非生成能力未配置。
+- RENDER 是昂贵的交付动作：只有用户明确要求“渲染 / 导出 / 输出 MP4 / 出片”时才用 RENDER。用户在描述对节奏、画面、镜头、转场、字幕、声音或素材的期望时，即使没有说“修改”，也应使用 REVISE_TIMELINE；不能因已有时间线就直接渲染。
+- 用户说“重新生成方案”：这是重排 V2 时间线方案，nextAction 用 GENERATE_TIMELINE，不要直接渲染。
+- 用户说“重新渲染”：这是使用当前 V2 时间线方案出新 MP4，nextAction 用 RENDER。
 - 用户说“按提示修改后渲染/先修改再渲染”：优先从提示中抽取 slotsPatch，然后 nextAction 用 RENDER。
+
+V2 branch rules:
+- V2 supports three generation branches: sample_replicate when a sample video is available, material_brief when only user text/materials are available, and text_to_video when the user only provides text.
+- Do not require a sample video for GENERATE_TIMELINE. A sample video is only mandatory for ANALYZE_SAMPLE or when the user explicitly asks to copy/analyze a sample.
+- Do not require user visual materials for GENERATE_TIMELINE. If no visual material is available, use text_to_video and let the video generation adapter create visual material from the prompt.
+- If textToVideoAvailable is false and the user provides no visual material, explain that the system can draft an editable timeline but cannot create realistic generated footage until the video generation provider is configured.
 
 Conversation freedom rules:
 - 如果用户是在聊天、咨询方案、解释结果、问你能做什么、讨论项目设计，不要因为缺样例或缺素材而要求上传；先自然回答问题，再给一个可选下一步。
-- 只有用户明确要执行“解析样例 / 生成方案 / 渲染导出 / 修改 RenderPlan”时，才检查样例、素材和任务上下文是否齐全。
+- 只有用户明确要执行“解析样例 / 生成方案 / 渲染导出 / 修改时间线方案”时，才检查该动作对应的条件；不要把样例或素材当成所有生成路径的前置条件。
 - assistantMessage 不要复述内部状态机、slot、nextAction 或置信度；这些只放在 debug/publicThoughts。
 - 缺少条件时也要像协作伙伴一样说明“现在能聊什么、下一步补什么”，不要只说固定模板。
 
 Revision / state machine rules:
 - directorState.phase tells you where the product currently is; do not answer as if starting from scratch.
-- currentRevision is the editable RenderPlan version, syncedRevision is the backend-saved version, renderedRevision is the MP4 version.
-- If renderedRevision is lower than currentRevision, tell the user the MP4 is older and needs "重新渲染" to reflect the latest right-panel edits.
-- If renderPlanStatus is dirty, mention unsaved edits when the user asks whether changes took effect.
-- If the user refers to "上一步/刚才/撤销/改回去", use directorState.lastDiff and recentActions.
+- directorState.timeline is the editable timeline state. currentRevision is its draft revision, savedRevision is the persisted revision, renderedRevision belongs to the completed render task.
+- If renderedRevision is lower than currentRevision, tell the user the成片 is older and needs "重新渲染" to reflect the latest right-panel edits.
+- If directorState.timeline.status is dirty, mention unsaved draft edits when the user asks whether changes took effect.
+- If the user refers to "上一步/刚才/撤销/改回去", use timeline.lastChangeSummary and recentActions.
 - If directorState.lastError exists, prefer one recovery suggestion over repeating raw logs.
 
 输出 JSON schema：
 {
-  "intent": "analyze_sample|analyze_materials|revise_plan|generate_video|render|clarify|unknown",
+  "intent": "analyze_sample|analyze_materials|revise_timeline|generate_timeline|render|clarify|unknown",
   "confidence": 0.0,
   "contentDomain": "landscape_montage|music_video|product_marketing|general",
   "slotsPatch": {
@@ -226,13 +256,13 @@ Revision / state machine rules:
   },
   "missingSlots": [],
   "requiresConfirmation": false,
-  "nextAction": "ASK_USER|ANALYZE_SAMPLE|GENERATE_VIDEO|RENDER|REVISE_PLAN|ACKNOWLEDGE|NEED_BACKEND|NEED_SAMPLE|WAIT",
+  "nextAction": "ASK_USER|ANALYZE_SAMPLE|GENERATE_TIMELINE|RENDER|REVISE_TIMELINE|ACKNOWLEDGE|NEED_BACKEND|NEED_SAMPLE|WAIT",
   "assistantMessage": "自然中文回复",
   "publicThoughts": ["给用户看的简短步骤"]
 }
 
 当前上下文：
-${JSON.stringify(compactContext(input), null, 2)}
+${JSON.stringify(compactDirectorContextForPrompt(input), null, 2)}
 
 只输出 JSON，不要 Markdown，不要解释。`
 }
@@ -333,7 +363,26 @@ function toDirectorIntentResult(candidate: LlmIntentResult): DirectorIntentResul
   }
 }
 
-function applyHardGuards(input: {
+function hasExplicitRenderCommand(prompt: string): boolean {
+  return /渲染吧|你渲染|现在渲染|开始渲染|重新渲染|导出吧|出片吧|渲染|导出|输出\s*mp4|输出\s*MP4/i.test(
+    prompt,
+  )
+}
+
+function currentTimelineActionAuthority(input: {
+  prompt: string
+  context: DirectorContext
+  runtime: DirectorConversationRuntime
+}) {
+  if (!hasCurrentV2Timeline(input.runtime) || hasExplicitRenderCommand(input.prompt)) {
+    return undefined
+  }
+
+  const surface = routeConversationSurface(input)
+  return surface.mode === 'edit' ? 'revise' : 'withhold_render'
+}
+
+export function applyDirectorIntentHardGuards(input: {
   llmResult: DirectorIntentResult
   prompt: string
   context: DirectorContext
@@ -341,23 +390,39 @@ function applyHardGuards(input: {
 }): DirectorIntentResult {
   const { llmResult, runtime, prompt, context } = input
   const runtimeSlots = deriveRuntimeSlotStatus(runtime)
+  const explicitSlots = parseDirectorSlotsFromText(prompt)
   const slotsPatch = {
-    ...parseDirectorSlotsFromText(prompt),
     ...llmResult.slotsPatch,
+    ...explicitSlots,
     ...runtimeSlots,
     contentDomain: llmResult.contentDomain,
+    aspectRatio: explicitSlots.aspectRatio ?? context.slots.aspectRatio,
+    durationSec: explicitSlots.durationSec ?? context.slots.durationSec,
+    styleIntensity: explicitSlots.styleIntensity ?? context.slots.styleIntensity,
   }
   const wantsOutput =
-    llmResult.intent === 'generate_video' ||
+    llmResult.intent === 'generate_timeline' ||
     llmResult.intent === 'render' ||
-    llmResult.nextAction === 'GENERATE_VIDEO' ||
+    llmResult.nextAction === 'GENERATE_TIMELINE' ||
     llmResult.nextAction === 'RENDER'
   const needsSampleBeforeWork =
-    wantsOutput ||
     llmResult.intent === 'analyze_sample' ||
     llmResult.nextAction === 'ANALYZE_SAMPLE' ||
     llmResult.nextAction === 'NEED_SAMPLE'
   const analyzeOnly = /只解析|先解析|不要生成|不生成|不要出片|不出片/.test(prompt)
+  const explicitSampleAnalyze =
+    /重新理解|重新解析|重新分析|解析.*(样例|视频)|分析.*(样例|视频|主要内容|创作手法|视频结构|镜头|转场|节奏)|理解.*(样例|视频)|拆解.*(样例|视频)|看.*(样例|视频)/.test(prompt)
+  const explicitSampleReplicate = /复刻/.test(prompt)
+  const explicitRender = hasExplicitRenderCommand(prompt)
+  const explicitOutput = /生成|成片|做成|出片|渲染|导出|输出/.test(prompt)
+  const qualityFeedback =
+    /没用到|没有用到|没用完|太简单|看不到|不清楚|不满意|不符合|不对|不好|很差/.test(prompt)
+  const asksForRevision =
+    /改|修改|调整|重排|重新生成|换成|变成|用上|补上|增加|减少|改为|做成|生成|渲染|导出/.test(prompt)
+  const asksOpenQuestion =
+    /为什么|怎么|如何|是什么|是否|是不是|能否|可以吗|讲讲|解释|说明|区别|关系/.test(prompt)
+  const hasExecutionWording =
+    /帮我|请|直接|现在|开始|按|用|重新|继续|生成一版|生成方案|渲染吧|导出吧|解析这个|分析这个|修改为|调整为|改成|换成/.test(prompt)
 
   if (!runtime.backendEnabled) {
     return {
@@ -370,7 +435,64 @@ function applyHardGuards(input: {
     }
   }
 
-  if (!runtime.sampleUrl.trim() && needsSampleBeforeWork) {
+  if (asksOpenQuestion && !hasExecutionWording && wantsOutput) {
+    return {
+      ...llmResult,
+      intent: 'clarify',
+      slotsPatch,
+      missingSlots: [],
+      requiresConfirmation: false,
+      nextAction: 'ACKNOWLEDGE',
+      assistantMessage:
+        llmResult.assistantMessage ||
+        '这个更像是在问方案或流程，我先回答问题，不会直接改方案或渲染。你要执行时再直接说“生成一版方案”或“按当前方案渲染”。',
+    }
+  }
+
+  const actionAuthority = currentTimelineActionAuthority({ prompt, context, runtime })
+  if (actionAuthority === 'revise') {
+    return {
+      ...llmResult,
+      intent: 'revise_timeline',
+      confidence: Math.max(llmResult.confidence, 0.9),
+      slotsPatch,
+      missingSlots: [],
+      requiresConfirmation: false,
+      nextAction: 'REVISE_TIMELINE',
+      assistantMessage: '我会先把这次对节奏、转场和字幕的要求写进当前 V2 时间线方案，更新后再由你决定是否渲染。',
+    }
+  }
+
+  if (
+    actionAuthority === 'withhold_render' &&
+    (llmResult.intent === 'render' || llmResult.nextAction === 'RENDER')
+  ) {
+    return {
+      ...llmResult,
+      intent: 'clarify',
+      slotsPatch,
+      missingSlots: [],
+      requiresConfirmation: true,
+      nextAction: 'ASK_USER',
+      assistantMessage:
+        '右侧已有可编辑的 V2 时间线。你是在继续修改方案，还是确认要直接渲染当前版本？',
+    }
+  }
+
+  if ((explicitRender || llmResult.intent === 'render' || llmResult.nextAction === 'RENDER') && hasCurrentV2Timeline(runtime)) {
+    return {
+      ...llmResult,
+      intent: 'render',
+      confidence: Math.max(llmResult.confidence, 0.9),
+      slotsPatch,
+      missingSlots: [],
+      requiresConfirmation: false,
+      nextAction: 'RENDER',
+      assistantMessage: '好，我按右侧这版时间线直接渲染，不重新生成方案。',
+    }
+  }
+
+  if (!runtime.sampleUrl.trim() && (needsSampleBeforeWork || explicitSampleReplicate)) {
     return {
       ...llmResult,
       intent: 'analyze_sample',
@@ -382,7 +504,11 @@ function applyHardGuards(input: {
     }
   }
 
-  if (analyzeOnly && !runtime.isSampleParsed) {
+  if (
+    (analyzeOnly || (explicitSampleAnalyze && !explicitOutput)) &&
+    runtime.sampleUrl.trim() &&
+    (!runtime.isSampleParsed || /重新|再次|再分析|再看/.test(prompt))
+  ) {
     return {
       ...llmResult,
       intent: 'analyze_sample',
@@ -394,11 +520,27 @@ function applyHardGuards(input: {
     }
   }
 
+  if (qualityFeedback && !asksForRevision) {
+    return {
+      ...llmResult,
+      intent: 'clarify',
+      slotsPatch,
+      missingSlots: [],
+      requiresConfirmation: false,
+      nextAction: 'ACKNOWLEDGE',
+      assistantMessage:
+        '你这个反馈是成立的。我先不直接覆盖当前方案：需要先把哪些素材没被使用、哪些镜头太空、哪些转场不贴样例列清楚。你确认要我改的话，可以直接说“按这个问题重排一版”或指定要保留几段、哪些图片必须出现。',
+    }
+  }
+
   if (wantsOutput) {
     const missingSlots: string[] = []
-    if (!runtime.isSampleParsed) missingSlots.push('sampleVideoStatus')
-    if (!runtime.hasVisualMaterial) missingSlots.push('materialStatus')
-    if (!runtime.hasPipeline || !runtime.activeTaskId) missingSlots.push('activeTask')
+    if (
+      (llmResult.intent === 'render' || llmResult.nextAction === 'RENDER') &&
+      !hasCurrentV2Timeline(runtime)
+    ) {
+      missingSlots.push('v2Timeline')
+    }
 
     if (missingSlots.length) {
       return {
@@ -407,16 +549,15 @@ function applyHardGuards(input: {
         missingSlots,
         requiresConfirmation: false,
         nextAction: 'ASK_USER',
-        assistantMessage: missingSlots.includes('materialStatus')
-          ? '样例这边已经能作为风格参考了。要继续做成片，还需要你给我一些真正会出现在成片里的图片或视频素材。'
-          : '现在还缺当前任务的上下文。先把样例解析跑完或恢复到已有任务，我再接着帮你生成或渲染。',
+        assistantMessage:
+          '现在还没有可渲染的 V2 时间线方案。你可以先按文字、可选样例参考或可用素材生成一版方案，再让我渲染。',
       }
     }
   }
 
   if (
-    llmResult.nextAction === 'REVISE_PLAN' &&
-    !context.currentRenderPlan &&
+    llmResult.nextAction === 'REVISE_TIMELINE' &&
+    !hasEditableTimelineContext(context, runtime) &&
     runtime.isSampleParsed
   ) {
     return {
@@ -458,7 +599,7 @@ function ruleFallback(input: {
       nextAction: 'ACKNOWLEDGE',
       assistantMessage:
         input.context.conversationSummary?.trim() ||
-        '样例我已经理解过了。你可以继续问我它的节奏、镜头和风格，也可以补素材后让我整理成一版成片方案。',
+        '样例我已经理解过了。你可以继续问我它的节奏、镜头和风格，也可以直接按文字生成方案，或补充素材后再生成。',
     }
     return {
       source: 'rule_fallback',
@@ -519,7 +660,7 @@ export async function routeDirectorIntentWithLlm(input: {
     const raw = await callResponsesApi(buildPrompt(input))
     const text = extractText(raw)
     const parsed = LlmIntentResultSchema.parse(extractJson(text))
-    const guarded = applyHardGuards({
+  const guarded = applyDirectorIntentHardGuards({
       llmResult: toDirectorIntentResult(parsed),
       prompt: input.prompt,
       context: input.context,

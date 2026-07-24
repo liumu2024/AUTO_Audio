@@ -99,24 +99,9 @@ export const env = {
 
   /** Local Remotion rendering. */
   remotionRoot: readEnv('REMOTION_ROOT') ?? '../remotion',
-  remotionCompositionId: readEnv('REMOTION_COMPOSITION_ID') ?? 'Dpl304Video',
+  remotionCompositionId: readEnv('REMOTION_COMPOSITION_ID') ?? 'V2TimelineVideo',
   remotionBrowserExecutable: readEnv('REMOTION_BROWSER_EXECUTABLE'),
   renderOutputDir: readEnv('RENDER_OUTPUT_DIR') ?? 'renders',
-  enableRemotionComponentAuthoring:
-    readEnv('ENABLE_REMOTION_COMPONENT_AUTHORING') === 'true',
-  enableRemotionComponentSampleRender:
-    readEnv('ENABLE_REMOTION_COMPONENT_SAMPLE_RENDER') === 'true',
-  enableRemotionComponentEffectValidation:
-    readEnv('ENABLE_REMOTION_COMPONENT_EFFECT_VALIDATION') !== 'false',
-  remotionComponentAuthoringDebugDir:
-    readEnv('REMOTION_COMPONENT_AUTHORING_DEBUG_DIR') ??
-    defaultAgentTraceDir,
-  effectDebugArtifactDir:
-    readEnv('EFFECT_DEBUG_ARTIFACT_DIR') ?? defaultAgentTraceDir,
-  enableEffectDebugArtifacts: readEnv('ENABLE_EFFECT_DEBUG_ARTIFACTS') !== 'false',
-  enableRoadmapCompiledEffectLayers:
-    readEnv('ENABLE_ROADMAP_COMPILED_EFFECT_LAYERS') !== 'false',
-
   directorAgentApiKey:
     readEnv('DIRECTOR_AGENT_API_KEY') ??
     readEnv('VIDEO_UNDERSTANDING_API_KEY') ??
@@ -129,59 +114,8 @@ export const env = {
     readEnv('DIRECTOR_AGENT_RESPONSES_URL') ??
     readEnv('VIDEO_UNDERSTANDING_RESPONSES_URL') ??
     'https://ark.cn-beijing.volces.com/api/v3/responses',
-  directorAgentTimeoutMs: readNumber('DIRECTOR_AGENT_TIMEOUT_MS', 30_000),
+  directorAgentTimeoutMs: readNumber('DIRECTOR_AGENT_TIMEOUT_MS', 120_000),
   directorAgentEnabled: readEnv('DIRECTOR_AGENT_ENABLED') !== 'false',
-
-  enableRenderPlanLlmReview: readEnv('ENABLE_RENDER_PLAN_LLM_REVIEW') === 'true',
-  renderPlanLlmReviewApiKey:
-    readEnv('RENDER_PLAN_LLM_REVIEW_API_KEY') ??
-    readEnv('DIRECTOR_AGENT_API_KEY') ??
-    readEnv('VIDEO_UNDERSTANDING_API_KEY') ??
-    arkApiKey,
-  renderPlanLlmReviewModel:
-    readEnv('RENDER_PLAN_LLM_REVIEW_MODEL') ??
-    readEnv('DIRECTOR_AGENT_MODEL') ??
-    readEnv('VIDEO_UNDERSTANDING_MODEL') ??
-    defaultArkModel,
-  renderPlanLlmReviewResponsesUrl:
-    readEnv('RENDER_PLAN_LLM_REVIEW_RESPONSES_URL') ??
-    readEnv('DIRECTOR_AGENT_RESPONSES_URL') ??
-    readEnv('VIDEO_UNDERSTANDING_RESPONSES_URL') ??
-    'https://ark.cn-beijing.volces.com/api/v3/responses',
-  renderPlanLlmReviewTimeoutMs: readNumber(
-    'RENDER_PLAN_LLM_REVIEW_TIMEOUT_MS',
-    30_000,
-  ),
-
-  roadmapAgentApiKey:
-    readEnv('ROADMAP_AGENT_API_KEY') ??
-    readEnv('VIDEO_UNDERSTANDING_API_KEY') ??
-    arkApiKey,
-  roadmapAgentModel:
-    readEnv('ROADMAP_AGENT_MODEL') ??
-    readEnv('VIDEO_UNDERSTANDING_MODEL') ??
-    defaultArkModel,
-  roadmapAgentResponsesUrl:
-    readEnv('ROADMAP_AGENT_RESPONSES_URL') ??
-    readEnv('VIDEO_UNDERSTANDING_RESPONSES_URL') ??
-    'https://ark.cn-beijing.volces.com/api/v3/responses',
-  roadmapAgentTimeoutMs: readNumber('ROADMAP_AGENT_TIMEOUT_MS', 120_000),
-  roadmapAgentEnabled: readEnv('ROADMAP_AGENT_ENABLED') !== 'false',
-
-  enableSeedPluginAuthoring: readEnv('ENABLE_SEED_PLUGIN_AUTHORING') === 'true',
-  seedPluginAuthoringApiKey:
-    readEnv('SEED_PLUGIN_AUTHORING_API_KEY') ??
-    readEnv('VIDEO_UNDERSTANDING_API_KEY') ??
-    arkApiKey,
-  seedPluginAuthoringModel:
-    readEnv('SEED_PLUGIN_AUTHORING_MODEL') ??
-    readEnv('VIDEO_UNDERSTANDING_MODEL') ??
-    defaultArkModel,
-  seedPluginAuthoringResponsesUrl:
-    readEnv('SEED_PLUGIN_AUTHORING_RESPONSES_URL') ??
-    readEnv('VIDEO_UNDERSTANDING_RESPONSES_URL') ??
-    'https://ark.cn-beijing.volces.com/api/v3/responses',
-  seedPluginAuthoringTimeoutMs: readNumber('SEED_PLUGIN_AUTHORING_TIMEOUT_MS', 120_000),
 
   /** V2 generated material adapter. Provider-specific API shapes stay behind this boundary. */
   v2VideoGenerationProvider:
@@ -213,10 +147,6 @@ export const env = {
   v2GeneratedVideoFps: readNumber('V2_GENERATED_VIDEO_FPS', 30),
 }
 
-export function isUnderstandingConfigured(): boolean {
-  return Boolean(env.videoUnderstandingApiKey)
-}
-
 /** Warn early when an Ark API key looks like the wrong console value. */
 export function warnIfArkApiKeyFormatSuspicious(
   key: string | undefined,
@@ -244,12 +174,3 @@ export function warnIfArkApiKeyFormatSuspicious(
 
 warnIfArkApiKeyFormatSuspicious(env.arkApiKey)
 warnIfArkApiKeyFormatSuspicious(env.videoUnderstandingApiKey, 'VIDEO_UNDERSTANDING_API_KEY')
-
-/** Environment passed to the legacy analyzer CLI subprocess. */
-export function pythonSubprocessEnv(): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    PUBLIC_BASE_URL: env.publicBaseUrl,
-    PUBLIC_ASSET_BASE_URL: env.publicAssetBaseUrl,
-  }
-}

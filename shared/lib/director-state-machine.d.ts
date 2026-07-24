@@ -1,5 +1,5 @@
 import type { DirectorAction, DirectorActionOutcome, DirectorActionType, DirectorFailureCode, DirectorToolError } from '../types/director-action.js';
-import type { DirectorRecoverableError, DirectorSessionSnapshotInput, DirectorSessionState, RenderPlanDiff } from '../types/director-state.js';
+import type { DirectorRecoverableError, DirectorSessionSnapshotInput, DirectorSessionState, DirectorTimelineSnapshot } from '../types/director-state.js';
 export declare function createInitialDirectorSessionState(): DirectorSessionState;
 export declare function classifyDirectorFailure(message: string, actionType?: DirectorActionType): DirectorFailureCode;
 export declare function directorToolErrorFromMessage(message: string, actionType?: DirectorActionType): DirectorToolError;
@@ -16,8 +16,7 @@ export declare function recordDirectorActionRunning(input: {
 export declare function recordDirectorActionCompleted(input: {
     state: DirectorSessionState;
     outcome: DirectorActionOutcome;
-    currentRevision?: number;
-    diff?: RenderPlanDiff;
+    timeline?: DirectorTimelineSnapshot;
 }): DirectorSessionState;
 export declare function recordDirectorActionFailed(input: {
     state: DirectorSessionState;

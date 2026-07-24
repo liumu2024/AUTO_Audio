@@ -22,14 +22,14 @@ export interface DirectorActionExecutionContext {
         url: string;
         tags?: string[];
     }>;
+    conversationSummary?: string;
     activeTaskId?: string | null;
-    renderPlan?: import('../types/render-plan.v1.js').RenderPlanV1;
 }
 export interface DirectorActionExecutor {
     analyzeSample: (ctx: DirectorActionExecutionContext) => Promise<DirectorActionOutcome>;
     analyzeMaterials: (ctx: DirectorActionExecutionContext) => Promise<DirectorActionOutcome>;
-    generateRenderPlan: (ctx: DirectorActionExecutionContext) => Promise<DirectorActionOutcome>;
-    reviseRenderPlan: (ctx: DirectorActionExecutionContext) => Promise<DirectorActionOutcome>;
+    generateTimeline: (ctx: DirectorActionExecutionContext) => Promise<DirectorActionOutcome>;
+    reviseTimeline: (ctx: DirectorActionExecutionContext) => Promise<DirectorActionOutcome>;
     renderVideo: (ctx: DirectorActionExecutionContext) => Promise<DirectorActionOutcome>;
     askUser: (ctx: DirectorActionExecutionContext, action: DirectorAction) => Promise<DirectorActionOutcome>;
     requestPlugin: (ctx: DirectorActionExecutionContext, action: DirectorAction) => Promise<DirectorActionOutcome>;

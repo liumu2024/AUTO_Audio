@@ -1,8 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-import { analyzeAssetHeuristically } from '@shared/lib/asset-analysis-heuristic'
-import type { AssetAnalysisV1 } from '@shared/types/asset-analysis.v1'
+import { analyzeMaterialHeuristically } from '@shared/lib/material-analysis-heuristic'
+import type { MaterialAnalysis } from '@shared/types/material-analysis'
 
 export type MaterialType = 'video' | 'image' | 'audio'
 
@@ -12,7 +12,8 @@ export interface UserMaterial {
   type: MaterialType
   url: string
   tags: string[]
-  analysis?: AssetAnalysisV1
+  analysis?: MaterialAnalysis
+  fingerprint?: string
   createdAt: string
 }
 
@@ -78,10 +79,41 @@ function materialTagsFor(
   return scoped.slice(0, 12)
 }
 
+function fileFingerprint(file: File): string {
+  return [file.name, file.type, file.size, file.lastModified].join('|')
+}
+
+function refreshFileBackedMaterial(
+  material: UserMaterial,
+  file: File,
+  fingerprint: string,
+): UserMaterial {
+  return {
+    ...material,
+    name: file.name || material.name,
+    type: inferType(file),
+    url: URL.createObjectURL(file),
+    fingerprint,
+  }
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+async function contentFingerprint(file: File): Promise<string> {
+  if (!globalThis.crypto?.subtle) return `file:${fileFingerprint(file)}`
+  const hash = await globalThis.crypto.subtle.digest('SHA-256', await file.arrayBuffer())
+  return `sha256:${bytesToHex(new Uint8Array(hash))}|${file.type}|${file.size}`
+}
+
 interface MaterialLibraryState {
   materials: UserMaterial[]
   addMaterial: (input: Omit<UserMaterial, 'id' | 'createdAt'>) => UserMaterial
   addFromFile: (file: File) => UserMaterial
+  addFromFileWithHash: (file: File) => Promise<UserMaterial>
   updateMaterial: (
     id: string,
     patch: Partial<Pick<UserMaterial, 'name' | 'tags' | 'url'>>,
@@ -96,7 +128,11 @@ export const useMaterialLibraryStore = create<MaterialLibraryState>()(
       materials: SEED_MATERIALS,
 
       addMaterial: (input) => {
-        const analysis = analyzeAssetHeuristically({
+        if (input.fingerprint) {
+          const existing = get().materials.find((item) => item.fingerprint === input.fingerprint)
+          if (existing) return existing
+        }
+        const analysis = analyzeMaterialHeuristically({
           id: `mat_pending_${Date.now()}`,
           type: input.type,
           name: input.name,
@@ -111,11 +147,11 @@ export const useMaterialLibraryStore = create<MaterialLibraryState>()(
         }
         item.analysis = {
           ...analysis,
-          asset_id: item.id,
+          material_id: item.id,
           segments: analysis.segments.map((segment) => ({
             ...segment,
-            id: segment.id.replace(analysis.asset_id, item.id),
-            asset_id: item.id,
+            id: segment.id.replace(analysis.material_id, item.id),
+            material_id: item.id,
           })),
         }
         set((s) => ({ materials: [item, ...s.materials] }))
@@ -123,12 +159,51 @@ export const useMaterialLibraryStore = create<MaterialLibraryState>()(
       },
 
       addFromFile: (file) => {
+        const fingerprint = fileFingerprint(file)
+        const existing = get().materials.find((item) => item.fingerprint === fingerprint)
+        if (existing) {
+          const refreshed = refreshFileBackedMaterial(existing, file, fingerprint)
+          set((s) => ({
+            materials: s.materials.map((item) => (item.id === existing.id ? refreshed : item)),
+          }))
+          return refreshed
+        }
         const url = URL.createObjectURL(file)
         return get().addMaterial({
           name: file.name,
           type: inferType(file),
           url,
           tags: [],
+          fingerprint,
+        })
+      },
+
+      addFromFileWithHash: async (file) => {
+        const legacyFingerprint = fileFingerprint(file)
+        const legacyExisting = get().materials.find((item) => item.fingerprint === legacyFingerprint)
+        if (legacyExisting) {
+          const refreshed = refreshFileBackedMaterial(legacyExisting, file, legacyFingerprint)
+          set((s) => ({
+            materials: s.materials.map((item) => (item.id === legacyExisting.id ? refreshed : item)),
+          }))
+          return refreshed
+        }
+        const fingerprint = await contentFingerprint(file)
+        const existing = get().materials.find((item) => item.fingerprint === fingerprint)
+        if (existing) {
+          const refreshed = refreshFileBackedMaterial(existing, file, fingerprint)
+          set((s) => ({
+            materials: s.materials.map((item) => (item.id === existing.id ? refreshed : item)),
+          }))
+          return refreshed
+        }
+        const url = URL.createObjectURL(file)
+        return get().addMaterial({
+          name: file.name,
+          type: inferType(file),
+          url,
+          tags: [],
+          fingerprint,
         })
       },
 
@@ -143,7 +218,7 @@ export const useMaterialLibraryStore = create<MaterialLibraryState>()(
             }
             return {
               ...next,
-              analysis: analyzeAssetHeuristically({
+              analysis: analyzeMaterialHeuristically({
                 id: next.id,
                 type: next.type,
                 name: next.name,

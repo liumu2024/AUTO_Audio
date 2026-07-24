@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 
-import { useRenderPlanStore } from '@/stores/renderPlanStore'
+import { useDirectorContextStore } from '@/stores/directorContextStore'
+import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 
 export type SidebarTab = 'config' | 'structure'
 export type SidebarSubView = 'main' | 'materials'
@@ -16,9 +17,10 @@ interface EditorState {
   sidebarSubView: SidebarSubView
   materialLibraryMode: MaterialLibraryMode
   timelineMode: TimelineMode
-  /** RenderPlan 已生成，可进入生成编辑视图 */
+  /** V2 时间线方案已生成，可进入生成编辑视图。 */
   generationEditEnabled: boolean
   setProjectName: (name: string) => void
+  enterV2Workspace: () => void
   setSidebarTab: (tab: SidebarTab) => void
   setTimelineMode: (mode: TimelineMode) => void
   setGenerationEditEnabled: (enabled: boolean) => void
@@ -28,19 +30,19 @@ interface EditorState {
 
 export function resolveWorkbenchView(input: {
   timelineMode: TimelineMode
-  hasRenderPlan: boolean
+  hasTimelinePlan: boolean
   hasRenderedVideo: boolean
 }): WorkbenchView {
   if (input.hasRenderedVideo && input.timelineMode === 'generation') {
     return 'rendered_output'
   }
-  if (input.timelineMode === 'generation' && input.hasRenderPlan) {
+  if (input.timelineMode === 'generation' && input.hasTimelinePlan) {
     return 'generation_edit'
   }
   return 'sample_breakdown'
 }
 
-export const useEditorStore = create<EditorState>((set, get) => ({
+export const useEditorStore = create<EditorState>((set) => ({
   projectName: '未命名视频项目',
   sidebarTab: 'config',
   sidebarSubView: 'main',
@@ -48,11 +50,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   timelineMode: 'sample',
   generationEditEnabled: false,
   setProjectName: (projectName) => set({ projectName }),
+  enterV2Workspace: () => {
+    useDirectorContextStore.getState().reset()
+    set({
+      timelineMode: 'sample',
+      generationEditEnabled: false,
+    })
+  },
   setSidebarTab: (sidebarTab) => set({ sidebarTab }),
   setTimelineMode: (timelineMode) => {
     if (timelineMode === 'generation') {
-      const hasPlan = Boolean(useRenderPlanStore.getState().plan?.scenes.length)
-      if (!get().generationEditEnabled && !hasPlan) return
+      const hasV2Timeline = Boolean(useV2TimelineStore.getState().spec?.scenes.length)
+      if (!hasV2Timeline) return
     }
     set({ timelineMode })
   },

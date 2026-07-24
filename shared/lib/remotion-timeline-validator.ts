@@ -176,8 +176,18 @@ export function validateRemotionTimelineSpec(value: unknown): RemotionTimelineVa
     }
     if (['user_video', 'ai_video', 'image_motion'].includes(scene.type)) {
       if (!scene.asset_id) {
-        addIssue(issues, 'error', `${path}.asset_id`, `${scene.type} scenes require asset_id.`)
-      } else if (assetIds.size > 0 && !assetIds.has(scene.asset_id)) {
+        const plannedOutputAssetId = plannedOutputAssetBySceneId.get(scene.id)
+        if (scene.type === 'ai_video' && plannedOutputAssetId) {
+          addIssue(
+            issues,
+            'warning',
+            `${path}.asset_id`,
+            `asset_id will be assigned from planned generated asset ${plannedOutputAssetId} during material resolution.`,
+          )
+        } else {
+          addIssue(issues, 'error', `${path}.asset_id`, `${scene.type} scenes require asset_id.`)
+        }
+      } else if (!assetIds.has(scene.asset_id)) {
         if (plannedOutputAssetBySceneId.get(scene.id) === scene.asset_id) {
           addIssue(
             issues,

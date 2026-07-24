@@ -1,7 +1,5 @@
 import { useCallback, useEffect, type RefObject } from 'react'
 
-import { hasGeneratedVideo } from '@/components/canvas/GeneratedPlayer'
-import { useMigrationProjectStore } from '@/stores/migrationProjectStore'
 import { usePlaybackStore } from '@/stores/playbackStore'
 
 const DRIFT_THRESHOLD = 0.12
@@ -10,13 +8,12 @@ const END_EPSILON = 0.08
 function getVideos(
   sampleRef: RefObject<HTMLVideoElement | null>,
   generatedRef: RefObject<HTMLVideoElement | null>,
-  includeGenerated: boolean,
 ): HTMLVideoElement[] {
   const out: HTMLVideoElement[] = []
   const sample = sampleRef.current
   const generated = generatedRef.current
   if (sample?.src) out.push(sample)
-  if (includeGenerated && generated?.src) out.push(generated)
+  if (generated?.src) out.push(generated)
   return out
 }
 
@@ -31,7 +28,6 @@ export function useSyncedPlayback(
   sampleRef: RefObject<HTMLVideoElement | null>,
   generatedRef: RefObject<HTMLVideoElement | null>,
 ) {
-  const project = useMigrationProjectStore((s) => s.project)
   const isPlaying = usePlaybackStore((s) => s.isPlaying)
   const currentTime = usePlaybackStore((s) => s.currentTime)
   const syncLock = usePlaybackStore((s) => s.syncLock)
@@ -40,10 +36,8 @@ export function useSyncedPlayback(
   const setSyncLock = usePlaybackStore((s) => s.setSyncLock)
   const storeSeek = usePlaybackStore((s) => s.seek)
 
-  const includeGenerated = hasGeneratedVideo(project)
-
   const finishAtEnd = useCallback(() => {
-      const videos = getVideos(sampleRef, generatedRef, includeGenerated)
+      const videos = getVideos(sampleRef, generatedRef)
       let endTime = usePlaybackStore.getState().duration
       for (const el of videos) {
         if (Number.isFinite(el.duration) && el.duration > 0) {
@@ -66,7 +60,6 @@ export function useSyncedPlayback(
     [
       sampleRef,
       generatedRef,
-      includeGenerated,
       setPlaying,
       setSyncLock,
       setCurrentTime,
@@ -78,13 +71,13 @@ export function useSyncedPlayback(
       const duration = usePlaybackStore.getState().duration
       const clamped =
         duration > 0 ? Math.max(0, Math.min(time, duration)) : time
-      for (const el of getVideos(sampleRef, generatedRef, includeGenerated)) {
+      for (const el of getVideos(sampleRef, generatedRef)) {
         if (Number.isFinite(clamped) && Math.abs(el.currentTime - clamped) > 0.02) {
           el.currentTime = clamped
         }
       }
     },
-    [sampleRef, generatedRef, includeGenerated],
+    [sampleRef, generatedRef],
   )
 
   const syncOtherVideo = useCallback(
@@ -96,7 +89,6 @@ export function useSyncedPlayback(
         source === 'sample' ? generatedRef.current : sampleRef.current
       if (
         other?.src &&
-        includeGenerated &&
         Math.abs(other.currentTime - time) > DRIFT_THRESHOLD
       ) {
         setSyncLock(true)
@@ -104,7 +96,7 @@ export function useSyncedPlayback(
         requestAnimationFrame(() => setSyncLock(false))
       }
     },
-    [sampleRef, generatedRef, includeGenerated, setSyncLock],
+    [sampleRef, generatedRef, setSyncLock],
   )
 
   const handleTimeUpdate = useCallback(
@@ -123,12 +115,11 @@ export function useSyncedPlayback(
       }
 
       setCurrentTime(time)
-      if (includeGenerated) syncOtherVideo(source, time)
+      syncOtherVideo(source, time)
     },
     [
       sampleRef,
       generatedRef,
-      includeGenerated,
       setCurrentTime,
       syncOtherVideo,
       finishAtEnd,
@@ -151,7 +142,7 @@ export function useSyncedPlayback(
   const togglePlayPause = useCallback(() => {
     const state = usePlaybackStore.getState()
     const next = !state.isPlaying
-    const videos = getVideos(sampleRef, generatedRef, includeGenerated)
+    const videos = getVideos(sampleRef, generatedRef)
     if (videos.length === 0) return
 
     if (next && state.duration > 0 && state.currentTime >= state.duration - END_EPSILON) {
@@ -166,10 +157,10 @@ export function useSyncedPlayback(
     } else {
       for (const v of videos) v.pause()
     }
-  }, [sampleRef, generatedRef, includeGenerated, setPlaying, storeSeek, applyTime])
+  }, [sampleRef, generatedRef, setPlaying, storeSeek, applyTime])
 
   useEffect(() => {
-    const videos = getVideos(sampleRef, generatedRef, includeGenerated)
+    const videos = getVideos(sampleRef, generatedRef)
     if (videos.length === 0) return
 
     if (isPlaying) {
@@ -182,7 +173,7 @@ export function useSyncedPlayback(
     } else {
       for (const v of videos) v.pause()
     }
-  }, [isPlaying, sampleRef, generatedRef, includeGenerated, setPlaying])
+  }, [isPlaying, sampleRef, generatedRef, setPlaying])
 
   useEffect(() => {
     if (!syncLock) return
@@ -200,7 +191,7 @@ export function useSyncedPlayback(
       sample?.removeEventListener('ended', handleEnded)
       generated?.removeEventListener('ended', handleEnded)
     }
-  }, [sampleRef, generatedRef, includeGenerated, handleEnded])
+  }, [sampleRef, generatedRef, handleEnded])
 
   return { handleTimeUpdate, handleEnded, seekTo, togglePlayPause, applyTime }
 }

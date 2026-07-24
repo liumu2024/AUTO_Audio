@@ -1,13 +1,21 @@
 import type { DirectorAction, DirectorActionType, DirectorFailureCode, DirectorPlanStepRun } from './director-action.js';
-import type { RenderPlanV1 } from './render-plan.v1.js';
 export type DirectorSessionPhase = 'idle' | 'sample_analyzing' | 'sample_ready' | 'plan_drafting' | 'plan_editing' | 'rendering' | 'render_done' | 'failed';
-export type DirectorRenderPlanStatus = 'missing' | 'dirty' | 'synced' | 'syncing' | 'failed' | 'rendering';
-export interface RenderPlanDiff {
-    revision: number;
-    summary: string;
-    at: string;
-    sceneId?: string;
-    clipId?: string;
+/**
+ * The product-facing state for whichever timeline is currently editable.
+ * V2 uses this shape instead of borrowing fields from a legacy protocol.
+ */
+export type DirectorTimelineStatus = 'missing' | 'draft' | 'dirty' | 'saving' | 'saved' | 'rendering' | 'rendered' | 'failed';
+export interface DirectorTimelineSnapshot {
+    kind: 'v2_timeline' | 'legacy_timeline';
+    status: DirectorTimelineStatus;
+    draftId?: string;
+    currentRevision?: number;
+    savedRevision?: number;
+    renderedRevision?: number;
+    lastRunId?: string;
+    selectedClipId?: string;
+    selectedSceneId?: string;
+    lastChangeSummary?: string;
 }
 export interface DirectorActionRecord {
     id: string;
@@ -38,13 +46,8 @@ export interface DirectorSessionState {
     phase: DirectorSessionPhase;
     sampleStatus: 'missing' | 'uploaded' | 'analyzing' | 'parsed';
     materialStatus: 'missing' | 'partial' | 'ready';
-    renderPlanStatus: DirectorRenderPlanStatus;
-    selectedClipId?: string;
-    selectedSceneId?: string;
-    currentRevision?: number;
-    syncedRevision?: number;
-    renderedRevision?: number;
-    lastDiff?: RenderPlanDiff;
+    /** Authoritative timeline state for V2 and legacy adapters. */
+    timeline?: DirectorTimelineSnapshot;
     lastAction?: DirectorActionRecord;
     lastError?: DirectorRecoverableError;
     actionLedger: DirectorActionRecord[];
@@ -55,11 +58,7 @@ export interface DirectorSessionSnapshotInput {
     isSampleParsed: boolean;
     hasVisualMaterial: boolean;
     materialCount: number;
-    renderPlan?: RenderPlanV1 | null;
-    renderPlanStatus?: DirectorRenderPlanStatus;
-    selectedClipId?: string | null;
-    selectedSceneId?: string | null;
-    lastChangeSummary?: string | null;
-    renderedRevision?: number;
+    /** The editable timeline is supplied by the active workspace or a legacy adapter. */
+    timeline?: DirectorTimelineSnapshot;
 }
 //# sourceMappingURL=director-state.d.ts.map

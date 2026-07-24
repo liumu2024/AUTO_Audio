@@ -12,7 +12,6 @@ import { cn } from '@/lib/utils'
 import type { InputAttachment } from '@/stores/creationStore'
 import { useCreationStore } from '@/stores/creationStore'
 import { useMaterialLibraryStore } from '@/stores/materialLibraryStore'
-import { useRenderPlanStore } from '@/stores/renderPlanStore'
 
 interface ChatInputProps {
   disabled?: boolean
@@ -30,70 +29,58 @@ export function ChatInput({
   const sampleUrl = useCreationStore((s) => s.sampleUrl)
   const sampleName = useCreationStore((s) => s.sampleName)
   const attachments = useCreationStore((s) => s.attachments)
+  const pendingAttachmentIds = useCreationStore((s) => s.pendingAttachmentIds)
+  const showSampleInInputTray = useCreationStore((s) => s.showSampleInInputTray)
   const isSampleParsed = useCreationStore((s) => s.isSampleParsed)
   const aspectRatio = useCreationStore((s) => s.aspectRatio)
   const styleIntensity = useCreationStore((s) => s.styleIntensity)
-  const setSampleUrl = useCreationStore((s) => s.setSampleUrl)
   const setAspectRatio = useCreationStore((s) => s.setAspectRatio)
   const setStyleIntensity = useCreationStore((s) => s.setStyleIntensity)
   const clearSample = useCreationStore((s) => s.clearSample)
   const addAttachment = useCreationStore((s) => s.addAttachment)
   const removeAttachment = useCreationStore((s) => s.removeAttachment)
-  const addFromFile = useMaterialLibraryStore((s) => s.addFromFile)
-  const updateMaterial = useMaterialLibraryStore((s) => s.updateMaterial)
-  const setRenderPlanAspectRatio = useRenderPlanStore((s) => s.setAspectRatio)
+  const addFromFileWithHash = useMaterialLibraryStore((s) => s.addFromFileWithHash)
 
   const [draft, setDraft] = useState('')
   const [libraryOpen, setLibraryOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const placeholder = isSampleParsed
-    ? '继续补充创作意图，或上传图片 / 视频 / 音频作为参考素材...'
-    : '上传 1 个样例视频，并写下你想生成的新主题 / 风格方向...'
+  const placeholder =
+    '描述想生成的视频；可选上传样例作风格参考，或上传图片 / 视频 / 音频作创作素材...'
 
   const ingestFiles = useCallback(
     (files: FileList | File[] | null) => {
       if (!files?.length) return
-      for (const file of Array.from(files)) {
-        const mime = file.type
-        let type: 'video' | 'image' | 'audio' = 'image'
-        if (mime.startsWith('video/')) type = 'video'
-        else if (mime.startsWith('audio/')) type = 'audio'
-        else if (!mime.startsWith('image/')) continue
+      void (async () => {
+        for (const file of Array.from(files)) {
+          const mime = file.type
+          let type: 'video' | 'image' | 'audio' = 'image'
+          if (mime.startsWith('video/')) type = 'video'
+          else if (mime.startsWith('audio/')) type = 'audio'
+          else if (!mime.startsWith('image/')) continue
 
-        const material = addFromFile(file)
-        if (type === 'video' && !isSampleParsed && !sampleUrl) {
-          updateMaterial(material.id, {
-            tags: [...material.tags, 'sample_reference'],
+          const material = await addFromFileWithHash(file)
+          addAttachment({
+            id: `att_${material.id}`,
+            name: material.name,
+            type,
+            url: material.url,
+            source: 'upload',
+            materialId: material.id,
+            tags: material.tags,
           })
-          setSampleUrl(material.url, file.name)
-          continue
         }
-
-        addAttachment({
-          id: `att_${material.id}`,
-          name: material.name,
-          type: material.type,
-          url: material.url,
-          source: 'upload',
-          materialId: material.id,
-          tags: material.tags,
-        })
-      }
+      })()
     },
     [
       addAttachment,
-      addFromFile,
-      isSampleParsed,
-      sampleUrl,
-      setSampleUrl,
-      updateMaterial,
+      addFromFileWithHash,
     ],
   )
 
   const previewItems: AttachmentPreviewItem[] = useMemo(() => {
     const items: AttachmentPreviewItem[] = []
-    if (sampleUrl) {
+    if (sampleUrl && showSampleInInputTray) {
       items.push({
         id: '__sample__',
         name: sampleName || '样例视频',
@@ -102,7 +89,7 @@ export function ChatInput({
         kind: 'sample',
       })
     }
-    for (const att of attachments) {
+    for (const att of attachments.filter((item) => pendingAttachmentIds.includes(item.id))) {
       items.push({
         id: att.id,
         name: att.name,
@@ -112,7 +99,7 @@ export function ChatInput({
       })
     }
     return items
-  }, [attachments, sampleName, sampleUrl])
+  }, [attachments, pendingAttachmentIds, sampleName, sampleUrl, showSampleInInputTray])
 
   const handleRemove = (id: string, kind: PreviewItemKind) => {
     if (kind === 'sample') clearSample()
@@ -132,22 +119,8 @@ export function ChatInput({
   const handleSend = () => {
     const text = draft.trim()
     if (disabled) return
-    if (!text && !sampleUrl && attachments.length === 0) return
+    if (!text && previewItems.length === 0) return
     sendText(text)
-  }
-
-  const handleQuickAction = (
-    type: 'rewrite_plan' | 'rerender' | 'revise_and_render',
-  ) => {
-    if (type === 'rewrite_plan') {
-      sendText('重新生成方案：根据当前样例解析和素材重排时间线方案，不要直接渲染。')
-      return
-    }
-    if (type === 'rerender') {
-      sendText('按当前右侧时间线方案重新渲染，直接输出新的 mp4。')
-      return
-    }
-    sendText(`先修改当前时间线方案，再重新渲染：${draft.trim() || '按当前输入框的修改要求'}`)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -181,41 +154,6 @@ export function ChatInput({
               'focus:outline-none disabled:opacity-50',
             )}
           />
-
-          {isSampleParsed ? (
-            <div className="flex flex-wrap gap-1.5 border-t border-zinc-800/60 px-2 py-1.5">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="h-7 px-2 text-[11px]"
-                disabled={disabled}
-                onClick={() => handleQuickAction('rewrite_plan')}
-              >
-                重新生成方案
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="h-7 px-2 text-[11px]"
-                disabled={disabled}
-                onClick={() => handleQuickAction('rerender')}
-              >
-                重新渲染
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="h-7 px-2 text-[11px]"
-                disabled={disabled}
-                onClick={() => handleQuickAction('revise_and_render')}
-              >
-                按提示修改后渲染
-              </Button>
-            </div>
-          ) : null}
 
           <div className="flex items-center justify-between gap-2 border-t border-zinc-800/60 px-2 py-1.5">
             <div className="flex items-center gap-0.5">
@@ -259,7 +197,6 @@ export function ChatInput({
                 onChange={(e) => {
                   const nextAspectRatio = e.target.value as typeof aspectRatio
                   setAspectRatio(nextAspectRatio)
-                  setRenderPlanAspectRatio(nextAspectRatio)
                 }}
                 title="成片比例"
               >
@@ -295,7 +232,7 @@ export function ChatInput({
                 disabled && onCancel
                   ? false
                   : disabled ||
-                    (!draft.trim() && !sampleUrl && attachments.length === 0)
+                    (!draft.trim() && previewItems.length === 0)
               }
               onClick={disabled && onCancel ? onCancel : handleSend}
               aria-label={disabled && onCancel ? '中止' : '发送'}
@@ -312,8 +249,8 @@ export function ChatInput({
 
         <p className="mt-1.5 px-1 text-[10px] text-zinc-600">
           {isSampleParsed
-            ? 'Enter 发送。样例只提供结构和风格，附件作为成片候选素材。'
-            : 'Enter 发送。第一个视频是样例，其它附件是参考素材。'}
+            ? 'Enter 发送。样例只提供结构和风格；附件作为成片候选素材。'
+            : 'Enter 发送。附件默认作为创作素材；明确要求解析或复刻时，才会把视频作为样例。'}
         </p>
       </div>
 

@@ -26,9 +26,9 @@ function actionLabel(type: string) {
   const labels: Record<string, string> = {
     ANALYZE_SAMPLE: '解析样例视频',
     ANALYZE_MATERIALS: '分析创作素材',
-    GENERATE_RENDER_PLAN: '生成可编辑 RenderPlan',
-    REVISE_RENDER_PLAN: '修改当前生成方案',
-    RENDER_VIDEO: '提交 Remotion 渲染',
+    GENERATE_TIMELINE: '生成 V2 时间线方案',
+    REVISE_TIMELINE: '修改当前时间线方案',
+    RENDER_VIDEO: '提交 V2 渲染',
     ASK_USER: '回复并等待用户补充',
     REQUEST_PLUGIN: '记录缺失 Remotion 能力',
   }

@@ -1,23 +1,23 @@
-import type { AssetAnalysisV1 } from './asset-analysis.v1.js'
-import type { DirectorSessionState } from './director-state.js'
-import type { RenderPlanV1 } from './render-plan.v1.js'
-import type { TemplateSchemaV1 } from './template-schema.v1.js'
+import type {
+  DirectorSessionState,
+  DirectorTimelineSnapshot,
+} from './director-state.js'
 
 export type DirectorGoal =
   | 'analyze_sample'
   | 'analyze_materials'
-  | 'generate_video'
-  | 'revise_plan'
+  | 'generate_timeline'
+  | 'revise_timeline'
   | 'render'
 
-export type DirectorAspectRatio = RenderPlanV1['canvas']['ratio']
+export type DirectorAspectRatio = '9:16' | '16:9' | '1:1' | '4:3'
 
 /** 对话层识别的用户意图（比 goal 更细，含澄清/未知） */
 export type DirectorConversationIntent =
   | 'analyze_sample'
   | 'analyze_materials'
-  | 'revise_plan'
-  | 'generate_video'
+  | 'revise_timeline'
+  | 'generate_timeline'
   | 'render'
   | 'clarify'
   | 'unknown'
@@ -26,9 +26,9 @@ export type DirectorConversationIntent =
 export type DirectorNextAction =
   | 'ASK_USER'
   | 'ANALYZE_SAMPLE'
-  | 'GENERATE_VIDEO'
+  | 'GENERATE_TIMELINE'
   | 'RENDER'
-  | 'REVISE_PLAN'
+  | 'REVISE_TIMELINE'
   | 'ACKNOWLEDGE'
   | 'NEED_BACKEND'
   | 'NEED_SAMPLE'
@@ -101,7 +101,20 @@ export interface SampleStyleRecipe {
   notes?: string[]
 }
 
-export interface MaterialAnalysis {
+/** A compact V2-facing summary of reference-video understanding. */
+export interface DirectorReferenceSummary {
+  source: 'sample_video'
+  summary: string
+  atmosphere?: string
+  editing?: string
+  rhythm?: string
+  reusableStyle?: string
+  segmentCount: number
+  warnings?: string[]
+}
+
+/** A compact V2-facing summary of a candidate creation material. */
+export interface DirectorMaterialSummary {
   asset_id: string
   source: 'user_material'
   type: 'video' | 'image' | 'audio'
@@ -132,7 +145,7 @@ export interface DirectorSampleVideoContext {
   id: string
   url: string
   name?: string
-  understanding?: TemplateSchemaV1
+  reference?: DirectorReferenceSummary
   styleRecipe?: SampleStyleRecipe
 }
 
@@ -142,15 +155,22 @@ export interface DirectorMaterialContext {
   url: string
   name?: string
   tags?: string[]
-  analysis?: MaterialAnalysis
-  assetAnalysis?: AssetAnalysisV1
+  summary?: DirectorMaterialSummary
+}
+
+/**
+ * Compact, protocol-neutral timeline context for the director prompt.
+ * It intentionally excludes the editable timeline spec and legacy protocol details.
+ */
+export interface DirectorTimelineContext extends DirectorTimelineSnapshot {
+  sceneCount?: number
 }
 
 export interface DirectorContext {
   sampleVideo?: DirectorSampleVideoContext
   materials: DirectorMaterialContext[]
   userIntent: DirectorUserIntent
-  currentRenderPlan?: RenderPlanV1
+  currentTimeline?: DirectorTimelineContext
   directorState?: DirectorSessionState
   conversationSummary?: string
   slots: DirectorContextSlots

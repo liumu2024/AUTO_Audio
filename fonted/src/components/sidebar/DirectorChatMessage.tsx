@@ -10,7 +10,6 @@ import {
   Video,
 } from 'lucide-react'
 
-import { OutlineWidget } from '@/components/sidebar/OutlineWidget'
 import { cn } from '@/lib/utils'
 import { useCreationStore, type InputAttachment } from '@/stores/creationStore'
 import type { DirectorChatMessage } from '@/stores/directorChatStore'
@@ -143,9 +142,6 @@ export function DirectorChatMessageBubble({
             <AttachmentChips items={message.attachments} />
           ) : null}
 
-          {message.kind === 'outline' && message.outline?.length ? (
-            <OutlineWidget outline={message.outline} className="mt-3" />
-          ) : null}
 
           {message.kind === 'generation' && !isStreaming ? (
             <div className="mt-2 flex items-center gap-1.5 text-[11px] text-emerald-400/90">

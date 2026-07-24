@@ -2,71 +2,28 @@ import { useCallback, useRef } from 'react'
 
 import { EditorEmptyState } from '@/components/canvas/EditorEmptyState'
 import { GeneratedPlayer } from '@/components/canvas/GeneratedPlayer'
-import { SamplePlayer } from '@/components/canvas/SamplePlayer'
+import { V2SamplePlayer } from '@/components/canvas/V2SamplePlayer'
 import { useSyncedPlayback } from '@/hooks/useSyncedPlayback'
 import { useEditorStore } from '@/stores/editorStore'
-import { useMigrationProjectStore } from '@/stores/migrationProjectStore'
-import { usePipelineStore } from '@/stores/pipelineStore'
 import { usePlaybackStore } from '@/stores/playbackStore'
+import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 
+/** V2 canvas: sample understanding and timeline preview have no V1 projection. */
 export function MigrationCanvas() {
-  const project = useMigrationProjectStore((s) => s.project)
-  const hasPipeline = usePipelineStore((s) => Boolean(s.bundle))
-  const timelineMode = useEditorStore((s) => s.timelineMode)
+  const sampleSession = useV2TimelineStore((state) => state.sampleSession)
+  const hasV2Preview = useV2TimelineStore((state) => Boolean(state.preview || state.result))
+  const timelineMode = useEditorStore((state) => state.timelineMode)
   const sampleRef = useRef<HTMLVideoElement>(null)
   const generatedRef = useRef<HTMLVideoElement>(null)
-  const mediaDurationRef = useRef({ sample: 0, generated: 0 })
-  const setDuration = usePlaybackStore((s) => s.setDuration)
+  const setDuration = usePlaybackStore((state) => state.setDuration)
+  const { handleTimeUpdate, handleEnded, seekTo, togglePlayPause } = useSyncedPlayback(sampleRef, generatedRef)
+  const handleLoadedMetadata = useCallback((duration: number) => {
+    if (Number.isFinite(duration) && duration > 0) setDuration(duration)
+  }, [setDuration])
 
-  const { handleTimeUpdate, handleEnded, seekTo, togglePlayPause } =
-    useSyncedPlayback(sampleRef, generatedRef)
-
-  /** 以 <video> 真实时长为准，不用理解 metadata（常偏大） */
-  const handleLoadedMetadata = useCallback(
-    (duration: number, source: 'sample' | 'generated') => {
-      if (!Number.isFinite(duration) || duration <= 0) return
-      mediaDurationRef.current[source] = duration
-      if (source === 'sample') {
-        setDuration(duration)
-        return
-      }
-      const sampleDur = mediaDurationRef.current.sample
-      if (sampleDur > 0) {
-        setDuration(Math.min(sampleDur, duration))
-      } else {
-        setDuration(duration)
-      }
-    },
-    [setDuration],
-  )
-
-  if (!hasPipeline || !project.source_video.url) {
-    return <EditorEmptyState />
+  if (timelineMode === 'sample' && sampleSession) {
+    return <div className="flex h-full min-h-0 w-full p-4"><V2SamplePlayer ref={sampleRef} session={sampleSession} onTimeUpdate={() => handleTimeUpdate('sample')} onEnded={handleEnded} onLoadedMetadata={handleLoadedMetadata} onSeek={seekTo} onTogglePlay={togglePlayPause} /></div>
   }
-
-  return (
-    <div className="flex h-full min-h-0 w-full flex-col">
-      <section className="grid h-full min-h-0 w-full grid-cols-2 grid-rows-1 gap-6 p-4 [&>*]:min-h-0">
-        <SamplePlayer
-          ref={sampleRef}
-          project={project}
-          onTimeUpdate={() => handleTimeUpdate('sample')}
-          onEnded={handleEnded}
-          onLoadedMetadata={(d) => handleLoadedMetadata(d, 'sample')}
-          onSeek={seekTo}
-          onTogglePlay={togglePlayPause}
-        />
-        <GeneratedPlayer
-          ref={generatedRef}
-          mode={timelineMode}
-          project={project}
-          onTimeUpdate={() => handleTimeUpdate('generated')}
-          onEnded={handleEnded}
-          onLoadedMetadata={(d) => handleLoadedMetadata(d, 'generated')}
-          onSeek={seekTo}
-          onTogglePlay={togglePlayPause}
-        />
-      </section>
-    </div>
-  )
+  if (!hasV2Preview) return <EditorEmptyState />
+  return <div className="flex h-full min-h-0 w-full p-4"><GeneratedPlayer ref={generatedRef} mode={timelineMode} onTimeUpdate={() => handleTimeUpdate('generated')} onEnded={handleEnded} onLoadedMetadata={handleLoadedMetadata} onSeek={seekTo} onTogglePlay={togglePlayPause} /></div>
 }

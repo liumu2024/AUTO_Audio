@@ -3,26 +3,20 @@ import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { env } from '@/config/env'
-import * as api from '@/lib/api'
 import {
   renderV2DirectorTimeline,
+  saveV2DirectorTimelineDraft,
   v2MaterialsFromAttachments,
 } from '@/services/director/v2DirectorTimeline'
 import { useCreationStore } from '@/stores/creationStore'
 import { useEditorStore } from '@/stores/editorStore'
-import { useMigrationProjectStore } from '@/stores/migrationProjectStore'
-import { usePropertyEditorStore } from '@/stores/propertyEditorStore'
-import { useRenderPlanStore } from '@/stores/renderPlanStore'
 import { useTaskStore } from '@/stores/taskStore'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 
 export function EditorHeader() {
   const projectName = useEditorStore((s) => s.projectName)
-  const timelineMode = useEditorStore((s) => s.timelineMode)
-  const renderPlan = useRenderPlanStore((s) => s.plan)
-  const renderPlanDirty = useRenderPlanStore((s) => s.isDirty)
-  const renderPlanSyncStatus = useRenderPlanStore((s) => s.syncStatus)
   const v2Spec = useV2TimelineStore((s) => s.spec)
+  const v2HasLocalEdits = useV2TimelineStore((s) => s.hasLocalEdits)
   const activeTaskId = useTaskStore((s) => s.activeTaskId)
   const backendReady = useTaskStore((s) => s.backendReady)
   const isTaskRunning = useTaskStore((s) => s.isTaskRunning)
@@ -32,65 +26,17 @@ export function EditorHeader() {
 
   const saveCurrentWork = async (): Promise<boolean> => {
     const taskStore = useTaskStore.getState()
-    const propertyStore = usePropertyEditorStore.getState()
-    if (propertyStore.isDirty) {
-      propertyStore.save()
-    }
-
-    if (!env.useBackend) {
-      useRenderPlanStore.getState().markSaved()
-      taskStore.addLog('[编辑] 已保存到本地状态。')
-      return true
-    }
-
-    const taskId = useTaskStore.getState().activeTaskId
-    if (!taskId) {
-      taskStore.addLog('[编辑] 保存失败：当前没有活跃任务。')
+    const v2Timeline = useV2TimelineStore.getState()
+    if (!v2Timeline.spec) {
+      taskStore.addLog('[编辑] 请先在对话中生成 V2 Timeline 方案。')
       return false
     }
 
-    if (useEditorStore.getState().timelineMode === 'generation') {
-      if (useV2TimelineStore.getState().spec) {
-        taskStore.addLog('[编辑] V2 Timeline 方案已保存在本次 preview trace 中。')
-        return true
-      }
-
-      const currentRenderPlan = useRenderPlanStore.getState().plan
-      if (!currentRenderPlan) {
-        taskStore.addLog('[编辑] 保存失败：当前没有可保存的旧版 RenderPlan。')
-        return false
-      }
-
-      useRenderPlanStore.getState().markSaving()
-      try {
-        const changeSummary = useRenderPlanStore.getState().lastChangeSummary ?? ''
-        const { renderPlan: savedRenderPlan } = await api.patchTaskRenderPlan(
-          taskId,
-          currentRenderPlan,
-        )
-        useRenderPlanStore.getState().setPlan(savedRenderPlan)
-        taskStore.addLog(
-          `[编辑] 旧版 RenderPlan revision ${savedRenderPlan.plan_revision ?? currentRenderPlan.plan_revision ?? 1} 已同步到后端。${changeSummary}`,
-        )
-        return true
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        useRenderPlanStore.getState().markSyncFailed(message)
-        taskStore.addLog(`[编辑] 旧版 RenderPlan 保存失败：${message}`)
-        return false
-      }
-    }
-
-    try {
-      const project = useMigrationProjectStore.getState().project
-      await api.patchTaskStructure(taskId, project)
-      taskStore.addLog('[编辑] 样例结构已同步到后端。')
-      return true
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      taskStore.addLog(`[编辑] 样例结构保存失败：${message}`)
-      return false
-    }
+    const draft = await saveV2DirectorTimelineDraft()
+    taskStore.addLog(
+      `[编辑] V2 Timeline 草稿已保存为 revision ${draft.revision}。导出会使用这个不可变 revision。`,
+    )
+    return true
   }
 
   const handleSave = async () => {
@@ -142,11 +88,7 @@ export function EditorHeader() {
   }
 
   const saveDisabled =
-    saving ||
-    exporting ||
-    renderPlanSyncStatus === 'syncing' ||
-    (env.useBackend && !activeTaskId) ||
-    (timelineMode === 'generation' && !renderPlan && !v2Spec)
+    saving || exporting || !v2Spec
   const exportDisabled =
     saving || exporting || isTaskRunning || copilotLoading || !activeTaskId || !v2Spec
 
@@ -174,10 +116,16 @@ export function EditorHeader() {
           type="button"
           disabled={saveDisabled}
           onClick={() => void handleSave()}
-          title={renderPlanDirty ? '保存当前旧版 RenderPlan' : '同步当前编辑'}
+          title={
+            v2Spec
+              ? v2HasLocalEdits
+                ? '保存当前 V2 草稿；导出会使用保存后的 revision'
+                : '当前 V2 草稿已保存'
+              : '请先生成 V2 Timeline 方案'
+          }
         >
           <Save className="h-3.5 w-3.5" />
-          {saving ? '保存中' : '保存'}
+          {saving ? '保存中' : '保存草稿'}
         </Button>
         <Button
           variant="highlight"

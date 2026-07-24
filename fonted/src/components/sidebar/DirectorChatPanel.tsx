@@ -24,13 +24,13 @@ import { useCreationStore, type InputAttachment } from '@/stores/creationStore'
 import { useDirectorChatStore } from '@/stores/directorChatStore'
 import { useDirectorContextStore } from '@/stores/directorContextStore'
 import { useMaterialLibraryStore } from '@/stores/materialLibraryStore'
-import { usePipelineStore } from '@/stores/pipelineStore'
-import { useRenderPlanStore } from '@/stores/renderPlanStore'
 import { useTaskStore } from '@/stores/taskStore'
-import { useTimelineStore } from '@/stores/timelineStore'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 import type { DirectorAction, DirectorActionType } from '@shared/types/director-action'
-import type { DirectorSessionState, RenderPlanDiff } from '@shared/types/director-state'
+import type {
+  DirectorSessionState,
+  DirectorTimelineSnapshot,
+} from '@shared/types/director-state'
 
 function attachmentTypeFromMime(mime: string): InputAttachment['type'] | null {
   if (mime.startsWith('video/')) return 'video'
@@ -66,7 +66,7 @@ function syncDirectorContext(input: {
           url: input.sampleUrl,
           name: input.sampleName,
           styleRecipe: contextStore.context.sampleVideo?.styleRecipe,
-          understanding: contextStore.context.sampleVideo?.understanding,
+          reference: contextStore.context.sampleVideo?.reference,
         }
       : undefined,
   )
@@ -88,7 +88,6 @@ function applyActionContext(action: DirectorAction) {
   contextStore.setUserIntent(action.intent)
   if (action.slots.aspectRatio) {
     useCreationStore.getState().setAspectRatio(action.slots.aspectRatio)
-    useRenderPlanStore.getState().setAspectRatio(action.slots.aspectRatio)
   }
   if (action.slots.durationSec) {
     useCreationStore.getState().setDurationSec(action.slots.durationSec)
@@ -103,7 +102,7 @@ function isMessageOnlyAction(type: DirectorActionType): boolean {
 }
 
 function isRevisionOnlyAction(type: DirectorActionType): boolean {
-  return type === 'REVISE_RENDER_PLAN'
+  return type === 'REVISE_TIMELINE'
 }
 
 function shouldShowThoughtSurface(event: DirectorAgentStreamEvent) {
@@ -134,56 +133,62 @@ function eventThought(event: DirectorAgentStreamEvent): string | null {
   return null
 }
 
-function buildConversationSummary() {
-  const bundle = usePipelineStore.getState().bundle
-  const plan = useRenderPlanStore.getState().plan
+function currentV2TimelineSnapshot(): DirectorTimelineSnapshot | undefined {
   const v2 = useV2TimelineStore.getState()
-  const outline = bundle?.outline ?? []
-  const outlineText = outline
-    .slice(0, 8)
-    .map((item, index) => {
-      const name = item.title || item.id || `段落${index + 1}`
-      const time =
-        typeof item.start_sec === 'number' && typeof item.end_sec === 'number'
-          ? `${item.start_sec.toFixed(1)}-${item.end_sec.toFixed(1)}s`
-          : ''
-      return `${index + 1}. ${name}${time ? ` (${time})` : ''}`
-    })
-    .join('；')
+  if (!v2.spec) return undefined
 
-  const renderText = v2.spec
+  const selectedSceneId = v2.selectedClipId?.replace(/^v2-(?:scene|overlay|transition)-/, '')
+  const renderMatchesDraft =
+    !v2.hasLocalEdits &&
+    v2.result?.draftRevision != null &&
+    v2.result.draftRevision === v2.draftRevision
+
+  return {
+    kind: 'v2_timeline',
+    status: v2.hasLocalEdits
+      ? 'dirty'
+      : renderMatchesDraft
+        ? 'rendered'
+        : v2.draftId
+          ? 'saved'
+          : 'draft',
+    draftId: v2.draftId ?? undefined,
+    currentRevision: v2.draftRevision ?? undefined,
+    savedRevision: v2.draftId ? v2.draftRevision ?? undefined : undefined,
+    renderedRevision: renderMatchesDraft ? v2.result?.draftRevision : undefined,
+    lastRunId: v2.result?.renderRunId,
+    selectedClipId: v2.selectedClipId ?? undefined,
+    selectedSceneId,
+  }
+}
+
+function buildV2ConversationSummary() {
+  const v2 = useV2TimelineStore.getState()
+  if (!v2.spec && !v2.sampleSession) return ''
+  const sample = v2.sampleSession?.understanding
+  const sampleText = sample
     ? [
-        `当前已有 V2 时间线方案：${v2.spec.scenes.length} 个场景，画幅 ${v2.spec.canvas.width}x${v2.spec.canvas.height}，时长 ${v2.spec.canvas.duration_sec}s。`,
-        v2.preview?.traceDir ? `最近一次 preview trace：${v2.preview.traceDir}` : '',
-        v2.result?.traceDir ? `最近一次 render trace：${v2.result.traceDir}` : '',
+        `Sample understanding: ${sample.summary_zh}`,
+        `Story: ${sample.story_zh}`,
+        `Atmosphere: ${sample.atmosphere_zh}`,
+        `Editing: ${sample.editing_zh}`,
+        `Rhythm: ${sample.rhythm_zh}`,
+      ].join('\n')
+    : ''
+  const timelineText = v2.spec
+    ? [
+        `Current V2 timeline draft: ${v2.spec.scenes.length} scenes, ${v2.spec.canvas.width}x${v2.spec.canvas.height}, ${v2.spec.canvas.duration_sec}s.`,
+        v2.preview?.traceDir ? `Latest preview trace: ${v2.preview.traceDir}` : '',
+        v2.result?.traceDir ? `Latest render trace: ${v2.result.traceDir}` : '',
       ]
         .filter(Boolean)
         .join('\n')
-    : plan
-      ? `当前只有旧版 RenderPlan：${plan.scenes.length} 个场景，画幅 ${plan.canvas.ratio}，时长 ${plan.duration_sec}s。`
-      : '当前还没有生成时间线方案。'
-
-  return [outlineText ? `样例拆解大纲：${outlineText}` : '', renderText]
-    .filter(Boolean)
-    .join('\n')
+    : ''
+  return [sampleText, timelineText].filter(Boolean).join('\n')
 }
 
-function currentRenderPlanDiff(): RenderPlanDiff | undefined {
-  const renderPlanState = useRenderPlanStore.getState()
-  const plan = renderPlanState.plan
-  if (!plan || !renderPlanState.lastChangeSummary) return undefined
-  const timelineState = useTimelineStore.getState()
-  const selectedClipId = timelineState.selectedClipId
-  const selectedClip = selectedClipId
-    ? timelineState.project.clips.find((clip) => clip.id === selectedClipId)
-    : undefined
-  return {
-    revision: plan.plan_revision ?? 1,
-    summary: renderPlanState.lastChangeSummary,
-    at: new Date().toISOString(),
-    clipId: selectedClipId ?? undefined,
-    sceneId: selectedClip?.anchor_id,
-  }
+function buildConversationSummary() {
+  return buildV2ConversationSummary()
 }
 
 function syncDirectorStateFromUI(input: {
@@ -192,12 +197,7 @@ function syncDirectorStateFromUI(input: {
   attachments: InputAttachment[]
   activeTaskId?: string | null
 }): DirectorSessionState {
-  const renderPlanState = useRenderPlanStore.getState()
-  const timelineState = useTimelineStore.getState()
-  const selectedClipId = timelineState.selectedClipId
-  const selectedClip = selectedClipId
-    ? timelineState.project.clips.find((clip) => clip.id === selectedClipId)
-    : undefined
+  const v2Timeline = currentV2TimelineSnapshot()
   const previous = useDirectorContextStore.getState().context.directorState
   const next = syncDirectorSessionSnapshot(previous, {
     taskId: input.activeTaskId,
@@ -207,12 +207,7 @@ function syncDirectorStateFromUI(input: {
       (item) => item.type === 'video' || item.type === 'image',
     ),
     materialCount: input.attachments.length,
-    renderPlan: renderPlanState.plan,
-    renderPlanStatus: renderPlanState.syncStatus,
-    selectedClipId,
-    selectedSceneId: selectedClip?.anchor_id,
-    lastChangeSummary: renderPlanState.lastChangeSummary,
-    renderedRevision: previous?.renderedRevision,
+    timeline: v2Timeline,
   })
   useDirectorContextStore.getState().setDirectorState(next)
   return next
@@ -228,15 +223,9 @@ function currentRecoverySuggestions() {
 }
 
 export function DirectorChatPanel() {
-  const sampleUrl = useCreationStore((s) => s.sampleUrl)
-  const sampleName = useCreationStore((s) => s.sampleName)
-  const attachments = useCreationStore((s) => s.attachments)
-  const aspectRatio = useCreationStore((s) => s.aspectRatio)
-  const durationSec = useCreationStore((s) => s.durationSec)
-  const styleIntensity = useCreationStore((s) => s.styleIntensity)
-  const isSampleParsed = useCreationStore((s) => s.isSampleParsed)
   const setInputText = useCreationStore((s) => s.setInputText)
   const setAnalyzing = useCreationStore((s) => s.setAnalyzing)
+  const clearInputTray = useCreationStore((s) => s.clearInputTray)
 
   const isSending = useDirectorChatStore((s) => s.isSending)
   const addUserMessage = useDirectorChatStore((s) => s.addUserMessage)
@@ -244,12 +233,9 @@ export function DirectorChatPanel() {
   const addProgressMessage = useDirectorChatStore((s) => s.addProgressMessage)
   const addThoughtMessage = useDirectorChatStore((s) => s.addThoughtMessage)
   const updateMessage = useDirectorChatStore((s) => s.updateMessage)
-  const pushOutlineResult = useDirectorChatStore((s) => s.pushOutlineResult)
   const pushGenerationResult = useDirectorChatStore((s) => s.pushGenerationResult)
-  const pushError = useDirectorChatStore((s) => s.pushError)
   const setSending = useDirectorChatStore((s) => s.setSending)
 
-  const hasPipeline = usePipelineStore((s) => Boolean(s.bundle))
   const activeTaskId = useTaskStore((s) => s.activeTaskId)
   const isAnalyzing = useCreationStore((s) => s.isAnalyzing)
   const busy = isSending || isAnalyzing
@@ -259,17 +245,17 @@ export function DirectorChatPanel() {
   const executorRef = useRef(createDirectorActionExecutor())
   const abortRef = useRef<AbortController | null>(null)
   const streamCancelRef = useRef(false)
+  const activeProgressMessageIdRef = useRef<string | null>(null)
 
   const recordActionCompleted = (
     outcome: Parameters<typeof recordDirectorActionCompleted>[0]['outcome'],
   ) => {
-    const plan = useRenderPlanStore.getState().plan
+    const timeline = currentV2TimelineSnapshot()
     useDirectorContextStore.getState().updateDirectorState((state) =>
       recordDirectorActionCompleted({
         state,
         outcome,
-        currentRevision: plan?.plan_revision,
-        diff: currentRenderPlanDiff(),
+        timeline,
       }),
     )
   }
@@ -290,29 +276,23 @@ export function DirectorChatPanel() {
     if (!files?.length) return
     const store = useCreationStore.getState()
 
-    for (const file of Array.from(files)) {
-      const type = attachmentTypeFromMime(file.type)
-      if (!type) continue
-      const material = useMaterialLibraryStore.getState().addFromFile(file)
+    void (async () => {
+      for (const file of Array.from(files)) {
+        const type = attachmentTypeFromMime(file.type)
+        if (!type) continue
+        const material = await useMaterialLibraryStore.getState().addFromFileWithHash(file)
 
-      if (type === 'video' && !store.isSampleParsed && !store.sampleUrl) {
-        useMaterialLibraryStore.getState().updateMaterial(material.id, {
-          tags: [...material.tags, 'sample_reference'],
+        store.addAttachment({
+          id: `att_${material.id}`,
+          name: material.name,
+          type,
+          url: material.url,
+          source: 'upload',
+          materialId: material.id,
+          tags: material.tags,
         })
-        store.setSampleUrl(material.url, file.name)
-        continue
       }
-
-      store.addAttachment({
-        id: `att_${material.id}`,
-        name: material.name,
-        type,
-        url: material.url,
-        source: 'upload',
-        materialId: material.id,
-        tags: material.tags,
-      })
-    }
+    })()
   }, [])
 
   const onDragEnter = (e: React.DragEvent) => {
@@ -343,8 +323,10 @@ export function DirectorChatPanel() {
     sampleVideoUrl: string
     sampleVideoName?: string
     materials: InputAttachment[]
+    conversationSummary?: string
+    progressMessageId?: string
   }) => {
-    const { actionPlan, prompt, sampleVideoUrl, sampleVideoName, materials } =
+    const { actionPlan, prompt, sampleVideoUrl, sampleVideoName, materials, conversationSummary } =
       input
 
     recordActionRunning()
@@ -356,11 +338,20 @@ export function DirectorChatPanel() {
         message: actionPlan.message,
         userFacingOnly: true,
       })
-      addAssistantMessage({ content: actionPlan.message })
+      if (input.progressMessageId) {
+        updateMessage(input.progressMessageId, {
+          content: actionPlan.message,
+          kind: 'text',
+          status: 'done',
+        })
+      } else {
+        addAssistantMessage({ content: actionPlan.message })
+      }
       return
     }
 
     if (isRevisionOnlyAction(actionPlan.type)) {
+      const creation = useCreationStore.getState()
       const outcome = await runDirectorAction({
         action: actionPlan,
         executor: executorRef.current,
@@ -368,23 +359,37 @@ export function DirectorChatPanel() {
           prompt,
           sampleVideoUrl,
           sampleVideoName,
-          aspectRatio: actionPlan.slots.aspectRatio ?? aspectRatio,
-          durationSec: actionPlan.slots.durationSec ?? durationSec,
-          styleIntensity: actionPlan.slots.styleIntensity ?? styleIntensity,
+          aspectRatio: actionPlan.slots.aspectRatio ?? creation.aspectRatio,
+          durationSec: actionPlan.slots.durationSec ?? creation.durationSec,
+          styleIntensity: actionPlan.slots.styleIntensity ?? creation.styleIntensity,
           materials: materialPayload(materials),
-          activeTaskId,
-          renderPlan: useRenderPlanStore.getState().plan ?? undefined,
+          conversationSummary,
+          activeTaskId: useV2TimelineStore.getState().taskId ?? activeTaskId,
         },
       })
       recordActionCompleted(outcome)
-      addAssistantMessage({ content: outcome.message })
+      if (input.progressMessageId) {
+        updateMessage(input.progressMessageId, {
+          content: outcome.message,
+          kind: 'text',
+          status: 'done',
+        })
+      } else {
+        addAssistantMessage({ content: outcome.message })
+      }
       return
     }
 
     setAnalyzing(actionPlan.type === 'ANALYZE_SAMPLE')
-    const progressId = addProgressMessage(actionPlan.message)
+    const progressId = input.progressMessageId ?? addProgressMessage(actionPlan.message)
+    updateMessage(progressId, {
+      content: actionPlan.message,
+      kind: 'progress',
+      status: 'streaming',
+    })
 
     try {
+      const creation = useCreationStore.getState()
       const outcome = await runDirectorAction({
         action: actionPlan,
         executor: executorRef.current,
@@ -392,36 +397,23 @@ export function DirectorChatPanel() {
           prompt,
           sampleVideoUrl,
           sampleVideoName,
-          aspectRatio: actionPlan.slots.aspectRatio ?? aspectRatio,
-          durationSec: actionPlan.slots.durationSec ?? durationSec,
-          styleIntensity: actionPlan.slots.styleIntensity ?? styleIntensity,
+          aspectRatio: actionPlan.slots.aspectRatio ?? creation.aspectRatio,
+          durationSec: actionPlan.slots.durationSec ?? creation.durationSec,
+          styleIntensity: actionPlan.slots.styleIntensity ?? creation.styleIntensity,
           materials: materialPayload(materials),
-          activeTaskId,
-          renderPlan: useRenderPlanStore.getState().plan ?? undefined,
+          conversationSummary,
+          activeTaskId: useV2TimelineStore.getState().taskId ?? activeTaskId,
         },
       })
       recordActionCompleted(outcome)
 
       if (actionPlan.type === 'ANALYZE_SAMPLE') {
-        const outline = usePipelineStore.getState().bundle?.outline ?? []
         updateMessage(progressId, {
           content:
-            '我把样例拆完了，先把它当成一张风格和节奏地图放在右侧。你可以让我继续讲它的镜头、转场或节奏，也可以补素材后再往成片方案走。',
+            '我把样例拆完了，先把它当成一张风格和节奏地图放在右侧。你可以继续问镜头、转场或节奏，也可以直接按文字生成方案，或补充素材后再生成。',
           status: 'done',
         })
-        if (outline.length) {
-          pushOutlineResult(
-            outline,
-            `我整理出了 ${outline.length} 个结构段，下面这张卡片是它的节奏地图。它只作为参考；真正出片还需要用你补充的素材来填画面。`,
-          )
-        } else {
-          addAssistantMessage({
-            content: outcome.message,
-            kind: 'error',
-            status: 'error',
-          })
-        }
-      } else if (actionPlan.type === 'GENERATE_RENDER_PLAN') {
+      } else if (actionPlan.type === 'GENERATE_TIMELINE') {
         updateMessage(progressId, {
           content: outcome.message,
           kind: 'progress',
@@ -454,54 +446,82 @@ export function DirectorChatPanel() {
         content: msg,
         kind: 'error',
         status: 'error',
+        recoverySuggestions: currentRecoverySuggestions(),
       })
-      pushError(msg, currentRecoverySuggestions())
     } finally {
       setAnalyzing(false)
     }
   }
 
   const handleSend = async (text: string) => {
+    const creationSnapshot = useCreationStore.getState()
     const prompt = text.trim()
-    let effectiveSampleUrl = sampleUrl
-    let effectiveSampleName = sampleName
-    const pendingAttachments = [...attachments]
+    const pendingAttachmentIdsSnapshot = [...creationSnapshot.pendingAttachmentIds]
+    const showSampleInInputTraySnapshot = creationSnapshot.showSampleInInputTray
+    clearInputTray()
+    let effectiveSampleUrl = creationSnapshot.sampleUrl
+    let effectiveSampleName = creationSnapshot.sampleName
+    const contextAttachments = [...creationSnapshot.attachments]
+    const currentAspectRatio = creationSnapshot.aspectRatio
+    const currentDurationSec = creationSnapshot.durationSec
+    const currentStyleIntensity = creationSnapshot.styleIntensity
+    let currentIsSampleParsed = creationSnapshot.isSampleParsed
 
-    if (!effectiveSampleUrl.trim()) {
-      const videoIdx = pendingAttachments.findIndex((a) => a.type === 'video')
-      if (videoIdx >= 0) {
-        const video = pendingAttachments.splice(videoIdx, 1)[0]!
+    const asksSampleAnalysis =
+      /重新理解|重新解析|重新分析|解析.*(样例|视频)|分析.*(样例|视频|主要内容|创作手法|视频结构|镜头|转场|节奏)|理解.*(样例|视频)|拆解.*(样例|视频)|复刻/.test(
+        prompt,
+      )
+    if (asksSampleAnalysis) {
+      const pendingVideoIdx = contextAttachments.findIndex(
+        (item) => item.type === 'video' && pendingAttachmentIdsSnapshot.includes(item.id),
+      )
+      if (pendingVideoIdx >= 0) {
+        const video = contextAttachments.splice(pendingVideoIdx, 1)[0]!
         useCreationStore.getState().setSampleUrl(video.url, video.name)
         useCreationStore.getState().removeAttachment(video.id)
+        useCreationStore.getState().setSampleParsed(false)
         effectiveSampleUrl = video.url
         effectiveSampleName = video.name
+        currentIsSampleParsed = false
       }
     }
+
+    const messageAttachments = contextAttachments.filter((item) =>
+      pendingAttachmentIdsSnapshot.includes(item.id),
+    )
 
     syncDirectorContext({
       sampleUrl: effectiveSampleUrl,
       sampleName: effectiveSampleName,
-      attachments: pendingAttachments,
+      attachments: contextAttachments,
     })
     const directorState = syncDirectorStateFromUI({
       sampleUrl: effectiveSampleUrl,
-      isSampleParsed,
-      attachments: pendingAttachments,
-      activeTaskId,
+      isSampleParsed: currentIsSampleParsed,
+      attachments: contextAttachments,
+      activeTaskId: useV2TimelineStore.getState().taskId ?? activeTaskId,
     })
+    const v2State = useV2TimelineStore.getState()
 
     const directorContext = buildDirectorContextFromUI({
       sampleUrl: effectiveSampleUrl,
       sampleName: effectiveSampleName,
-      attachments: pendingAttachments,
-      aspectRatio,
-      durationSec,
-      styleIntensity,
-      isSampleParsed,
+      attachments: contextAttachments,
+      aspectRatio: currentAspectRatio,
+      durationSec: currentDurationSec,
+      styleIntensity: currentStyleIntensity,
+      isSampleParsed: currentIsSampleParsed,
       existing: useDirectorContextStore.getState().context,
     })
-    directorContext.currentRenderPlan =
-      useRenderPlanStore.getState().plan ?? directorContext.currentRenderPlan
+    // Workspace kind, rather than spec presence, decides which state source is
+    // allowed into the director prompt.
+    const v2Timeline = currentV2TimelineSnapshot()
+    directorContext.currentTimeline = v2Timeline
+      ? {
+          ...v2Timeline,
+          sceneCount: v2State.spec?.scenes.length,
+        }
+      : undefined
     directorContext.directorState = directorState
     directorContext.conversationSummary = [
       buildConversationSummary(),
@@ -513,11 +533,13 @@ export function DirectorChatPanel() {
     addUserMessage({
       content:
         prompt ||
-        (isSampleParsed
+        (currentIsSampleParsed
           ? '继续编辑当前生成方案'
-          : '解析样例视频，识别导演结构和可复用风格'),
+          : effectiveSampleUrl
+            ? '解析样例视频，识别导演结构和可复用风格'
+            : '根据当前创作意图和附件生成一版时间线方案'),
       attachments: [
-        ...(effectiveSampleUrl
+        ...(effectiveSampleUrl && showSampleInInputTraySnapshot
           ? [
               {
                 id: 'sample_video',
@@ -528,10 +550,12 @@ export function DirectorChatPanel() {
               },
             ]
           : []),
-        ...pendingAttachments,
+        ...messageAttachments,
       ],
     })
     setInputText(prompt)
+    const thinkingId = addProgressMessage('我在理解你的意思，整理创作意图、可选参考和当前时间线...')
+    activeProgressMessageIdRef.current = thinkingId
 
     setSending(true)
     abortRef.current?.abort()
@@ -552,13 +576,17 @@ export function DirectorChatPanel() {
             backendEnabled: true,
             sampleUrl: effectiveSampleUrl,
             sampleName: effectiveSampleName,
-            isSampleParsed,
-            hasPipeline,
-            activeTaskId,
-            hasVisualMaterial: pendingAttachments.some(
+            isSampleParsed: currentIsSampleParsed,
+            hasPipeline: Boolean(v2State.spec),
+            activeTaskId: v2State.taskId ?? activeTaskId,
+            hasV2Timeline: Boolean(v2State.spec?.scenes.length),
+            v2TaskId: v2State.taskId,
+            v2SceneCount: v2State.spec?.scenes.length,
+            v2TraceDir: v2State.traceDir,
+            hasVisualMaterial: contextAttachments.some(
               (item) => item.type === 'video' || item.type === 'image',
             ),
-            materialCount: pendingAttachments.length,
+            materialCount: contextAttachments.length,
           },
         },
         (event) => {
@@ -588,7 +616,11 @@ export function DirectorChatPanel() {
       )
 
       if (directMessage && !actionPlan) {
-        addAssistantMessage({ content: directMessage })
+        updateMessage(thinkingId, {
+          content: directMessage,
+          kind: 'text',
+          status: 'done',
+        })
         if (debugThoughts.length) {
           addThoughtMessage({
             content: '技术详情',
@@ -614,7 +646,9 @@ export function DirectorChatPanel() {
         prompt,
         sampleVideoUrl: effectiveSampleUrl,
         sampleVideoName: effectiveSampleName,
-        materials: pendingAttachments,
+        materials: contextAttachments,
+        conversationSummary: directorContext.conversationSummary,
+        progressMessageId: thinkingId,
       })
       if (debugThoughts.length) {
         addThoughtMessage({
@@ -625,13 +659,22 @@ export function DirectorChatPanel() {
       }
     } catch (e) {
       if (streamCancelRef.current) {
-        addAssistantMessage({ content: '导演分析已中止' })
+        updateMessage(thinkingId, {
+          content: '导演分析已中止',
+          kind: 'text',
+          status: 'done',
+        })
         return
       }
       const msg = e instanceof Error ? e.message : String(e)
       const failedAction = actionPlan as DirectorAction | null
       recordActionFailed(failedAction?.type, msg)
-      pushError(msg, currentRecoverySuggestions())
+      updateMessage(thinkingId, {
+        content: msg,
+        kind: 'error',
+        status: 'error',
+        recoverySuggestions: currentRecoverySuggestions(),
+      })
       if (debugThoughts.length) {
         addThoughtMessage({
           content: '技术详情',
@@ -642,6 +685,9 @@ export function DirectorChatPanel() {
     } finally {
       abortRef.current = null
       streamCancelRef.current = false
+      if (activeProgressMessageIdRef.current === thinkingId) {
+        activeProgressMessageIdRef.current = null
+      }
       setSending(false)
     }
   }
@@ -650,7 +696,16 @@ export function DirectorChatPanel() {
     if (!abortRef.current) return
     streamCancelRef.current = true
     abortRef.current.abort()
-    addAssistantMessage({ content: '导演分析已中止' })
+    const progressId = activeProgressMessageIdRef.current
+    if (progressId) {
+      updateMessage(progressId, {
+        content: '导演分析已中止',
+        kind: 'text',
+        status: 'done',
+      })
+    } else {
+      addAssistantMessage({ content: '导演分析已中止' })
+    }
     setSending(false)
   }
 
@@ -678,7 +733,7 @@ export function DirectorChatPanel() {
               松手上传到 AI 导演助理
             </p>
             <p className="text-[11px] text-violet-300/70">
-              未解析前首个视频作为样例，其余文件作为创作素材。
+              文件默认作为创作素材；明确要求解析或复刻时，才会把视频作为样例。
             </p>
           </div>
         </div>

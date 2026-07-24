@@ -1,7 +1,12 @@
 import { create } from 'zustand'
 
 import type { InputAttachment } from '@/stores/creationStore'
-import type { OutlineSegment } from '@/types/pipeline'
+interface OutlineSegment {
+  id?: string
+  title?: string
+  start_sec?: number
+  end_sec?: number
+}
 
 export type DirectorMessageKind =
   | 'text'

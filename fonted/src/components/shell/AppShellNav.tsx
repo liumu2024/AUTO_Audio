@@ -3,6 +3,7 @@ import {
   useAppShellStore,
   type AppShellView,
 } from '@/stores/appShellStore'
+import { useEditorStore } from '@/stores/editorStore'
 
 const NAV_ITEMS: {
   view: AppShellView
@@ -11,7 +12,6 @@ const NAV_ITEMS: {
 }[] = [
   { view: 'dashboard', icon: '🏠', label: '工作台' },
   { view: 'editor', icon: '🎬', label: '创作' },
-  { view: 'v2timeline', icon: 'TL', label: 'Timeline' },
   { view: 'assets', icon: '📁', label: '素材库' },
 ]
 
@@ -35,7 +35,12 @@ export function AppShellNav() {
             key={item.view}
             type="button"
             title={item.label}
-            onClick={() => setActiveView(item.view)}
+            onClick={() => {
+              if (item.view === 'editor') {
+                useEditorStore.getState().enterV2Workspace()
+              }
+              setActiveView(item.view)
+            }}
             className={cn(
               'group relative flex w-12 flex-col items-center gap-0.5 rounded-xl px-1 py-2.5 text-[10px] transition-all',
               active

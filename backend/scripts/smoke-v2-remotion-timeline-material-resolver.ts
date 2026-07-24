@@ -4,8 +4,12 @@ import path from 'node:path'
 
 import { createRemotionTimelineFixture } from '../../shared/lib/remotion-timeline-fixtures.js'
 import { validateRemotionTimelineSpec } from '../../shared/lib/remotion-timeline-validator.js'
-import { createStaticMaterialGenerationAdapter } from '../src/pipeline-v2/material-generation-adapter.js'
+import {
+  createNoopMaterialGenerationAdapter,
+  createStaticMaterialGenerationAdapter,
+} from '../src/pipeline-v2/material-generation-adapter.js'
 import { resolveRemotionTimelineMaterialJobs } from '../src/pipeline-v2/remotion-timeline-material-resolver.js'
+import { assertV2MaterialResolutionContract } from './v2-material-resolution-contract.js'
 
 const repoRoot = path.resolve(process.cwd(), '..')
 const sampleVideo = path.join(repoRoot, 'example_videos', '9.mp4')
@@ -59,9 +63,43 @@ const resolved = await resolveRemotionTimelineMaterialJobs({
 })
 
 assert.equal(resolved.report.ok, true, JSON.stringify(resolved.report.failed_jobs, null, 2))
-assert.equal(resolved.report.fulfilled_jobs.includes('job_generate_scene_001'), true)
-assert.equal(resolved.spec.scenes[0]?.asset_id, 'generated_scene_001')
-assert.equal(resolved.spec.assets.some((asset) => asset.id === 'generated_scene_001'), true)
+assertV2MaterialResolutionContract({
+  spec: resolved.spec,
+  report: resolved.report,
+  expectedGeneratedJobCount: 1,
+})
+assert.equal(resolved.report.generation_trace[0]?.provider_task_id, `static:${path.basename(sampleVideo)}`)
 assert.equal(validateRemotionTimelineSpec(resolved.spec).ok, true)
+
+const blankCardFallbackSpec = {
+  ...spec,
+  task_id: `v2_timeline_material_fallback_${Date.now()}`,
+  scenes: spec.scenes.map((scene) =>
+    scene.id === 'scene_001'
+      ? {
+          ...scene,
+          type: 'remotion_card' as const,
+          asset_id: undefined,
+        }
+      : scene,
+  ),
+  material_jobs: spec.material_jobs.map((job) => ({
+    ...job,
+    fallback_kind: 'blank_card' as const,
+  })),
+}
+
+const fallbackResolved = await resolveRemotionTimelineMaterialJobs({
+  spec: blankCardFallbackSpec,
+  adapter: createNoopMaterialGenerationAdapter(),
+})
+
+assert.equal(fallbackResolved.report.ok, true)
+assertV2MaterialResolutionContract({
+  spec: fallbackResolved.spec,
+  report: fallbackResolved.report,
+  expectedGeneratedJobCount: 1,
+})
+assert.equal(validateRemotionTimelineSpec(fallbackResolved.spec).ok, true)
 
 console.info('[smoke-v2-remotion-timeline-material-resolver] OK')

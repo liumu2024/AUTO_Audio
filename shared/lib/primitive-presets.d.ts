@@ -1,8 +1,0 @@
-import type { SceneEffects } from '../types/render-plan.v1.js';
-export declare const PRIMITIVE_PRESET_IDS: readonly ["primitive_color_transform", "primitive_mask_reveal", "primitive_ring_overlay", "primitive_orb_motion", "primitive_orb_ring_overlay", "primitive_directional_wave_reveal", "primitive_texture_grade", "primitive_bloom_overlay", "primitive_vignette_overlay", "primitive_grain_overlay", "primitive_letterbox_overlay", "primitive_chromatic_aberration_overlay", "primitive_light_sweep_overlay", "primitive_beat_pulse", "primitive_beat_flash_overlay", "primitive_beat_color_unlock", "primitive_color_hint_overlay", "primitive_fade_overlay", "primitive_transition_accent_overlay", "primitive_slice_reveal", "primitive_ripple_displacement", "primitive_ripple_ring_overlay", "primitive_collage_layout"];
-export type PrimitivePresetId = (typeof PRIMITIVE_PRESET_IDS)[number];
-export declare function isPrimitivePreset(preset: SceneEffects['preset'] | undefined): preset is PrimitivePresetId;
-/** Legacy composite presets that compile into primitive layers at build/render time. */
-export declare const LEGACY_COMPOSITE_PRESET_IDS: readonly ["color_portal_spotlight", "kinetic_color_ripple", "cinematic_grade_pack", "cinematic_light_sweep", "audio_reactive_cut_driver", "mask_slice_transition", "ripple_displacement", "editorial_split_collage"];
-export declare function isLegacyCompositePreset(preset: string | undefined): boolean;
-//# sourceMappingURL=primitive-presets.d.ts.map

@@ -17,7 +17,7 @@ function phaseFromProgressStage(stage: string): AgentTracePhase {
   const lower = stage.toLowerCase()
   if (lower.includes('quality')) return 'quality_gate'
   if (lower.includes('render')) return 'render'
-  if (lower.includes('generat')) return 'render_plan'
+  if (lower.includes('generat')) return 'timeline_planning'
   if (
     lower.includes('analy') ||
     lower.includes('understanding') ||

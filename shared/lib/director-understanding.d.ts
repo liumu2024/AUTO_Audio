@@ -1,7 +1,5 @@
-import type { MigrationProtocolV12 } from '../types/migration-protocol.v1.2.js';
-import type { UserMaterialDto } from '../types/pipeline.js';
-import type { DirectorContentDomain, DirectorContextSlots, DirectorIntentResult, DirectorUserIntent, MaterialAnalysis, SampleStyleRecipe } from '../types/director-context.js';
-import type { TemplateSchemaV1 } from '../types/template-schema.v1.js';
+import type { DirectorContentDomain, DirectorContextSlots, DirectorIntentResult, DirectorMaterialSummary, DirectorReferenceSummary, DirectorUserIntent } from '../types/director-context.js';
+import type { V2SampleUnderstandingResult } from '../types/v2-sample-understanding.js';
 export interface DirectorConversationRuntime {
     backendEnabled: boolean;
     sampleUrl: string;
@@ -9,6 +7,10 @@ export interface DirectorConversationRuntime {
     isSampleParsed: boolean;
     hasPipeline: boolean;
     activeTaskId?: string | null;
+    hasV2Timeline?: boolean;
+    v2TaskId?: string | null;
+    v2SceneCount?: number;
+    v2TraceDir?: string | null;
     hasVisualMaterial: boolean;
     materialCount: number;
 }
@@ -25,7 +27,13 @@ export declare function routeDirectorConversation(input: {
     runtime: DirectorConversationRuntime;
 }): DirectorIntentResult;
 export declare function directorIntentToUserIntent(result: DirectorIntentResult, current: DirectorUserIntent, prompt: string): DirectorUserIntent;
-export declare function buildSampleStyleRecipe(template: TemplateSchemaV1 | undefined): SampleStyleRecipe;
-export declare function buildSampleStyleRecipeFromMigration(structure: MigrationProtocolV12 | undefined): SampleStyleRecipe;
-export declare function buildMaterialAnalysis(material: UserMaterialDto): MaterialAnalysis;
+export declare function summarizeDirectorReference(understanding: V2SampleUnderstandingResult): DirectorReferenceSummary;
+export interface DirectorMaterialSummaryInput {
+    id: string;
+    type: 'video' | 'image' | 'audio';
+    name?: string;
+    tags?: string[];
+    durationSec?: number;
+}
+export declare function summarizeDirectorMaterial(material: DirectorMaterialSummaryInput): DirectorMaterialSummary;
 //# sourceMappingURL=director-understanding.d.ts.map

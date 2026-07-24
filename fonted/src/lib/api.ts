@@ -1,36 +1,10 @@
 import { env } from '@/config/env'
-import type { MigrationProtocolV12 } from '@/types/migration-protocol'
-import type { RenderPlanV1 } from '@/types/render-plan'
 import type { DirectorAction } from '@shared/types/director-action'
 import type { DirectorSessionState } from '@shared/types/director-state'
 import type { DirectorConversationRuntime } from '@shared/lib/director-understanding'
 import type { DirectorContext } from '@shared/types/director-context'
 import type { RemotionTimelineSpecV1 } from '@shared/types/remotion-timeline-spec.v1'
-
-export interface TaskListItemDto {
-  id: string
-  title: string
-  taskStatus: string
-  createdAt: string
-  completedAt: string | null
-  sampleVideoUrl: string
-  finalVideoUrl: string | null
-  globalPrompt: string | null
-  previewUrl: string | null
-  hasStructure: boolean
-}
-
-export interface ReplicationTaskDto {
-  id: string
-  userId: number
-  sampleVideoUrl: string
-  globalPrompt?: string | null
-  structureJson: MigrationProtocolV12 | null
-  finalVideoUrl: string | null
-  taskStatus: string
-  createdAt: string
-  completedAt: string | null
-}
+import type { V2SampleUnderstandingResult } from '@shared/types/v2-sample-understanding'
 
 export interface UploadResult {
   url: string
@@ -112,9 +86,20 @@ export interface V2TimelinePayload {
   taskId?: string
   mainVideoPath?: string
   prompt: string
+  creationMode?: 'sample_replicate' | 'material_brief' | 'text_to_video'
   inputImageUrl?: string
   imageSrc?: string
   referenceVideoPath?: string
+  sampleUnderstanding?: V2SampleUnderstandingResult
+  conversationSummary?: string
+  materials?: Array<{
+    id: string
+    name?: string
+    type: 'video' | 'image' | 'audio'
+    src: string
+    publicUrl?: string
+    tags?: string[]
+  }>
   plannerMode?: 'deterministic' | 'llm'
   allowPlannerFallback?: boolean
   durationSec?: number
@@ -139,10 +124,30 @@ export interface V2TimelinePlanningReview {
     start_sec: number
     duration_sec: number
     transition_after?: string
+    title_zh?: string
+    description_zh?: string
+    asset_id?: string
+    asset_label_zh?: string
+    motion_zh?: string
+    overlay_texts_zh?: string[]
+    material_usage_zh?: string
   }>
   metrics: Record<string, number>
   warnings_zh: string[]
   next_actions_zh: string[]
+}
+
+export interface V2SampleAnalyzePayload {
+  taskId?: string
+  prompt: string
+  sampleVideoPath: string
+  sampleVideoName?: string
+}
+
+export interface V2SampleAnalyzeResult {
+  taskId: string
+  understanding: V2SampleUnderstandingResult
+  traceDir: string
 }
 
 export interface V2TimelinePreviewResult {
@@ -152,6 +157,53 @@ export interface V2TimelinePreviewResult {
   validation: unknown
   review: V2TimelinePlanningReview
   traceDir: string
+}
+
+export interface V2TimelineDraftDto {
+  draftId: string
+  revision: number
+  spec: RemotionTimelineSpecV1
+  plannerSource?: string
+  review?: V2TimelinePlanningReview
+  traceDir?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface V2TimelineDraftRevisionSummaryDto {
+  revision: number
+  kind: 'preview' | 'user_edit'
+  plannerSource?: string
+  traceDir?: string
+  createdAt: string
+}
+
+export interface V2TimelineDraftRunSummaryDto {
+  id: string
+  sourceRevision: number
+  status: 'running' | 'completed' | 'failed'
+  outputUrl?: string
+  traceDir?: string
+  createdAt: string
+  completedAt?: string
+}
+
+export interface V2TimelineDraftHistoryDto {
+  draftId: string
+  revision: number
+  creationMode: 'sample_replicate' | 'material_brief' | 'text_to_video'
+  plannerSource?: string
+  traceDir?: string
+  createdAt: string
+  updatedAt: string
+  latestRevision: V2TimelineDraftRevisionSummaryDto
+  latestRun?: V2TimelineDraftRunSummaryDto
+}
+
+export type V2TimelineDraftDetailDto = V2TimelineDraftDto & V2TimelineDraftHistoryDto
+
+export interface V2TimelineDraftPreviewResult extends V2TimelinePreviewResult {
+  draft: V2TimelineDraftDto
 }
 
 export interface V2TimelineRunResult {
@@ -171,6 +223,23 @@ export interface V2TimelineRunResult {
     metrics: Record<string, number>
     warnings: string[]
   }
+}
+
+export interface V2TimelineDraftRunResult {
+  ok: boolean
+  draftId: string
+  draftRevision: number
+  renderRunId: string
+  plannerSource: string
+  resolvedSpec: RemotionTimelineSpecV1
+  outputPath: string
+  outputUrl?: string
+  traceDir: string
+  review: V2TimelinePlanningReview
+  validation: unknown
+  materialResolution: unknown
+  standardizedAssets: Array<{ id: string; src: string }>
+  evaluation: V2TimelineRunResult['evaluation']
 }
 
 async function request<T>(
@@ -212,6 +281,68 @@ export async function runV2Timeline(payload: V2TimelinePayload) {
   })
 }
 
+export async function previewV2TimelineDraft(
+  payload: V2TimelinePayload & { draftId?: string; baseRevision?: number },
+) {
+  return request<V2TimelineDraftPreviewResult>('/api/v2/timeline-drafts/preview', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getV2TimelineDraft(draftId: string) {
+  return request<{ draft: V2TimelineDraftDetailDto }>(
+    `/api/v2/timeline-drafts/${encodeURIComponent(draftId)}`,
+  )
+}
+
+export async function listV2TimelineDrafts(limit = 48) {
+  return request<{ drafts: V2TimelineDraftHistoryDto[] }>(
+    `/api/v2/timeline-drafts?limit=${Math.max(1, Math.min(limit, 100))}`,
+  )
+}
+
+export async function deleteV2TimelineDraft(draftId: string) {
+  return request<{ draftId: string; deleted: true }>(
+    `/api/v2/timeline-drafts/${encodeURIComponent(draftId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export async function saveV2TimelineDraft(input: {
+  draftId: string
+  baseRevision: number
+  spec: RemotionTimelineSpecV1
+}) {
+  return request<{ draft: V2TimelineDraftDto }>(
+    `/api/v2/timeline-drafts/${encodeURIComponent(input.draftId)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ baseRevision: input.baseRevision, spec: input.spec }),
+    },
+  )
+}
+
+export async function runV2TimelineDraft(input: {
+  draftId: string
+  revision: number
+}) {
+  return request<V2TimelineDraftRunResult>(
+    `/api/v2/timeline-drafts/${encodeURIComponent(input.draftId)}/runs`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ revision: input.revision }),
+    },
+  )
+}
+
+export async function analyzeV2Sample(payload: V2SampleAnalyzePayload) {
+  return request<V2SampleAnalyzeResult>('/api/v2/sample/analyze', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function uploadFile(
   file: File,
   options: { requirePublicUrl?: boolean } = {},
@@ -222,13 +353,22 @@ export async function uploadFile(
     form.append('requirePublicUrl', 'true')
   }
 
-  const res = await fetch(`${env.apiBase}/api/uploads`, {
-    method: 'POST',
-    headers: {
-      'X-User-Id': String(env.userId),
-    },
-    body: form,
-  })
+  let res: Response
+  try {
+    res = await fetch(`${env.apiBase}/api/uploads`, {
+      method: 'POST',
+      headers: {
+        'X-User-Id': String(env.userId),
+      },
+      body: form,
+    })
+  } catch (error) {
+    throw new Error(
+      `无法连接后端上传接口 ${env.apiBase}/api/uploads，请确认后端或桌面端服务正在运行。原始错误：${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+  }
 
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string }
@@ -236,63 +376,6 @@ export async function uploadFile(
   }
 
   return res.json() as Promise<UploadResult>
-}
-
-export async function getTaskPipeline(taskId: string) {
-  return request<import('@/types/pipeline').PipelineBundle>(
-    `/api/tasks/${taskId}/pipeline`,
-  )
-}
-
-export async function listTasks(limit = 48) {
-  return request<{ tasks: TaskListItemDto[] }>(
-    `/api/tasks?limit=${limit}`,
-  )
-}
-
-export async function getTask(taskId: string) {
-  return request<ReplicationTaskDto>(`/api/tasks/${taskId}`)
-}
-
-export async function deleteTask(taskId: string) {
-  return request<{ taskId: string; deleted: true }>(`/api/tasks/${taskId}`, {
-    method: 'DELETE',
-  })
-}
-
-export async function cancelTask(taskId: string) {
-  return request<{
-    taskId: string
-    status: string
-    removedJobs: number
-    stoppedRender?: boolean
-    alreadyTerminal: boolean
-  }>(`/api/tasks/${taskId}/cancel`, {
-    method: 'POST',
-  })
-}
-
-export async function patchTaskStructure(
-  taskId: string,
-  structureJson: MigrationProtocolV12,
-) {
-  return request<ReplicationTaskDto>(`/api/tasks/${taskId}/structure`, {
-    method: 'PATCH',
-    body: JSON.stringify({ structureJson }),
-  })
-}
-
-export async function patchTaskRenderPlan(
-  taskId: string,
-  renderPlan: RenderPlanV1,
-) {
-  return request<{ renderPlan: RenderPlanV1 }>(
-    `/api/tasks/${taskId}/render-plan`,
-    {
-      method: 'PATCH',
-      body: JSON.stringify({ renderPlan }),
-    },
-  )
 }
 
 export async function streamDirectorChat(

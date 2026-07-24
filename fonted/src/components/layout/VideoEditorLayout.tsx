@@ -4,7 +4,6 @@ import { EditorSidebar } from '@/components/layout/EditorSidebar'
 import { MainCanvas } from '@/components/layout/MainCanvas'
 import { PropertyEditorPanel } from '@/components/layout/PropertyEditorPanel'
 import { TimelinePanel } from '@/components/layout/TimelinePanel'
-import { UnsavedChangesDialog } from '@/components/layout/UnsavedChangesDialog'
 import { usePipelineBootstrap } from '@/hooks/usePipelineBootstrap'
 import { useTaskWebSocket } from '@/hooks/useTaskWebSocket'
 
@@ -41,7 +40,6 @@ export function VideoEditorLayout() {
       </div>
 
       <ProgressOverlay />
-      <UnsavedChangesDialog />
     </div>
   )
 }

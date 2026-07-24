@@ -13,7 +13,7 @@ import type {
   DirectorSessionPhase,
   DirectorSessionSnapshotInput,
   DirectorSessionState,
-  RenderPlanDiff,
+  DirectorTimelineSnapshot,
 } from '../types/director-state.js'
 
 function nowIso() {
@@ -26,15 +26,15 @@ function id(prefix: string) {
 
 function phaseForAction(type: DirectorActionType): DirectorSessionPhase {
   if (type === 'ANALYZE_SAMPLE') return 'sample_analyzing'
-  if (type === 'GENERATE_RENDER_PLAN') return 'plan_drafting'
-  if (type === 'REVISE_RENDER_PLAN' || type === 'REQUEST_PLUGIN') return 'plan_editing'
+  if (type === 'GENERATE_TIMELINE') return 'plan_drafting'
+  if (type === 'REVISE_TIMELINE' || type === 'REQUEST_PLUGIN') return 'plan_editing'
   if (type === 'RENDER_VIDEO') return 'rendering'
   return 'idle'
 }
 
 function completedPhaseForAction(type: DirectorActionType): DirectorSessionPhase {
   if (type === 'ANALYZE_SAMPLE') return 'sample_ready'
-  if (type === 'GENERATE_RENDER_PLAN' || type === 'REVISE_RENDER_PLAN' || type === 'REQUEST_PLUGIN') {
+  if (type === 'GENERATE_TIMELINE' || type === 'REVISE_TIMELINE' || type === 'REQUEST_PLUGIN') {
     return 'plan_editing'
   }
   if (type === 'RENDER_VIDEO') return 'render_done'
@@ -101,11 +101,11 @@ function failedStepIndexForError(
   const preferredTools: Partial<Record<DirectorFailureCode, DirectorToolName[]>> = {
     MISSING_SAMPLE: ['sample_understanding.analyze'],
     MISSING_MATERIAL: ['material.analyze_basic'],
-    MISSING_RENDER_PLAN: ['render_plan.validate', 'render_plan.build'],
-    PLAN_NOT_SYNCED: ['render_plan.validate'],
-    PLAN_SCHEMA_INVALID: ['render_plan.validate', 'render_plan.build', 'render_plan.revise'],
-    UNSUPPORTED_COMPONENT: ['effect_composition.apply', 'render_plan.validate'],
-    RESOURCE_NOT_FOUND: ['render_plan.validate', 'material.analyze_basic', 'video.render'],
+    MISSING_TIMELINE: ['timeline.validate', 'timeline.plan'],
+    TIMELINE_NOT_SAVED: ['timeline.validate'],
+    TIMELINE_SCHEMA_INVALID: ['timeline.validate', 'timeline.plan', 'timeline.revise'],
+    UNSUPPORTED_COMPONENT: ['timeline.effect_map', 'timeline.validate'],
+    RESOURCE_NOT_FOUND: ['timeline.validate', 'material.analyze_basic', 'video.render'],
     RENDER_FAILED: ['video.render'],
   }
 
@@ -119,12 +119,12 @@ function failedStepIndexForError(
     const index = findStepIndexByTool(steps, ['sample_understanding.analyze'])
     if (index >= 0) return index
   }
-  if (actionType === 'GENERATE_RENDER_PLAN') {
-    const index = findStepIndexByTool(steps, ['render_plan.build'])
+  if (actionType === 'GENERATE_TIMELINE') {
+    const index = findStepIndexByTool(steps, ['timeline.plan'])
     if (index >= 0) return index
   }
-  if (actionType === 'REVISE_RENDER_PLAN') {
-    const index = findStepIndexByTool(steps, ['render_plan.revise'])
+  if (actionType === 'REVISE_TIMELINE') {
+    const index = findStepIndexByTool(steps, ['timeline.revise'])
     if (index >= 0) return index
   }
   if (actionType === 'RENDER_VIDEO') {
@@ -178,7 +178,6 @@ export function createInitialDirectorSessionState(): DirectorSessionState {
     phase: 'idle',
     sampleStatus: 'missing',
     materialStatus: 'missing',
-    renderPlanStatus: 'missing',
     actionLedger: [],
   }
 }
@@ -195,9 +194,9 @@ export function classifyDirectorFailure(
     'API_KEY_INVALID',
     'MISSING_SAMPLE',
     'MISSING_MATERIAL',
-    'MISSING_RENDER_PLAN',
-    'PLAN_NOT_SYNCED',
-    'PLAN_SCHEMA_INVALID',
+    'MISSING_TIMELINE',
+    'TIMELINE_NOT_SAVED',
+    'TIMELINE_SCHEMA_INVALID',
     'UNSUPPORTED_COMPONENT',
     'RESOURCE_NOT_FOUND',
     'RENDER_FAILED',
@@ -219,16 +218,13 @@ export function classifyDirectorFailure(
     return 'MISSING_MATERIAL'
   }
   if (/activeTask|not synced|未同步|未保存|sync/i.test(message)) {
-    return 'PLAN_NOT_SYNCED'
+    return 'TIMELINE_NOT_SAVED'
   }
-  if (
-    (lower.includes('renderplan') && (lower.includes('required') || lower.includes('missing'))) ||
-    /缺少.*renderplan|没有.*方案|先.*生成.*方案/i.test(message)
-  ) {
-    return 'MISSING_RENDER_PLAN'
+  if (/缺少.*时间线|没有.*方案|先.*生成.*方案/i.test(message)) {
+    return 'MISSING_TIMELINE'
   }
   if (/schema|zod|invalid json|validation failed|校验失败|结构不合法/i.test(message)) {
-    return 'PLAN_SCHEMA_INVALID'
+    return 'TIMELINE_SCHEMA_INVALID'
   }
   if (/enoent|not found|404|资源.*不存在|文件.*不存在|asset.*missing/i.test(message)) {
     return 'RESOURCE_NOT_FOUND'
@@ -285,22 +281,22 @@ export function recoverableErrorFromMessage(
         action: { type: 'ASK_USER', message: '请上传用于成片的图片或视频素材，样例只作为风格参考。' },
       },
     ],
-    MISSING_RENDER_PLAN: [
+    MISSING_TIMELINE: [
       {
         label: '先生成方案',
-        action: { type: 'GENERATE_RENDER_PLAN', message: '先生成可编辑 RenderPlan。' },
+        action: { type: 'GENERATE_TIMELINE', message: '先生成可编辑时间线方案。' },
       },
     ],
-    PLAN_NOT_SYNCED: [
+    TIMELINE_NOT_SAVED: [
       {
         label: '先同步当前方案',
-        action: { type: 'REVISE_RENDER_PLAN', message: '请先保存或同步当前 RenderPlan 后再渲染。' },
+        action: { type: 'REVISE_TIMELINE', message: '请先保存或同步当前时间线方案后再渲染。' },
       },
     ],
-    PLAN_SCHEMA_INVALID: [
+    TIMELINE_SCHEMA_INVALID: [
       {
         label: '修复方案结构',
-        action: { type: 'GENERATE_RENDER_PLAN', message: '重新生成或局部修复 RenderPlan 结构。' },
+        action: { type: 'GENERATE_TIMELINE', message: '重新生成或局部修复时间线结构。' },
       },
     ],
     UNSUPPORTED_COMPONENT: [
@@ -344,8 +340,9 @@ export function syncDirectorSessionSnapshot(
   input: DirectorSessionSnapshotInput,
 ): DirectorSessionState {
   const base = previous ?? createInitialDirectorSessionState()
-  const currentRevision = input.renderPlan?.plan_revision ?? base.currentRevision
-  const hasRenderPlan = Boolean(input.renderPlan?.scenes.length)
+  const timeline = input.timeline
+  const currentRevision = timeline?.currentRevision
+  const hasTimeline = Boolean(timeline && timeline.status !== 'missing')
   const sampleStatus = input.isSampleParsed
     ? 'parsed'
     : input.sampleUrl?.trim()
@@ -356,26 +353,18 @@ export function syncDirectorSessionSnapshot(
     : input.materialCount > 0
       ? 'partial'
       : 'missing'
-  const renderPlanStatus = hasRenderPlan
-    ? input.renderPlanStatus ?? base.renderPlanStatus ?? 'synced'
-    : 'missing'
-  const lastDiff =
-    input.lastChangeSummary && currentRevision
-      ? {
-          revision: currentRevision,
-          summary: input.lastChangeSummary,
-          at: nowIso(),
-          clipId: input.selectedClipId ?? undefined,
-          sceneId: input.selectedSceneId ?? undefined,
-        }
-      : base.lastDiff
-
   let phase = base.phase
   if (phase === 'idle' || phase === 'sample_ready' || phase === 'plan_editing' || phase === 'render_done') {
-    if (renderPlanStatus === 'dirty' || renderPlanStatus === 'failed' || renderPlanStatus === 'syncing') {
+    if (
+      timeline?.status === 'draft' ||
+      timeline?.status === 'dirty' ||
+      timeline?.status === 'failed' ||
+      timeline?.status === 'saving' ||
+      timeline?.status === 'rendering'
+    ) {
       phase = 'plan_editing'
-    } else if (hasRenderPlan) {
-      phase = base.renderedRevision === currentRevision ? 'render_done' : 'plan_editing'
+    } else if (hasTimeline) {
+      phase = timeline?.renderedRevision === currentRevision ? 'render_done' : 'plan_editing'
     } else if (sampleStatus === 'parsed') {
       phase = 'sample_ready'
     } else {
@@ -389,14 +378,7 @@ export function syncDirectorSessionSnapshot(
     phase,
     sampleStatus,
     materialStatus,
-    renderPlanStatus,
-    selectedClipId: input.selectedClipId ?? undefined,
-    selectedSceneId: input.selectedSceneId ?? undefined,
-    currentRevision,
-    syncedRevision:
-      renderPlanStatus === 'synced' ? currentRevision : base.syncedRevision,
-    renderedRevision: input.renderedRevision ?? base.renderedRevision,
-    lastDiff,
+    timeline,
   }
 }
 
@@ -412,7 +394,7 @@ export function recordDirectorActionPlanned(input: {
     phaseBefore: input.state.phase,
     phaseAfter: phaseForAction(input.action.type),
     status: 'planned',
-    revisionBefore: input.state.currentRevision,
+    revisionBefore: input.state.timeline?.currentRevision,
     message: input.action.message,
     planSteps: maybePlanSteps(createPlanStepRuns(input.action)),
     createdAt: nowIso(),
@@ -451,8 +433,7 @@ export function recordDirectorActionRunning(input: {
 export function recordDirectorActionCompleted(input: {
   state: DirectorSessionState
   outcome: DirectorActionOutcome
-  currentRevision?: number
-  diff?: RenderPlanDiff
+  timeline?: DirectorTimelineSnapshot
 }): DirectorSessionState {
   const lastAction = input.state.lastAction
   const phaseAfter = completedPhaseForAction(input.outcome.action)
@@ -462,26 +443,34 @@ export function recordDirectorActionCompleted(input: {
         ...lastAction,
         status: 'completed',
         phaseAfter,
-        revisionAfter: input.currentRevision ?? input.state.currentRevision,
+        revisionAfter:
+          input.timeline?.currentRevision ??
+          input.state.timeline?.currentRevision,
         message: input.outcome.message,
         planSteps: markAllStepsCompleted(lastAction.planSteps, completedAt),
         completedAt,
       }
     : undefined
 
+  const currentTimeline = input.timeline ?? input.state.timeline
+  const completedTimeline = currentTimeline
+    ? {
+        ...currentTimeline,
+        status:
+          input.outcome.action === 'RENDER_VIDEO'
+            ? ('rendered' as const)
+            : currentTimeline.status,
+        renderedRevision:
+          input.outcome.action === 'RENDER_VIDEO'
+            ? currentTimeline.currentRevision
+            : currentTimeline.renderedRevision,
+      }
+    : undefined
+
   return {
     ...input.state,
     phase: phaseAfter,
-    renderPlanStatus:
-      input.outcome.action === 'RENDER_VIDEO'
-        ? 'synced'
-        : input.state.renderPlanStatus,
-    currentRevision: input.currentRevision ?? input.state.currentRevision,
-    renderedRevision:
-      input.outcome.action === 'RENDER_VIDEO'
-        ? input.currentRevision ?? input.state.currentRevision
-        : input.state.renderedRevision,
-    lastDiff: input.diff ?? input.state.lastDiff,
+    timeline: completedTimeline,
     lastAction: record ?? input.state.lastAction,
     lastError: undefined,
     actionLedger: record
@@ -515,11 +504,16 @@ export function recordDirectorActionFailed(input: {
       }
     : undefined
 
+  const failedTimeline = input.state.timeline
+    ? {
+        ...input.state.timeline,
+        status: input.actionType === 'RENDER_VIDEO' ? ('failed' as const) : input.state.timeline.status,
+      }
+    : undefined
   return {
     ...input.state,
     phase: 'failed',
-    renderPlanStatus:
-      input.actionType === 'RENDER_VIDEO' ? 'failed' : input.state.renderPlanStatus,
+    timeline: failedTimeline,
     lastError: error,
     lastAction: record ?? input.state.lastAction,
     actionLedger: record
@@ -530,9 +524,16 @@ export function recordDirectorActionFailed(input: {
 
 export function summarizeDirectorSessionState(state?: DirectorSessionState): string {
   if (!state) return 'No director session state yet.'
-  const revision = state.currentRevision ? `revision ${state.currentRevision}` : 'no revision'
-  const rendered = state.renderedRevision ? `rendered revision ${state.renderedRevision}` : 'not rendered'
-  const diff = state.lastDiff ? `Last diff: ${state.lastDiff.summary}` : 'No recent diff.'
+  const timeline = state.timeline
+  const revision = timeline?.currentRevision
+    ? `revision ${timeline.currentRevision}`
+    : 'no revision'
+  const rendered = timeline?.renderedRevision
+    ? `rendered revision ${timeline.renderedRevision}`
+    : 'not rendered'
+  const diff = timeline?.lastChangeSummary
+    ? `Last change: ${timeline.lastChangeSummary}`
+    : 'No recent change.'
   const error = state.lastError ? `Last error: ${state.lastError.code}` : 'No active error.'
   const activeStep = state.lastAction?.planSteps?.find((step) =>
     step.status === 'running' || step.status === 'failed',
@@ -544,7 +545,7 @@ export function summarizeDirectorSessionState(state?: DirectorSessionState): str
     `Phase: ${state.phase}`,
     `Sample: ${state.sampleStatus}`,
     `Materials: ${state.materialStatus}`,
-    `RenderPlan: ${state.renderPlanStatus}, ${revision}, ${rendered}`,
+    `Timeline: ${timeline?.status ?? 'missing'}, ${revision}, ${rendered}`,
     step,
     diff,
     error,

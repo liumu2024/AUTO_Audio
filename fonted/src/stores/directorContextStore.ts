@@ -16,7 +16,6 @@ import type {
   DirectorUserIntent,
 } from '@shared/types/director-context'
 import type { DirectorSessionState } from '@shared/types/director-state'
-import type { RenderPlanV1 } from '@/types/render-plan'
 
 interface DirectorContextState {
   context: DirectorContext
@@ -25,7 +24,6 @@ interface DirectorContextState {
   setUserIntent: (patch: Partial<DirectorUserIntent>) => void
   patchSlots: (patch: Partial<DirectorContextSlots>) => void
   applyIntentResult: (result: DirectorIntentResult) => void
-  setRenderPlan: (plan?: RenderPlanV1) => void
   setDirectorState: (directorState?: DirectorSessionState) => void
   updateDirectorState: (
     updater: (state: DirectorSessionState) => DirectorSessionState,
@@ -113,18 +111,6 @@ export const useDirectorContextStore = create<DirectorContextState>((set) => ({
                 slotsPatch: result.slotsPatch,
               }
             : undefined,
-        }),
-      },
-    })),
-
-  setRenderPlan: (currentRenderPlan) =>
-    set((state) => ({
-      context: {
-        ...state.context,
-        currentRenderPlan,
-        slots: mergeDirectorSlots(state.context.slots, {
-          aspectRatio: currentRenderPlan?.canvas.ratio,
-          durationSec: currentRenderPlan?.duration_sec,
         }),
       },
     })),

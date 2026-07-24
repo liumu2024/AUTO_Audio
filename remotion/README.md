@@ -1,7 +1,6 @@
-# DPL304 Remotion Renderer
+# DPL304 V2 Remotion Renderer
 
-This package renders `RenderPlanV1` through the backend-generated
-`RemotionRenderProps`.
+This package renders `RemotionTimelineSpecV1` through the V2 timeline renderer.
 
 ```bash
 cd remotion
@@ -12,14 +11,14 @@ npm run preview
 Backend render flow:
 
 ```text
-RenderPlanV1
-  -> backend buildRemotionRenderProps()
-  -> backend/tmp/agent-trace/<taskId>/artifacts/render/<taskId>.render-props.json
-  -> remotion render src/index.ts Dpl304Video <output.mp4> --props <props.json>
+RemotionTimelineSpecV1
+  -> backend pipeline-v2 remotion-timeline-renderer
+  -> backend/v2-renders/<taskId>/remotion-timeline-props.json
+  -> remotion render src/index.ts V2TimelineVideo <output.mp4> --props <props.json>
 ```
 
-The composition keeps the same three track model as the editor:
+The composition renders the V2 scene, overlay, transition, and audio tracks:
 
-- `scene.visual` -> main visual layer
-- `scene.overlays[]` -> subtitles / big captions / stickers
-- `scene.audio[]` -> bgm / sfx / voiceover asset layers
+- `scenes[]` -> visual layer
+- `overlays[]` -> subtitles and captions
+- `audio[]` -> bgm, sfx, and voiceover layers

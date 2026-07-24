@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "preview": "remotion studio src/index.ts",
-    "render": "remotion render src/index.ts Dpl304Video"
+    "render": "remotion render src/index.ts V2TimelineVideo"
   },
   "dependencies": {
     "@react-three/fiber": "^9.6.1",

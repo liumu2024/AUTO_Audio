@@ -10,24 +10,20 @@ import { postUpload } from './modules/upload/upload.controller.js'
 import { uploadMiddleware } from './modules/upload/upload.middleware.js'
 import { ensureUploadDir } from './modules/upload/upload.service.js'
 import { authMiddleware } from './modules/auth/auth.middleware.js'
-import { getTaskPipeline } from './modules/pipeline/pipeline.controller.js'
-import {
-  getRenderPlan,
-  patchRenderPlan,
-} from './modules/render-plan/render-plan.controller.js'
-import {
-  getLatestTask,
-  getTask,
-  getTasksList,
-  cancelTask,
-  deleteTask,
-  patchTaskStructure,
-} from './modules/video-task/task.controller.js'
 import { attachWebSocketServer } from './modules/websocket/ws.gateway.js'
 import {
+  postV2SampleAnalyze,
   postV2TimelinePreview,
   postV2TimelineRun,
 } from './pipeline-v2/controller.js'
+import {
+  deleteV2TimelineDraft,
+  getV2TimelineDraft,
+  getV2TimelineDrafts,
+  postV2TimelineDraftPreview,
+  postV2TimelineDraftRun,
+  putV2TimelineDraft,
+} from './pipeline-v2/timeline-draft-controller.js'
 
 const app = express()
 app.use(cors())
@@ -40,7 +36,6 @@ app.get('/health', (_req, res) => {
 
 void ensureUploadDir()
 app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')))
-app.use('/renders', express.static(path.resolve(process.cwd(), env.renderOutputDir)))
 app.post(
   '/api/uploads',
   uploadMiddleware.single('file'),
@@ -48,16 +43,14 @@ app.post(
 )
 
 app.post('/api/director/chat', postDirectorAgentChat)
-app.get('/api/tasks', getTasksList)
-app.get('/api/tasks/latest', getLatestTask)
-app.get('/api/tasks/:taskId/pipeline', getTaskPipeline)
-app.get('/api/tasks/:taskId/render-plan', getRenderPlan)
-app.get('/api/tasks/:taskId', getTask)
-app.patch('/api/tasks/:taskId/structure', patchTaskStructure)
-app.patch('/api/tasks/:taskId/render-plan', patchRenderPlan)
-app.post('/api/tasks/:taskId/cancel', cancelTask)
-app.delete('/api/tasks/:taskId', deleteTask)
 app.use('/v2-renders', express.static(path.resolve(process.cwd(), 'v2-renders')))
+app.post('/api/v2/sample/analyze', postV2SampleAnalyze)
+app.post('/api/v2/timeline-drafts/preview', postV2TimelineDraftPreview)
+app.get('/api/v2/timeline-drafts', getV2TimelineDrafts)
+app.get('/api/v2/timeline-drafts/:draftId', getV2TimelineDraft)
+app.put('/api/v2/timeline-drafts/:draftId', putV2TimelineDraft)
+app.post('/api/v2/timeline-drafts/:draftId/runs', postV2TimelineDraftRun)
+app.delete('/api/v2/timeline-drafts/:draftId', deleteV2TimelineDraft)
 app.post('/api/v2/timeline/preview', postV2TimelinePreview)
 app.post('/api/v2/timeline/run', postV2TimelineRun)
 

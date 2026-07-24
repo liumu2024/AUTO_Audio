@@ -1,7 +1,7 @@
 export declare const AGENT_TRACE_EVENT_SCHEMA_VERSION: "agent_trace_event.v1";
 export declare const AGENT_TRACE_MANIFEST_SCHEMA_VERSION: "agent_trace_manifest.v1";
 export declare const AGENT_TRACE_INDEX_SCHEMA_VERSION: "agent_trace_index.v1";
-export type AgentTracePhase = 'task' | 'director_chat' | 'sample_understanding' | 'effect_planning' | 'render_plan' | 'component_authoring' | 'render' | 'quality_gate';
+export type AgentTracePhase = 'task' | 'director_chat' | 'sample_understanding' | 'effect_planning' | 'timeline_planning' | 'component_authoring' | 'render' | 'quality_gate';
 export type AgentTraceActor = 'system' | 'user' | 'llm' | 'tool' | 'validator' | 'renderer' | 'cache';
 export type AgentTraceEventKind = 'progress' | 'decision' | 'artifact' | 'validation' | 'llm_call' | 'tool_call' | 'render' | 'quality_check' | 'error';
 export type AgentTraceStatus = 'started' | 'success' | 'warning' | 'failed' | 'skipped' | 'fallback';

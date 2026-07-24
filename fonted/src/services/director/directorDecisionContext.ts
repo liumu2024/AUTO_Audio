@@ -49,7 +49,7 @@ export function buildDirectorContextFromUI(input: {
           url: input.sampleUrl,
           name: input.sampleName,
           styleRecipe: input.existing?.sampleVideo?.styleRecipe,
-          understanding: input.existing?.sampleVideo?.understanding,
+          reference: input.existing?.sampleVideo?.reference,
         }
       : undefined,
     materials: input.attachments.map((att) => ({
@@ -65,7 +65,7 @@ export function buildDirectorContextFromUI(input: {
       styleIntensity: input.styleIntensity,
       durationSec: input.durationSec,
     },
-    currentRenderPlan: input.existing?.currentRenderPlan,
+    currentTimeline: input.existing?.currentTimeline,
     directorState: input.existing?.directorState,
     conversationSummary: input.existing?.conversationSummary,
     slots: mergeDirectorSlots(baseSlots, runtimeSlots),

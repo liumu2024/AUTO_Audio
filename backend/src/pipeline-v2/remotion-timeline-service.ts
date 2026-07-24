@@ -16,6 +16,11 @@ import {
   buildDeterministicRemotionTimelineSpec,
   type V2RemotionTimelinePlannerInput,
 } from './remotion-timeline-planner.js'
+import {
+  applyV2TimelineHardRequirements,
+  evaluateV2TimelineHardRequirements,
+  extractV2TimelineHardRequirements,
+} from './hard-requirements.js'
 import { renderV2RemotionTimeline, type V2TimelineRenderResult } from './remotion-timeline-renderer.js'
 import {
   buildV2TimelinePlanningReview,
@@ -83,9 +88,15 @@ async function resolveTimelineSpec(input: {
 
   if (input.plannerInput.plannerMode === 'llm') {
     try {
-      const { runV2TimelineLlmPlanner } = await import('./remotion-timeline-llm-planner.js')
-      const llmPlanner = await runV2TimelineLlmPlanner(plannerInputFrom(input.plannerInput))
-      await input.trace.writeText('02-planning', 'llm-timeline-planner-prompt.md', llmPlanner.promptText)
+      const {
+        buildV2TimelinePlannerPrompt,
+        runV2TimelineLlmPlanner,
+      } = await import('./remotion-timeline-llm-planner.js')
+      const promptText = buildV2TimelinePlannerPrompt(plannerInputFrom(input.plannerInput))
+      await input.trace.writeText('02-planning', 'llm-timeline-planner-prompt.md', promptText)
+      const llmPlanner = await runV2TimelineLlmPlanner(plannerInputFrom(input.plannerInput), {
+        promptText,
+      })
       await input.trace.writeJson('02-planning', 'llm-timeline-planner-raw-response.json', llmPlanner.rawResponse)
       await input.trace.writeJson('02-planning', 'llm-timeline-planner-extraction-report.json', llmPlanner.extractionReport)
       return {
@@ -117,29 +128,40 @@ export async function previewV2RemotionTimeline(
 ): Promise<V2TimelinePreviewResult> {
   const trace = createV2TraceWriter({ taskId: input.taskId })
   await trace.writeJson('01-input', 'timeline-planner-input.json', input)
+  const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
+  await trace.writeJson('01-input', 'timeline-hard-requirements.json', hardRequirements)
   const resolved = await resolveTimelineSpec({
     plannerInput: input,
     trace,
   })
-  const spec = resolved.spec
+  const spec = applyV2TimelineHardRequirements({
+    spec: resolved.spec,
+    requirements: hardRequirements,
+  })
   const validation = validateRemotionTimelineSpec(spec)
+  const hardRequirementCheck = evaluateV2TimelineHardRequirements({
+    spec,
+    requirements: hardRequirements,
+  })
   const review = buildV2TimelinePlanningReview({ spec, validation })
   await trace.writeJson('02-planning', 'timeline-spec.json', spec)
   await trace.writeJson('02-planning', 'timeline-validation.json', validation)
+  await trace.writeJson('02-planning', 'timeline-hard-requirement-check.json', hardRequirementCheck)
   await trace.writeJson('02-plan-review', 'timeline-review.json', review)
   await trace.writeText('02-plan-review', 'timeline-review.zh.md', renderV2TimelinePlanningReviewMarkdown(review))
   await trace.writeSummary([
-    '# V2 Timeline Preview',
+    '# V2 时间线方案预览',
     '',
-    `- taskId: ${input.taskId}`,
-    `- planner source: ${resolved.plannerSource}`,
-    `- scenes: ${review.metrics.scene_count}`,
-    `- Remotion scenes: ${review.metrics.remotion_scene_count}`,
-    `- AI video scenes: ${review.metrics.ai_video_scene_count}`,
-    `- transitions: ${review.metrics.transition_count}`,
-    `- risk: ${review.risk_level}`,
+    `- 任务 ID：${input.taskId}`,
+    `- 规划来源：${resolved.plannerSource}`,
+    `- 镜头数量：${review.metrics.scene_count}`,
+    `- Remotion 镜头：${review.metrics.remotion_scene_count}`,
+    `- AI 视频镜头：${review.metrics.ai_video_scene_count}`,
+    `- 转场数量：${review.metrics.transition_count}`,
+    `- 视觉素材覆盖：${review.metrics.used_visual_asset_count}/${review.metrics.visual_asset_count}`,
+    `- 风险等级：${review.risk_level}`,
     '',
-    'This step only plans and reviews the Remotion-first timeline. It does not generate material or render video.',
+    '本步骤只规划并审查 Remotion-first 时间线，不生成素材，也不渲染成片。',
   ])
   return {
     taskId: input.taskId,
@@ -154,8 +176,14 @@ export async function previewV2RemotionTimeline(
 export async function runV2RemotionTimeline(
   input: V2PlannerInput & { imageSrc?: string; timelineSpecOverride?: unknown },
 ): Promise<V2TimelineRunResult> {
-  const trace = createV2TraceWriter({ taskId: input.taskId })
+  const trace = createV2TraceWriter({
+    taskId: input.timelineSpecOverride
+      ? `${input.taskId}__run_${Date.now()}`
+      : input.taskId,
+  })
   await trace.writeJson('01-input', 'timeline-planner-input.json', input)
+  const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
+  await trace.writeJson('01-input', 'timeline-hard-requirements.json', hardRequirements)
   const outputRoot = outputRootFor(input.taskId)
   await mkdir(outputRoot, { recursive: true })
 
@@ -164,11 +192,19 @@ export async function runV2RemotionTimeline(
     trace,
     timelineSpecOverride: input.timelineSpecOverride,
   })
-  const spec = resolved.spec
+  const spec = applyV2TimelineHardRequirements({
+    spec: resolved.spec,
+    requirements: hardRequirements,
+  })
   const validation = validateRemotionTimelineSpec(spec)
+  const hardRequirementCheck = evaluateV2TimelineHardRequirements({
+    spec,
+    requirements: hardRequirements,
+  })
   const review = buildV2TimelinePlanningReview({ spec, validation })
   await trace.writeJson('02-planning', 'timeline-spec.json', spec)
   await trace.writeJson('02-planning', 'timeline-validation.json', validation)
+  await trace.writeJson('02-planning', 'timeline-hard-requirement-check.json', hardRequirementCheck)
   await trace.writeJson('02-plan-review', 'timeline-review.json', review)
   await trace.writeText('02-plan-review', 'timeline-review.zh.md', renderV2TimelinePlanningReviewMarkdown(review))
   if (!validation.ok) {
@@ -221,17 +257,17 @@ export async function runV2RemotionTimeline(
   }
   await trace.writeJson('07-evaluation', 'timeline-evaluation.json', evaluation)
   await trace.writeSummary([
-    '# V2 Timeline Run',
+    '# V2 时间线渲染',
     '',
-    `- taskId: ${input.taskId}`,
-    `- planner source: ${resolved.plannerSource}`,
-    `- scenes: ${standardized.spec.scenes.length}`,
-    `- transitions: ${standardized.spec.transitions.length}`,
-    `- material jobs ok: ${materialResolution.report.ok}`,
-    `- standardized video assets: ${standardized.standardized_assets.length}`,
-    `- output: ${render.outputPath}`,
-    `- output size: ${render.fileSizeBytes} bytes`,
-    `- evaluation: ${evaluation.ok ? 'ok' : 'warning'}`,
+    `- 任务 ID：${input.taskId}`,
+    `- 规划来源：${resolved.plannerSource}`,
+    `- 镜头数量：${standardized.spec.scenes.length}`,
+    `- 转场数量：${standardized.spec.transitions.length}`,
+    `- 素材任务是否成功：${materialResolution.report.ok}`,
+    `- 已标准化视频素材：${standardized.standardized_assets.length}`,
+    `- 输出文件：${render.outputPath}`,
+    `- 输出大小：${render.fileSizeBytes} bytes`,
+    `- 基础评估：${evaluation.ok ? '通过' : '有警告'}`,
   ])
 
   return {

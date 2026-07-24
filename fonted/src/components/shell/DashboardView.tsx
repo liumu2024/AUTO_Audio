@@ -11,29 +11,29 @@ import {
 } from '@/components/ui/dialog'
 import { env } from '@/config/env'
 import * as api from '@/lib/api'
-import type { TaskListItemDto } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { restoreTaskContext } from '@/services/pipeline/restoreTask'
 import { useAppShellStore } from '@/stores/appShellStore'
+import { useEditorStore } from '@/stores/editorStore'
+import { usePlaybackStore } from '@/stores/playbackStore'
 import { useTaskStore } from '@/stores/taskStore'
+import { useV2TimelineStore } from '@/stores/v2TimelineStore'
+import { mapV2TimelineDraftHistoryCard } from '@shared/lib/v2-timeline-draft-history'
+import type { V2TimelineDraftHistoryDto } from '@/lib/api'
 
 const STATUS_LABEL: Record<string, string> = {
-  QUEUED: '排队中',
-  ANALYZING: '解析中',
-  WAITING_USER_EDIT: '待编辑',
-  GENERATING: '生成中',
-  COMPLETED: '已完成',
-  FAILED: '失败',
+  draft: '草稿',
+  running: '渲染中',
+  completed: '已渲染',
+  failed: '渲染失败',
 }
 
 function statusTone(status: string): string {
   switch (status) {
-    case 'COMPLETED':
+    case 'completed':
       return 'bg-emerald-500/15 text-emerald-400 ring-emerald-500/30'
-    case 'FAILED':
+    case 'failed':
       return 'bg-red-500/15 text-red-400 ring-red-500/30'
-    case 'GENERATING':
-    case 'ANALYZING':
+    case 'running':
       return 'bg-violet-500/15 text-violet-300 ring-violet-500/30'
     default:
       return 'bg-zinc-500/15 text-zinc-400 ring-zinc-500/30'
@@ -50,16 +50,16 @@ function formatDate(value: string) {
 }
 
 export function DashboardView() {
-  const [tasks, setTasks] = useState<TaskListItemDto[]>([])
+  const [drafts, setDrafts] = useState<V2TimelineDraftHistoryDto[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [openingId, setOpeningId] = useState<string | null>(null)
-  const [viewing, setViewing] = useState<TaskListItemDto | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<TaskListItemDto | null>(null)
+  const [viewing, setViewing] = useState<V2TimelineDraftHistoryDto | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<V2TimelineDraftHistoryDto | null>(null)
   const setActiveView = useAppShellStore((s) => s.setActiveView)
   const addLog = useTaskStore((s) => s.addLog)
 
-  const loadTasks = useCallback(async () => {
+  const loadDrafts = useCallback(async () => {
     if (!env.useBackend) {
       setError('请开启 VITE_USE_BACKEND=true')
       setLoading(false)
@@ -68,44 +68,56 @@ export function DashboardView() {
     setLoading(true)
     setError(null)
     try {
-      const { tasks: list } = await api.listTasks()
-      setTasks(list)
+      const { drafts: list } = await api.listV2TimelineDrafts()
+      setDrafts(list)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
-      setTasks([])
+      setDrafts([])
     } finally {
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    void loadTasks()
-  }, [loadTasks])
+    void loadDrafts()
+  }, [loadDrafts])
 
-  const openTask = async (task: TaskListItemDto) => {
-    if (!task.hasStructure) {
-      addLog(`[工作台] 任务 ${task.id} 暂无解析结果`)
+  const openDraft = async (draft: V2TimelineDraftHistoryDto) => {
+    setOpeningId(draft.draftId)
+    try {
+      const { draft: persisted } = await api.getV2TimelineDraft(draft.draftId)
+      const card = mapV2TimelineDraftHistoryCard(persisted)
+      useV2TimelineStore.getState().openPersistedDraft(persisted)
+      useEditorStore.getState().enterV2Workspace()
+      useEditorStore.getState().setGenerationEditEnabled(true)
+      useEditorStore.getState().setTimelineMode('generation')
+      useEditorStore.getState().setProjectName(card.title)
+      usePlaybackStore.getState().pause()
+      usePlaybackStore.getState().setDuration(persisted.spec.canvas.duration_sec)
+      usePlaybackStore.getState().seek(0)
+      useTaskStore.getState().setActiveTaskId(persisted.draftId)
+      useTaskStore.getState().setBackendReady(true)
+      addLog(`[V2 工作台] 已打开草稿 ${persisted.draftId}，revision ${persisted.revision}。`)
       setActiveView('editor')
-      return
+    } catch (error) {
+      addLog(`[V2 工作台] 打开草稿失败: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setOpeningId(null)
     }
-    setOpeningId(task.id)
-    const ok = await restoreTaskContext(task.id)
-    setOpeningId(null)
-    if (ok) setActiveView('editor')
   }
 
-  const deleteTask = async () => {
+  const deleteDraft = async () => {
     if (!deleteTarget) return
-    const id = deleteTarget.id
+    const id = deleteTarget.draftId
     setDeleteTarget(null)
-    if (viewing?.id === id) setViewing(null)
-    setTasks((items) => items.filter((task) => task.id !== id))
+    if (viewing?.draftId === id) setViewing(null)
+    setDrafts((items) => items.filter((draft) => draft.draftId !== id))
     try {
-      await api.deleteTask(id)
-      addLog(`[工作台] 已删除任务 ${id}`)
+      await api.deleteV2TimelineDraft(id)
+      addLog(`[V2 工作台] 已删除草稿 ${id}`)
     } catch (e) {
-      addLog(`[工作台] 删除失败: ${e instanceof Error ? e.message : String(e)}`)
-      void loadTasks()
+      addLog(`[V2 工作台] 删除失败: ${e instanceof Error ? e.message : String(e)}`)
+      void loadDrafts()
     }
   }
 
@@ -115,52 +127,54 @@ export function DashboardView() {
         <div>
           <h1 className="text-xl font-semibold text-zinc-100">历史工作台</h1>
           <p className="mt-1 text-sm text-zinc-500">
-            查看历史解析/生成任务，可打开继续编辑，也可以删除无用任务。
+            查看历史 V2 时间线草稿，可打开继续编辑或删除。
           </p>
         </div>
-        <Button type="button" variant="secondary" size="sm" onClick={() => void loadTasks()}>
+        <Button type="button" variant="secondary" size="sm" onClick={() => void loadDrafts()}>
           <RefreshCw className="h-4 w-4" />
           刷新
         </Button>
       </header>
 
       <div className="flex-1 px-8 py-6">
-        {loading && <p className="text-sm text-zinc-500">加载任务列表...</p>}
+        {loading && <p className="text-sm text-zinc-500">加载 V2 草稿...</p>}
         {error && (
           <div className="rounded-lg border border-red-900/50 bg-red-950/30 px-4 py-3 text-sm text-red-300">
             {error}
-            <button type="button" className="ml-3 underline" onClick={() => void loadTasks()}>
+            <button type="button" className="ml-3 underline" onClick={() => void loadDrafts()}>
               重试
             </button>
           </div>
         )}
-        {!loading && !error && tasks.length === 0 && (
+        {!loading && !error && drafts.length === 0 && (
           <div className="rounded-xl border border-dashed border-zinc-700 bg-zinc-900/30 px-6 py-16 text-center">
-            <p className="text-sm text-zinc-400">暂无历史任务</p>
+            <p className="text-sm text-zinc-400">暂无历史 V2 草稿</p>
             <p className="mt-2 text-xs text-zinc-600">
-              去“创作”上传样例并完成解析后，任务会出现在这里。
+              去“创作”生成 V2 时间线方案后，草稿会出现在这里。旧项目已下线，不能在此打开。
             </p>
           </div>
         )}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {tasks.map((task) => (
+          {drafts.map((draft) => {
+            const card = mapV2TimelineDraftHistoryCard(draft)
+            return (
             <article
-              key={task.id}
+              key={card.id}
               className={cn(
                 'group flex flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50 text-left transition-all',
                 'hover:border-violet-500/40 hover:bg-zinc-900 hover:shadow-lg hover:shadow-violet-950/20',
-                openingId === task.id && 'opacity-60',
+                openingId === card.id && 'opacity-60',
               )}
             >
               <button
                 type="button"
                 className="relative aspect-video w-full overflow-hidden bg-zinc-950"
-                onClick={() => setViewing(task)}
+                onClick={() => setViewing(draft)}
               >
-                {task.previewUrl ? (
+                {card.previewUrl ? (
                   <video
-                    src={task.previewUrl}
+                    src={card.previewUrl.startsWith('http') ? card.previewUrl : `${env.apiBase}${card.previewUrl}`}
                     className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
                     muted
                     playsInline
@@ -174,28 +188,28 @@ export function DashboardView() {
                 <span
                   className={cn(
                     'absolute right-2 top-2 rounded-md px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset',
-                    statusTone(task.taskStatus),
+                    statusTone(card.status),
                   )}
                 >
-                  {STATUS_LABEL[task.taskStatus] ?? task.taskStatus}
+                  {STATUS_LABEL[card.status] ?? card.status}
                 </span>
               </button>
 
               <div className="flex min-h-0 flex-1 flex-col gap-3 px-3 py-3">
                 <div className="min-w-0">
                   <p className="line-clamp-2 text-sm font-medium text-zinc-200">
-                    {task.title}
+                    {card.title}
                   </p>
                   <p className="mt-1 truncate font-mono text-[10px] text-zinc-600">
-                    {task.id}
+                    {card.id}
                   </p>
                   <p className="mt-1 text-[10px] text-zinc-600">
-                    {formatDate(task.createdAt)}
+                    {formatDate(card.updatedAt)}
                   </p>
                 </div>
 
                 <div className="mt-auto grid grid-cols-3 gap-1">
-                  <Button type="button" variant="ghost" size="sm" onClick={() => setViewing(task)}>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setViewing(draft)}>
                     <Eye className="h-3.5 w-3.5" />
                     查看
                   </Button>
@@ -203,8 +217,8 @@ export function DashboardView() {
                     type="button"
                     variant="ghost"
                     size="sm"
-                    disabled={openingId === task.id}
-                    onClick={() => void openTask(task)}
+                    disabled={openingId === card.id}
+                    onClick={() => void openDraft(draft)}
                   >
                     <FolderOpen className="h-3.5 w-3.5" />
                     打开
@@ -214,7 +228,7 @@ export function DashboardView() {
                     variant="ghost"
                     size="sm"
                     className="text-red-400 hover:text-red-300"
-                    onClick={() => setDeleteTarget(task)}
+                    onClick={() => setDeleteTarget(draft)}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     删除
@@ -222,20 +236,31 @@ export function DashboardView() {
                 </div>
               </div>
             </article>
-          ))}
+            )
+          })}
         </div>
       </div>
 
       <Dialog open={!!viewing} onOpenChange={(open) => !open && setViewing(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{viewing?.title}</DialogTitle>
+            <DialogTitle>
+              {viewing ? mapV2TimelineDraftHistoryCard(viewing).title : ''}
+            </DialogTitle>
           </DialogHeader>
           {viewing && (
             <div className="space-y-4">
               <div className="overflow-hidden rounded-lg bg-black">
-                {viewing.previewUrl ? (
-                  <video src={viewing.previewUrl} className="aspect-video w-full" controls />
+                {mapV2TimelineDraftHistoryCard(viewing).previewUrl ? (
+                  <video
+                    src={
+                      mapV2TimelineDraftHistoryCard(viewing).previewUrl!.startsWith('http')
+                        ? mapV2TimelineDraftHistoryCard(viewing).previewUrl
+                        : `${env.apiBase}${mapV2TimelineDraftHistoryCard(viewing).previewUrl}`
+                    }
+                    className="aspect-video w-full"
+                    controls
+                  />
                 ) : (
                   <div className="flex aspect-video items-center justify-center text-zinc-600">
                     暂无预览
@@ -245,24 +270,28 @@ export function DashboardView() {
               <dl className="grid grid-cols-2 gap-3 text-xs text-zinc-400">
                 <div>
                   <dt className="text-zinc-600">状态</dt>
-                  <dd>{STATUS_LABEL[viewing.taskStatus] ?? viewing.taskStatus}</dd>
+                  <dd>{STATUS_LABEL[mapV2TimelineDraftHistoryCard(viewing).status]}</dd>
                 </div>
                 <div>
                   <dt className="text-zinc-600">创建时间</dt>
-                  <dd>{formatDate(viewing.createdAt)}</dd>
+                  <dd>{formatDate(viewing.updatedAt)}</dd>
                 </div>
                 <div className="col-span-2">
-                  <dt className="text-zinc-600">任务 ID</dt>
-                  <dd className="break-all font-mono">{viewing.id}</dd>
+                  <dt className="text-zinc-600">V2 草稿 ID</dt>
+                  <dd className="break-all font-mono">{viewing.draftId}</dd>
                 </div>
                 <div className="col-span-2">
-                  <dt className="text-zinc-600">样例视频</dt>
-                  <dd className="break-all font-mono">{viewing.sampleVideoUrl}</dd>
+                  <dt className="text-zinc-600">创建路径 / 当前 revision</dt>
+                  <dd className="break-all font-mono">
+                    {viewing.creationMode} / {viewing.revision}
+                  </dd>
                 </div>
-                {viewing.finalVideoUrl && (
+                {viewing.latestRun && (
                   <div className="col-span-2">
-                    <dt className="text-zinc-600">成片地址</dt>
-                    <dd className="break-all font-mono">{viewing.finalVideoUrl}</dd>
+                    <dt className="text-zinc-600">最近运行</dt>
+                    <dd className="break-all font-mono">
+                      {viewing.latestRun.status} / revision {viewing.latestRun.sourceRevision}
+                    </dd>
                   </div>
                 )}
               </dl>
@@ -273,7 +302,7 @@ export function DashboardView() {
               关闭
             </Button>
             {viewing && (
-              <Button type="button" variant="primary" onClick={() => void openTask(viewing)}>
+              <Button type="button" variant="primary" onClick={() => void openDraft(viewing)}>
                 打开编辑
               </Button>
             )}
@@ -284,16 +313,16 @@ export function DashboardView() {
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>删除任务</DialogTitle>
+          <DialogTitle>删除 V2 草稿</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-zinc-400">
-            确定删除「{deleteTarget?.title}」？此操作不可撤销。
+            确定删除「{deleteTarget ? mapV2TimelineDraftHistoryCard(deleteTarget).title : ''}」？此操作不可撤销。
           </p>
           <DialogFooter>
             <Button type="button" variant="secondary" onClick={() => setDeleteTarget(null)}>
               取消
             </Button>
-            <Button type="button" variant="primary" className="bg-red-600 hover:bg-red-500" onClick={() => void deleteTask()}>
+            <Button type="button" variant="primary" className="bg-red-600 hover:bg-red-500" onClick={() => void deleteDraft()}>
               确认删除
             </Button>
           </DialogFooter>

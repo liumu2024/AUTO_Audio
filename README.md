@@ -221,39 +221,7 @@ published URL, upload fails before the provider call.
 
 ## Runtime Trace
 
-Legacy V1 trace, when explicitly running old tooling, is written under:
-
-```text
-backend/tmp/agent-trace/<taskId>/
-  trace.jsonl
-  manifest.json
-  artifacts/
-    sample_understanding/
-    effect_planning/
-    render_plan/
-    component_authoring/
-    render/
-    quality_gate/
-```
-
-`trace.jsonl` is the ordered event stream. Each line uses
-`agent_trace_event.v1` and records `phase`, `actor`, `event`, `status`,
-`summary`, optional metrics, and artifact references. `manifest.json` is the
-current index of trace files for quick inspection.
-
-Relevant settings:
-
-```env
-ENABLE_AGENT_TRACE=true
-AGENT_TRACE_DIR=tmp/agent-trace
-```
-
-Leave `VIDEO_UNDERSTANDING_DEBUG_ARTIFACT_DIR`,
-`EFFECT_DEBUG_ARTIFACT_DIR`, and `REMOTION_COMPONENT_AUTHORING_DEBUG_DIR`
-unset unless you intentionally want to split module artifacts away from the
-unified trace directory.
-
-V2 Timeline trace is written separately under:
+The active desktop flow writes V2 Timeline trace under:
 
 ```text
 backend/tmp/v2-agent-trace/<taskId>/
@@ -270,6 +238,9 @@ backend/tmp/v2-agent-trace/<taskId>/
 
 If PowerShell displays Chinese text as mojibake, inspect the files in an editor
 with UTF-8 enabled. The trace writer stores these files as UTF-8.
+
+The old V1 trace writer and its environment settings are retained only for
+legacy tooling that is not called by the current desktop UI flow.
 
 ## Generated And Runtime Artifacts
 

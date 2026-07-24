@@ -7,7 +7,7 @@ export type AgentTracePhase =
   | 'director_chat'
   | 'sample_understanding'
   | 'effect_planning'
-  | 'render_plan'
+  | 'timeline_planning'
   | 'component_authoring'
   | 'render'
   | 'quality_gate'

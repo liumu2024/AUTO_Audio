@@ -71,7 +71,7 @@ export function routeConversationSurface(
 
   if (
     hasAny(prompt, [
-      /解析|拆解|理解|生成|成片|渲染|导出|素材|样例|remotion|render|export|generate/i,
+      /解析|拆解|理解|分析|视频结构|创作手法|生成|成片|渲染|导出|素材|样例|remotion|render|export|generate/i,
     ])
   ) {
     return {
