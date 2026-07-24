@@ -1,6 +1,6 @@
 import { type DirectorConversationRuntime } from './director-understanding.js';
 import type { DirectorAction, DirectorActionOutcome, DirectorActionType, DirectorExecutionPlan } from '../types/director-action.js';
-import type { DirectorContext, DirectorContextSlots } from '../types/director-context.js';
+import type { DirectorContext, DirectorContextSlots, DirectorExecutionEffect } from '../types/director-context.js';
 import type { DirectorIntentResult } from '../types/director-context.js';
 export type { DirectorAction, DirectorActionOutcome, DirectorActionPayload, DirectorActionType, DirectorActionPhase, DirectorExecutionPlan, DirectorPlanStep, DirectorToolName, } from '../types/director-action.js';
 export interface ResolveDirectorActionInput {
@@ -24,6 +24,10 @@ export interface DirectorActionExecutionContext {
     }>;
     conversationSummary?: string;
     activeTaskId?: string | null;
+    execution?: {
+        effect?: Exclude<DirectorExecutionEffect, 'none'>;
+        authorizationEvidence?: string;
+    };
 }
 export interface DirectorActionExecutor {
     analyzeSample: (ctx: DirectorActionExecutionContext) => Promise<DirectorActionOutcome>;

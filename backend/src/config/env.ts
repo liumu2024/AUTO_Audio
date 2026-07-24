@@ -114,7 +114,19 @@ export const env = {
     readEnv('DIRECTOR_AGENT_RESPONSES_URL') ??
     readEnv('VIDEO_UNDERSTANDING_RESPONSES_URL') ??
     'https://ark.cn-beijing.volces.com/api/v3/responses',
+  directorAgentFilesUrl:
+    readEnv('DIRECTOR_AGENT_FILES_URL') ??
+    readEnv('VIDEO_UNDERSTANDING_FILES_URL') ??
+    'https://ark.cn-beijing.volces.com/api/v3/files',
   directorAgentTimeoutMs: readNumber('DIRECTOR_AGENT_TIMEOUT_MS', 120_000),
+  directorAgentFileReadyTimeoutMs: readNumber(
+    'DIRECTOR_AGENT_FILE_READY_TIMEOUT_MS',
+    readNumber('VIDEO_UNDERSTANDING_FILE_READY_TIMEOUT_MS', 180_000),
+  ),
+  directorAgentFileReadyPollIntervalMs: readNumber(
+    'DIRECTOR_AGENT_FILE_READY_POLL_INTERVAL_MS',
+    readNumber('VIDEO_UNDERSTANDING_FILE_READY_POLL_INTERVAL_MS', 2_000),
+  ),
   directorAgentEnabled: readEnv('DIRECTOR_AGENT_ENABLED') !== 'false',
 
   /** V2 generated material adapter. Provider-specific API shapes stay behind this boundary. */

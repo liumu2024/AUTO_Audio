@@ -1,0 +1,92 @@
+import type {
+  RemotionTimelineOverlay,
+  RemotionTimelineScene,
+  RemotionTimelineSceneCreativeIntent,
+  RemotionTimelineSpecV1,
+} from '../types/remotion-timeline-spec.v1.js'
+
+const visualSceneTypes = new Set<RemotionTimelineScene['type']>([
+  'user_video',
+  'ai_video',
+  'image_motion',
+])
+
+function nonBlank(value: string | undefined): string | undefined {
+  const text = value?.trim()
+  return text || undefined
+}
+
+function sceneCreativeIntent(scene: RemotionTimelineScene): RemotionTimelineSceneCreativeIntent | undefined {
+  const title = nonBlank(scene.creative_intent?.title) ?? nonBlank(scene.title)
+  const description = nonBlank(scene.creative_intent?.description) ?? nonBlank(scene.body)
+  const material_label = nonBlank(scene.creative_intent?.material_label) ?? nonBlank(scene.subtitle)
+  if (!title && !description && !material_label) return undefined
+  return { title, description, material_label }
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function sceneForOverlay(
+  overlay: RemotionTimelineOverlay,
+  scenes: RemotionTimelineScene[],
+): RemotionTimelineScene | undefined {
+  if (overlay.scene_id) return scenes.find((scene) => scene.id === overlay.scene_id)
+  if (isFiniteNumber(overlay.start_sec)) {
+    return scenes.find(
+      (scene) =>
+        overlay.start_sec >= scene.start_sec &&
+        overlay.start_sec <= scene.start_sec + scene.duration_sec,
+    )
+  }
+  return undefined
+}
+
+/**
+ * Normalizes two invariants at the V2 protocol seam:
+ * - visual-scene planning metadata never becomes on-screen text;
+ * - a model-supplied text overlay with omitted layout numbers receives stable
+ *   geometry from its owning scene instead of discarding the whole plan.
+ */
+export function normalizeV2TimelineTextOwnership(
+  spec: RemotionTimelineSpecV1,
+): RemotionTimelineSpecV1 {
+  const scenes = spec.scenes.map((scene) => {
+    if (!visualSceneTypes.has(scene.type)) return scene
+    const creative_intent = sceneCreativeIntent(scene)
+    const normalized: RemotionTimelineScene = { ...scene }
+    delete normalized.title
+    delete normalized.subtitle
+    delete normalized.body
+    if (creative_intent) normalized.creative_intent = creative_intent
+    return normalized
+  })
+
+  const overlays = spec.overlays.map((overlay) => {
+    if (!['caption', 'title', 'label'].includes(overlay.type)) return overlay
+    const scene = sceneForOverlay(overlay, scenes)
+    const start_sec = isFiniteNumber(overlay.start_sec)
+      ? overlay.start_sec
+      : scene?.start_sec ?? 0
+    const sceneEnd = scene ? scene.start_sec + scene.duration_sec : start_sec + 2
+    const end_sec = isFiniteNumber(overlay.end_sec) && overlay.end_sec > start_sec
+      ? overlay.end_sec
+      : Math.max(start_sec + 0.4, sceneEnd - 0.12)
+    return {
+      ...overlay,
+      scene_id: overlay.scene_id ?? scene?.id,
+      start_sec,
+      end_sec,
+      x_pct: isFiniteNumber(overlay.x_pct) ? overlay.x_pct : 50,
+      y_pct: isFiniteNumber(overlay.y_pct)
+        ? overlay.y_pct
+        : overlay.type === 'caption'
+          ? 80
+          : 18,
+      width_pct: isFiniteNumber(overlay.width_pct) ? overlay.width_pct : 84,
+    }
+  })
+
+  return { ...spec, scenes, overlays }
+}

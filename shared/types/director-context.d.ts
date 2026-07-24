@@ -5,6 +5,11 @@ export type DirectorAspectRatio = '9:16' | '16:9' | '1:1' | '4:3';
 export type DirectorConversationIntent = 'analyze_sample' | 'analyze_materials' | 'revise_timeline' | 'generate_timeline' | 'render' | 'clarify' | 'unknown';
 /** 对话管理器输出的下一步动作 */
 export type DirectorNextAction = 'ASK_USER' | 'ANALYZE_SAMPLE' | 'GENERATE_TIMELINE' | 'RENDER' | 'REVISE_TIMELINE' | 'ACKNOWLEDGE' | 'NEED_BACKEND' | 'NEED_SAMPLE' | 'WAIT';
+/**
+ * The model's assessment of whether a message should have a side effect.
+ * `none` is the normal result for discussion, questions, critique, and advice.
+ */
+export type DirectorExecutionEffect = 'none' | 'workspace_change' | 'draft_change' | 'delivery';
 export type DirectorContentDomain = 'landscape_montage' | 'music_video' | 'product_marketing' | 'general';
 export type DirectorSampleVideoStatus = 'missing' | 'attached' | 'parsed';
 export type DirectorMaterialStatus = 'missing' | 'partial' | 'ready';
@@ -27,6 +32,8 @@ export interface DirectorContextSlots {
     subtitlePolicy: DirectorSubtitlePolicy;
     audioPolicy: DirectorAudioPolicy;
     selectedClipId?: string;
+    /** A video material explicitly selected by the director as the sample reference. */
+    sampleMaterialId?: string;
     pendingConfirmation?: DirectorPendingConfirmation;
 }
 export interface DirectorIntentResult {
@@ -38,6 +45,10 @@ export interface DirectorIntentResult {
     requiresConfirmation: boolean;
     nextAction: DirectorNextAction;
     assistantMessage: string;
+    /** Optional for wire compatibility; V2 agent responses always provide it. */
+    executionEffect?: DirectorExecutionEffect;
+    /** Exact user wording that the model treated as authorisation for a side effect. */
+    authorizationEvidence?: string;
 }
 export interface SampleStyleRecipe {
     style_id: string;

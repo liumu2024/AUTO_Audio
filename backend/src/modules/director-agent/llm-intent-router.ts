@@ -1,16 +1,14 @@
 import { z } from 'zod'
 
 import { env } from '../../config/env.js'
-import { routeConversationSurface } from './surface-router.js'
 import {
   deriveRuntimeSlotStatus,
-  parseDirectorSlotsFromText,
-  routeDirectorConversation,
 } from '../../../../shared/lib/director-understanding.js'
 import type { DirectorConversationRuntime } from '../../../../shared/lib/director-understanding.js'
 import type {
   DirectorContext,
   DirectorContextSlots,
+  DirectorExecutionEffect,
   DirectorIntentResult,
 } from '../../../../shared/types/director-context.js'
 
@@ -42,6 +40,23 @@ const NextActionSchema = z.enum([
   'WAIT',
 ])
 
+const ExecutionEffectSchema = z.enum([
+  'none',
+  'workspace_change',
+  'draft_change',
+  'delivery',
+])
+
+/**
+ * Models commonly serialize an omitted optional field as an empty string.
+ * Treat blank values as absent at the protocol boundary, before validating a
+ * side-effect proposal. This keeps a non-executing conversation from being
+ * discarded because it has no authorization evidence to provide.
+ */
+function optionalNonBlankString(value: unknown): unknown {
+  return typeof value === 'string' && !value.trim() ? undefined : value
+}
+
 const LlmIntentResultSchema = z.object({
   intent: IntentSchema,
   confidence: z.number().min(0).max(1),
@@ -60,11 +75,17 @@ const LlmIntentResultSchema = z.object({
       subtitlePolicy: z.enum(['keep', 'none', 'rewrite']).optional(),
       audioPolicy: z.enum(['keep_sample_bgm', 'user_audio', 'mute']).optional(),
       selectedClipId: z.string().optional(),
+      sampleMaterialId: z.string().optional(),
     })
     .default({}),
   missingSlots: z.array(z.string()).default([]),
   requiresConfirmation: z.boolean().default(false),
   nextAction: NextActionSchema,
+  executionEffect: ExecutionEffectSchema.default('none'),
+  authorizationEvidence: z.preprocess(
+    optionalNonBlankString,
+    z.string().trim().min(1).optional(),
+  ),
   assistantMessage: z.string().min(1),
   publicThoughts: z.array(z.string()).default([]),
 })
@@ -72,7 +93,7 @@ const LlmIntentResultSchema = z.object({
 type LlmIntentResult = z.infer<typeof LlmIntentResultSchema>
 
 export interface LlmIntentRouterOutput {
-  source: 'llm' | 'rule_fallback'
+  source: 'llm' | 'llm_unstructured_safe_reply' | 'context_fallback'
   result: DirectorIntentResult
   publicThoughts: string[]
   fallbackReason?: string
@@ -96,19 +117,17 @@ function summarizeCurrentTimeline(context: DirectorContext) {
   }
 }
 
-function hasEditableTimelineContext(
-  context: DirectorContext,
-  runtime: DirectorConversationRuntime,
-) {
-  if (hasCurrentV2Timeline(runtime)) return true
-  if (context.currentTimeline ?? context.directorState?.timeline) return true
-  return /当前已有 V2 时间线方案|最近一次 preview trace|最近一次 render trace/.test(
-    context.conversationSummary ?? '',
-  )
-}
-
 function hasCurrentV2Timeline(runtime: DirectorConversationRuntime) {
   return Boolean(runtime.hasV2Timeline)
+}
+
+function hasSelectedSampleCandidate(
+  runtime: DirectorConversationRuntime,
+  candidateId: string | undefined,
+) {
+  return Boolean(
+    candidateId && runtime.sampleCandidates?.some((candidate) => candidate.id === candidateId),
+  )
 }
 
 export function compactDirectorContextForPrompt(input: {
@@ -199,12 +218,13 @@ function buildPrompt(input: {
 
 你要同时完成两件事：
 1. 像专业混剪导演一样自然回应用户，不要模板腔，不要机械说“当前停留在...”，除非用户真的问状态。
-2. 输出严格 JSON，让系统知道下一步是否要解析样例、生成 V2 时间线方案、渲染、修改方案或追问。
+2. 在自然回复之外，判断这条消息是否真的授权了系统执行工作。讨论、提问、评价、比较、假设和创作咨询都可以且通常应该不执行任何工作。
 
 业务边界必须遵守：
 - sample video 只是结构、风格、节奏来源，不是成片素材。
 - reference materials / materials 才是成片候选素材。
 - 用户说“只解析/先解析/不要生成/不出片”时，不得生成或渲染。
+- 当没有已选样例、但 runtime.sampleCandidates 提供视频候选时，只有用户明确要求把某个视频作为样例理解，才可在 slotsPatch.sampleMaterialId 选择其中一个候选 id；绝不能凭关键词把任意视频自动升格为样例。
 - 风景、音乐、氛围向视频不要强行套 Hook/Demo/CTA，可以使用“开篇、推进、高潮、收束”等创作角色。
 - 执行前只校验对应分支：解析或复刻样例时需要样例视频；渲染时需要当前 V2 时间线；生成方案可直接使用文字，也可选用样例或素材。
 - 你只做意图路由和自然回复，不直接写最终时间线 JSON，不编造不存在的 Remotion preset。
@@ -230,6 +250,7 @@ V2 branch rules:
 Conversation freedom rules:
 - 如果用户是在聊天、咨询方案、解释结果、问你能做什么、讨论项目设计，不要因为缺样例或缺素材而要求上传；先自然回答问题，再给一个可选下一步。
 - 只有用户明确要执行“解析样例 / 生成方案 / 渲染导出 / 修改时间线方案”时，才检查该动作对应的条件；不要把样例或素材当成所有生成路径的前置条件。
+- 不要根据孤立关键词决定是否执行；要理解整句话是在提问、讨论、提出假设，还是在授权执行。
 - assistantMessage 不要复述内部状态机、slot、nextAction 或置信度；这些只放在 debug/publicThoughts。
 - 缺少条件时也要像协作伙伴一样说明“现在能聊什么、下一步补什么”，不要只说固定模板。
 
@@ -256,6 +277,8 @@ Revision / state machine rules:
   },
   "missingSlots": [],
   "requiresConfirmation": false,
+  "executionEffect": "none|workspace_change|draft_change|delivery",
+  "authorizationEvidence": "仅在 executionEffect 不是 none 时，摘录用户明确授权执行的原话；否则省略",
   "nextAction": "ASK_USER|ANALYZE_SAMPLE|GENERATE_TIMELINE|RENDER|REVISE_TIMELINE|ACKNOWLEDGE|NEED_BACKEND|NEED_SAMPLE|WAIT",
   "assistantMessage": "自然中文回复",
   "publicThoughts": ["给用户看的简短步骤"]
@@ -303,6 +326,11 @@ function extractJson(text: string): unknown {
     if (start < 0 || end <= start) throw new Error('LLM did not return JSON.')
     return JSON.parse(trimmed.slice(start, end + 1))
   }
+}
+
+/** Exported for the routing smoke test and for a single, audited model boundary. */
+export function parseDirectorModelDecision(text: string): LlmIntentResult {
+  return LlmIntentResultSchema.parse(extractJson(text))
 }
 
 async function callResponsesApi(promptText: string): Promise<unknown> {
@@ -359,291 +387,215 @@ function toDirectorIntentResult(candidate: LlmIntentResult): DirectorIntentResul
     missingSlots,
     requiresConfirmation,
     nextAction,
+    executionEffect: candidate.executionEffect,
+    authorizationEvidence: candidate.authorizationEvidence,
     assistantMessage: candidate.assistantMessage,
   }
 }
 
-function hasExplicitRenderCommand(prompt: string): boolean {
-  return /渲染吧|你渲染|现在渲染|开始渲染|重新渲染|导出吧|出片吧|渲染|导出|输出\s*mp4|输出\s*MP4/i.test(
-    prompt,
-  )
-}
-
-function currentTimelineActionAuthority(input: {
-  prompt: string
-  context: DirectorContext
-  runtime: DirectorConversationRuntime
-}) {
-  if (!hasCurrentV2Timeline(input.runtime) || hasExplicitRenderCommand(input.prompt)) {
-    return undefined
+function actionMatchesExecutionEffect(
+  effect: DirectorExecutionEffect,
+  nextAction: DirectorIntentResult['nextAction'],
+) {
+  if (effect === 'none') return true
+  if (effect === 'workspace_change') {
+    return nextAction === 'ANALYZE_SAMPLE'
   }
-
-  const surface = routeConversationSurface(input)
-  return surface.mode === 'edit' ? 'revise' : 'withhold_render'
+  if (effect === 'draft_change') {
+    return nextAction === 'GENERATE_TIMELINE' || nextAction === 'REVISE_TIMELINE'
+  }
+  return nextAction === 'RENDER'
 }
 
-export function applyDirectorIntentHardGuards(input: {
+/**
+ * This is the execution seam: the model interprets language, while code only
+ * validates the proposed side effect against runtime facts and V2 invariants.
+ * It deliberately does not inspect user wording or maintain keyword lists.
+ */
+export function finalizeModelDecision(input: {
   llmResult: DirectorIntentResult
-  prompt: string
   context: DirectorContext
   runtime: DirectorConversationRuntime
 }): DirectorIntentResult {
-  const { llmResult, runtime, prompt, context } = input
+  const { llmResult, context, runtime } = input
+  const effect = llmResult.executionEffect ?? 'none'
   const runtimeSlots = deriveRuntimeSlotStatus(runtime)
-  const explicitSlots = parseDirectorSlotsFromText(prompt)
   const slotsPatch = {
     ...llmResult.slotsPatch,
-    ...explicitSlots,
     ...runtimeSlots,
     contentDomain: llmResult.contentDomain,
-    aspectRatio: explicitSlots.aspectRatio ?? context.slots.aspectRatio,
-    durationSec: explicitSlots.durationSec ?? context.slots.durationSec,
-    styleIntensity: explicitSlots.styleIntensity ?? context.slots.styleIntensity,
+    aspectRatio: llmResult.slotsPatch.aspectRatio ?? context.slots.aspectRatio,
+    durationSec: llmResult.slotsPatch.durationSec ?? context.slots.durationSec,
+    styleIntensity: llmResult.slotsPatch.styleIntensity ?? context.slots.styleIntensity,
   }
-  const wantsOutput =
-    llmResult.intent === 'generate_timeline' ||
-    llmResult.intent === 'render' ||
-    llmResult.nextAction === 'GENERATE_TIMELINE' ||
-    llmResult.nextAction === 'RENDER'
-  const needsSampleBeforeWork =
-    llmResult.intent === 'analyze_sample' ||
-    llmResult.nextAction === 'ANALYZE_SAMPLE' ||
-    llmResult.nextAction === 'NEED_SAMPLE'
-  const analyzeOnly = /只解析|先解析|不要生成|不生成|不要出片|不出片/.test(prompt)
-  const explicitSampleAnalyze =
-    /重新理解|重新解析|重新分析|解析.*(样例|视频)|分析.*(样例|视频|主要内容|创作手法|视频结构|镜头|转场|节奏)|理解.*(样例|视频)|拆解.*(样例|视频)|看.*(样例|视频)/.test(prompt)
-  const explicitSampleReplicate = /复刻/.test(prompt)
-  const explicitRender = hasExplicitRenderCommand(prompt)
-  const explicitOutput = /生成|成片|做成|出片|渲染|导出|输出/.test(prompt)
-  const qualityFeedback =
-    /没用到|没有用到|没用完|太简单|看不到|不清楚|不满意|不符合|不对|不好|很差/.test(prompt)
-  const asksForRevision =
-    /改|修改|调整|重排|重新生成|换成|变成|用上|补上|增加|减少|改为|做成|生成|渲染|导出/.test(prompt)
-  const asksOpenQuestion =
-    /为什么|怎么|如何|是什么|是否|是不是|能否|可以吗|讲讲|解释|说明|区别|关系/.test(prompt)
-  const hasExecutionWording =
-    /帮我|请|直接|现在|开始|按|用|重新|继续|生成一版|生成方案|渲染吧|导出吧|解析这个|分析这个|修改为|调整为|改成|换成/.test(prompt)
+
+  if (effect === 'none') {
+    return {
+      ...llmResult,
+      slotsPatch,
+      nextAction: 'ACKNOWLEDGE',
+      missingSlots: [],
+      requiresConfirmation: false,
+      executionEffect: 'none',
+      authorizationEvidence: undefined,
+    }
+  }
+
+  if (!llmResult.authorizationEvidence?.trim() || !actionMatchesExecutionEffect(effect, llmResult.nextAction)) {
+    return {
+      ...llmResult,
+      slotsPatch,
+      intent: 'clarify',
+      nextAction: 'ASK_USER',
+      missingSlots: [],
+      requiresConfirmation: false,
+      executionEffect: 'none',
+      authorizationEvidence: undefined,
+      assistantMessage: `${llmResult.assistantMessage}\n\n如果你希望我实际执行，请直接确认要生成新方案、修改当前方案，或渲染当前版本。`,
+    }
+  }
 
   if (!runtime.backendEnabled) {
     return {
       ...llmResult,
       slotsPatch,
+      nextAction: 'NEED_BACKEND',
       missingSlots: ['backend'],
       requiresConfirmation: false,
-      nextAction: 'NEED_BACKEND',
-      assistantMessage: '现在执行端还没准备好，所以我暂时不能真正解析或渲染。不过你可以先把想法说给我，我可以先帮你梳理风格和流程。',
-    }
-  }
-
-  if (asksOpenQuestion && !hasExecutionWording && wantsOutput) {
-    return {
-      ...llmResult,
-      intent: 'clarify',
-      slotsPatch,
-      missingSlots: [],
-      requiresConfirmation: false,
-      nextAction: 'ACKNOWLEDGE',
-      assistantMessage:
-        llmResult.assistantMessage ||
-        '这个更像是在问方案或流程，我先回答问题，不会直接改方案或渲染。你要执行时再直接说“生成一版方案”或“按当前方案渲染”。',
-    }
-  }
-
-  const actionAuthority = currentTimelineActionAuthority({ prompt, context, runtime })
-  if (actionAuthority === 'revise') {
-    return {
-      ...llmResult,
-      intent: 'revise_timeline',
-      confidence: Math.max(llmResult.confidence, 0.9),
-      slotsPatch,
-      missingSlots: [],
-      requiresConfirmation: false,
-      nextAction: 'REVISE_TIMELINE',
-      assistantMessage: '我会先把这次对节奏、转场和字幕的要求写进当前 V2 时间线方案，更新后再由你决定是否渲染。',
+      executionEffect: 'none',
     }
   }
 
   if (
-    actionAuthority === 'withhold_render' &&
-    (llmResult.intent === 'render' || llmResult.nextAction === 'RENDER')
+    effect === 'workspace_change' &&
+    !runtime.sampleUrl.trim() &&
+    !hasSelectedSampleCandidate(runtime, llmResult.slotsPatch.sampleMaterialId)
   ) {
     return {
       ...llmResult,
-      intent: 'clarify',
       slotsPatch,
-      missingSlots: [],
-      requiresConfirmation: true,
-      nextAction: 'ASK_USER',
-      assistantMessage:
-        '右侧已有可编辑的 V2 时间线。你是在继续修改方案，还是确认要直接渲染当前版本？',
-    }
-  }
-
-  if ((explicitRender || llmResult.intent === 'render' || llmResult.nextAction === 'RENDER') && hasCurrentV2Timeline(runtime)) {
-    return {
-      ...llmResult,
-      intent: 'render',
-      confidence: Math.max(llmResult.confidence, 0.9),
-      slotsPatch,
-      missingSlots: [],
-      requiresConfirmation: false,
-      nextAction: 'RENDER',
-      assistantMessage: '好，我按右侧这版时间线直接渲染，不重新生成方案。',
-    }
-  }
-
-  if (!runtime.sampleUrl.trim() && (needsSampleBeforeWork || explicitSampleReplicate)) {
-    return {
-      ...llmResult,
-      intent: 'analyze_sample',
-      slotsPatch,
+      nextAction: 'NEED_SAMPLE',
       missingSlots: ['sampleVideoStatus'],
       requiresConfirmation: false,
-      nextAction: 'NEED_SAMPLE',
-      assistantMessage: '要开始拆样例的话，还需要先给我一条参考视频。你也可以先不上传，继续和我聊风格、结构或生成思路。',
+      executionEffect: 'none',
     }
   }
 
-  if (
-    (analyzeOnly || (explicitSampleAnalyze && !explicitOutput)) &&
-    runtime.sampleUrl.trim() &&
-    (!runtime.isSampleParsed || /重新|再次|再分析|再看/.test(prompt))
-  ) {
+  if (effect === 'delivery' && !hasCurrentV2Timeline(runtime)) {
     return {
       ...llmResult,
-      intent: 'analyze_sample',
       slotsPatch,
-      missingSlots: [],
+      nextAction: 'ASK_USER',
+      missingSlots: ['timeline'],
       requiresConfirmation: false,
-      nextAction: 'ANALYZE_SAMPLE',
-      assistantMessage: '明白，这次我只看样例，不往成片走。我会把它的段落、节奏和镜头方式先拆出来。',
+      executionEffect: 'none',
+      assistantMessage: '当前还没有可交付的 V2 时间线版本。先生成或采用一版方案后，我才能为你渲染。',
     }
   }
 
-  if (qualityFeedback && !asksForRevision) {
-    return {
-      ...llmResult,
-      intent: 'clarify',
-      slotsPatch,
-      missingSlots: [],
-      requiresConfirmation: false,
-      nextAction: 'ACKNOWLEDGE',
-      assistantMessage:
-        '你这个反馈是成立的。我先不直接覆盖当前方案：需要先把哪些素材没被使用、哪些镜头太空、哪些转场不贴样例列清楚。你确认要我改的话，可以直接说“按这个问题重排一版”或指定要保留几段、哪些图片必须出现。',
-    }
-  }
-
-  if (wantsOutput) {
-    const missingSlots: string[] = []
-    if (
-      (llmResult.intent === 'render' || llmResult.nextAction === 'RENDER') &&
-      !hasCurrentV2Timeline(runtime)
-    ) {
-      missingSlots.push('v2Timeline')
-    }
-
-    if (missingSlots.length) {
-      return {
-        ...llmResult,
-        slotsPatch,
-        missingSlots,
-        requiresConfirmation: false,
-        nextAction: 'ASK_USER',
-        assistantMessage:
-          '现在还没有可渲染的 V2 时间线方案。你可以先按文字、可选样例参考或可用素材生成一版方案，再让我渲染。',
-      }
-    }
-  }
-
-  if (
-    llmResult.nextAction === 'REVISE_TIMELINE' &&
-    !hasEditableTimelineContext(context, runtime) &&
-    runtime.isSampleParsed
-  ) {
-    return {
-      ...llmResult,
-      slotsPatch,
-      nextAction: 'ACKNOWLEDGE',
-      assistantMessage:
-        `${llmResult.assistantMessage} 我先把这个偏好记住；现在还没有可编辑方案，等你让我生成一版方案时会一起带进去。`,
-    }
-  }
-
-  return {
-    ...llmResult,
-    slotsPatch,
-  }
+  return { ...llmResult, slotsPatch }
 }
 
-function ruleFallback(input: {
+function fallbackContextFacts(input: {
+  context: DirectorContext
+  runtime: DirectorConversationRuntime
+}) {
+  const timeline = summarizeCurrentTimeline(input.context)
+  const facts: string[] = []
+
+  if (timeline) {
+    const revision = timeline.currentRevision ?? timeline.savedRevision
+    facts.push(
+      revision == null
+        ? `当前有一版 ${timeline.kind} 草稿`
+        : `当前有一版 ${timeline.kind} 草稿（修订 ${revision}）`,
+    )
+  }
+  if (input.context.sampleVideo?.reference?.summary) {
+    facts.push(`样例理解摘要：${input.context.sampleVideo.reference.summary}`)
+  }
+  if (input.context.materials.length) {
+    const names = input.context.materials
+      .slice(0, 3)
+      .map((item) => item.name ?? item.type)
+      .join('、')
+    facts.push(`可用素材：${names}${input.context.materials.length > 3 ? ' 等' : ''}`)
+  }
+  if (!facts.length && input.runtime.hasV2Timeline) {
+    facts.push('当前存在可编辑的 V2 时间线')
+  }
+  return facts
+}
+
+function quotedPrompt(prompt: string) {
+  const compact = prompt.replace(/\s+/g, ' ').trim()
+  return compact.length > 180 ? `${compact.slice(0, 177)}…` : compact
+}
+
+/**
+ * Model failures are deliberately non-executing. Unlike the retired rule
+ * fallback, this response does not infer an operation from keywords: it keeps
+ * the user's actual question and only supplies durable V2 context facts.
+ */
+export function buildDirectorContextFallback(input: {
   prompt: string
   context: DirectorContext
   runtime: DirectorConversationRuntime
   reason?: string
 }): LlmIntentRouterOutput {
-  const prompt = input.prompt.trim()
-  if (
-    /讲讲|解释一下|分析结果|解析结果|刚才分析|刚才解析|结果给我|看懂了什么|总结一下/.test(
-      prompt,
-    ) &&
-    input.runtime.isSampleParsed
-  ) {
-    const runtimeSlots = deriveRuntimeSlotStatus(input.runtime)
-    const result: DirectorIntentResult = {
-      intent: 'clarify',
-      confidence: 0.82,
-      contentDomain: input.context.slots.contentDomain,
-      slotsPatch: { ...runtimeSlots, contentDomain: input.context.slots.contentDomain },
-      missingSlots: [],
-      requiresConfirmation: false,
-      nextAction: 'ACKNOWLEDGE',
-      assistantMessage:
-        input.context.conversationSummary?.trim() ||
-        '样例我已经理解过了。你可以继续问我它的节奏、镜头和风格，也可以直接按文字生成方案，或补充素材后再生成。',
-    }
-    return {
-      source: 'rule_fallback',
-      result,
-      fallbackReason: input.reason,
-      publicThoughts: input.reason
-        ? [`意图模型暂不可用，已用当前样例大纲生成解释：${input.reason.slice(0, 120)}`]
-        : ['已用当前样例大纲生成解释。'],
-    }
-  }
+  const facts = fallbackContextFacts(input)
+  const question = quotedPrompt(input.prompt)
+  const contextLine = facts.length ? ` 我目前掌握的是：${facts.join('；')}。` : ''
+  const assistantMessage = question
+    ? `我先保留你刚才的问题：“${question}”。${contextLine} 导演理解暂时不可用，所以我不会把这句话猜成修改、生成或渲染指令；你可以继续展开你的想法，模型恢复后会按完整语义再判断。`
+    : `我会保留当前讨论和已有的 V2 上下文，不会发起修改、生成或渲染。你可以继续描述想法。`
 
-  if (/怎么做|如何做|方案|思路|建议/.test(prompt) && /风景|风光|旅拍|混剪|自然|日落|山水|海边/.test(prompt)) {
-    const runtimeSlots = deriveRuntimeSlotStatus(input.runtime)
-    const result: DirectorIntentResult = {
-      intent: 'clarify',
-      confidence: 0.78,
-      contentDomain: 'landscape_montage',
-      slotsPatch: { ...runtimeSlots, contentDomain: 'landscape_montage' },
-      missingSlots: [],
-      requiresConfirmation: false,
-      nextAction: 'ACKNOWLEDGE',
-      assistantMessage:
-        '风景混剪可以先拆参考视频的节奏、转场、画面运动和情绪走向，再用你自己的风景素材去填画面。后面出方案时，我会把这些风格线索翻译成更具体的镜头时长、字幕、转场和覆盖层安排，而不是直接照搬样例。',
-    }
-    return {
-      source: 'rule_fallback',
-      result,
-      fallbackReason: input.reason,
-      publicThoughts: ['已识别为风景混剪创作咨询，不触发解析或生成任务。'],
-    }
-  }
-
-  const result = routeDirectorConversation({
-    prompt: input.prompt,
-    slots: input.context.slots,
-    runtime: input.runtime,
-  })
   return {
-    source: 'rule_fallback',
-    result,
+    source: 'context_fallback',
+    result: {
+      intent: 'clarify',
+      confidence: 0,
+      contentDomain: input.context.slots.contentDomain,
+      slotsPatch: {
+        ...deriveRuntimeSlotStatus(input.runtime),
+        contentDomain: input.context.slots.contentDomain,
+      },
+      missingSlots: [],
+      requiresConfirmation: false,
+      nextAction: 'ACKNOWLEDGE',
+      executionEffect: 'none',
+      assistantMessage,
+    },
     fallbackReason: input.reason,
-    publicThoughts: input.reason
-      ? [`意图模型暂不可用，已切换到安全规则路由：${input.reason.slice(0, 160)}`]
-      : ['已使用安全规则路由完成判断。'],
+    publicThoughts: ['导演理解暂时不可用；已保留这轮问题与当前 V2 上下文，不会执行工作流。'],
+  }
+}
+
+function safeUnstructuredLlmReply(input: {
+  text: string
+  context: DirectorContext
+  runtime: DirectorConversationRuntime
+}): LlmIntentRouterOutput | undefined {
+  const message = input.text.trim()
+  if (!message || message.length > 4_000 || /^[{[]/.test(message)) return undefined
+
+  return {
+    source: 'llm_unstructured_safe_reply',
+    result: {
+      intent: 'clarify',
+      confidence: 0.5,
+      contentDomain: input.context.slots.contentDomain,
+      slotsPatch: {
+        ...deriveRuntimeSlotStatus(input.runtime),
+        contentDomain: input.context.slots.contentDomain,
+      },
+      missingSlots: [],
+      requiresConfirmation: false,
+      nextAction: 'ACKNOWLEDGE',
+      executionEffect: 'none',
+      assistantMessage: message,
+    },
+    publicThoughts: ['导演模型给出了自由回复；因未返回执行协议，本轮只作为讨论处理。'],
   }
 }
 
@@ -653,16 +605,29 @@ export async function routeDirectorIntentWithLlm(input: {
   runtime: DirectorConversationRuntime
 }): Promise<LlmIntentRouterOutput> {
   if (!env.directorAgentEnabled) {
-    return ruleFallback({ ...input, reason: 'DIRECTOR_AGENT_ENABLED=false' })
+    return buildDirectorContextFallback({
+      ...input,
+      reason: 'director agent is disabled',
+    })
   }
 
   try {
     const raw = await callResponsesApi(buildPrompt(input))
     const text = extractText(raw)
-    const parsed = LlmIntentResultSchema.parse(extractJson(text))
-  const guarded = applyDirectorIntentHardGuards({
+    let parsed: LlmIntentResult
+    try {
+      parsed = parseDirectorModelDecision(text)
+    } catch {
+      return (
+        safeUnstructuredLlmReply({ ...input, text }) ??
+        buildDirectorContextFallback({
+          ...input,
+          reason: 'director model returned no valid response protocol',
+        })
+      )
+    }
+    const guarded = finalizeModelDecision({
       llmResult: toDirectorIntentResult(parsed),
-      prompt: input.prompt,
       context: input.context,
       runtime: input.runtime,
     })
@@ -673,9 +638,9 @@ export async function routeDirectorIntentWithLlm(input: {
       publicThoughts: parsed.publicThoughts.slice(0, 4),
     }
   } catch (error) {
-    return ruleFallback({
+    return buildDirectorContextFallback({
       ...input,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: error instanceof Error ? error.name : 'director model request failed',
     })
   }
 }

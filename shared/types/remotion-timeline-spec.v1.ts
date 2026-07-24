@@ -35,6 +35,17 @@ export type RemotionTimelineSceneType =
 export type RemotionTimelineFit = 'cover' | 'contain'
 export type RemotionImageMotion = 'none' | 'slow_zoom_in' | 'slow_zoom_out' | 'pan_left' | 'pan_right'
 
+/**
+ * Human-readable plan data for the editor and trace. It never renders as video
+ * text. This keeps a material filename or shot explanation separate from a
+ * caption the audience is meant to see.
+ */
+export interface RemotionTimelineSceneCreativeIntent {
+  title?: string
+  description?: string
+  material_label?: string
+}
+
 export interface RemotionTimelineScene {
   id: string
   type: RemotionTimelineSceneType
@@ -43,12 +54,15 @@ export interface RemotionTimelineScene {
   asset_id?: string
   fit?: RemotionTimelineFit
   background?: string
+  /** On-screen copy for Remotion-only text/card scenes. */
   title?: string
   subtitle?: string
   body?: string
   accent_color?: string
   motion?: RemotionImageMotion
   visual_role?: 'hook' | 'proof' | 'feature' | 'transition' | 'cta'
+  /** Editor-only shot plan; never rendered as a caption. */
+  creative_intent?: RemotionTimelineSceneCreativeIntent
   note?: string
 }
 

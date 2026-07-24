@@ -75,6 +75,9 @@ export function directorActionFromIntentResult(input) {
     const payload = {
         missingSlots: result.missingSlots,
         requiresConfirmation: result.requiresConfirmation,
+        ...(result.executionEffect && result.executionEffect !== 'none'
+            ? { executionEffect: result.executionEffect, authorizationEvidence: result.authorizationEvidence }
+            : {}),
     };
     if (includesPluginRequest(input.prompt)) {
         type = 'REQUEST_PLUGIN';

@@ -1,4 +1,4 @@
-import type { DirectorContextSlots, DirectorIntentResult, DirectorUserIntent } from './director-context.js';
+import type { DirectorContextSlots, DirectorExecutionEffect, DirectorIntentResult, DirectorUserIntent } from './director-context.js';
 /** 对话层可输出的导演动作（不直接绑定具体任务实现） */
 export type DirectorActionType = 'ANALYZE_SAMPLE' | 'ANALYZE_MATERIALS' | 'GENERATE_TIMELINE' | 'REVISE_TIMELINE' | 'RENDER_VIDEO' | 'ASK_USER' | 'REQUEST_PLUGIN';
 export type DirectorToolName = 'sample_understanding.analyze' | 'material.analyze_basic' | 'timeline.plan' | 'timeline.revise' | 'timeline.validate' | 'timeline.effect_map' | 'video.render' | 'user.ask';
@@ -41,6 +41,8 @@ export interface DirectorActionPayload {
     pluginId?: string;
     requiresConfirmation?: boolean;
     executionPlan?: DirectorExecutionPlan;
+    executionEffect?: Exclude<DirectorExecutionEffect, 'none'>;
+    authorizationEvidence?: string;
 }
 export interface DirectorAction {
     type: DirectorActionType;

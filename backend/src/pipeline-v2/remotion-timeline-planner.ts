@@ -43,13 +43,13 @@ function textFromPrompt(prompt: string): {
     return {
       title: '风格化时间线方案',
       subtitle: '按素材编排镜头、动效和转场',
-      body: '根据样例节奏和用户素材安排画面、运镜、转场和文字层。',
+      body: '基于用户的创作要求安排画面、运镜、转场和文字层。',
     }
   }
   return {
     title: trimmed.length > 24 ? `${trimmed.slice(0, 24)}...` : trimmed,
     subtitle: '按当前输入生成的分镜方案',
-    body: '根据样例节奏和用户素材安排画面、运镜、转场和文字层。',
+    body: '基于用户的创作要求安排画面、运镜、转场和文字层。',
   }
 }
 
@@ -271,14 +271,16 @@ export function buildDeterministicRemotionTimelineSpec(
         duration_sec: duration,
         asset_id: asset.id,
         fit: 'cover',
-        title,
-        subtitle: asset.label ?? '用户视频素材',
-        body: sceneBodyForAsset({
-          assetLabel: asset.label,
+        creative_intent: {
           title,
-          motion: '沿用素材原始运动',
-          copyBody: body,
-        }),
+          material_label: asset.label ?? '用户视频素材',
+          description: sceneBodyForAsset({
+            assetLabel: asset.label,
+            title,
+            motion: '沿用素材原始运动',
+            copyBody: body,
+          }),
+        },
         visual_role: role,
       })
       mainSceneAssets.add(asset.id)
@@ -301,14 +303,16 @@ export function buildDeterministicRemotionTimelineSpec(
         asset_id: asset.id,
         fit: 'cover',
         motion,
-        title,
-        subtitle: asset.label ?? '用户图片素材',
-        body: sceneBodyForAsset({
-          assetLabel: asset.label,
+        creative_intent: {
           title,
-          motion: motionText(index),
-          copyBody: body,
-        }),
+          material_label: asset.label ?? '用户图片素材',
+          description: sceneBodyForAsset({
+            assetLabel: asset.label,
+            title,
+            motion: motionText(index),
+            copyBody: body,
+          }),
+        },
         visual_role: role,
       })
       mainSceneAssets.add(asset.id)
@@ -332,6 +336,7 @@ export function buildDeterministicRemotionTimelineSpec(
         body,
         accent_color: index % 2 === 0 ? '#38bdf8' : '#f59e0b',
         visual_role: role,
+        creative_intent: { title, description: body },
       })
       if (creationMode === 'text_to_video') {
         materialJobs.push({
@@ -354,21 +359,24 @@ export function buildDeterministicRemotionTimelineSpec(
       }
     }
 
-    overlays.push({
-      id: `caption_${String(index + 1).padStart(3, '0')}`,
-      type: index === 0 ? 'title' : 'caption',
-      scene_id: sceneId,
-      start_sec: Number((start + Math.min(0.2, duration / 5)).toFixed(3)),
-      end_sec: Number((start + Math.max(0.4, duration - 0.15)).toFixed(3)),
-      text:
-        sceneCaptions[0] ??
-        (index === 0 ? copy.title : `${title}：${scenes[index]!.subtitle ?? copy.subtitle}`),
-      x_pct: 50,
-      y_pct: index === 0 ? 78 : 86,
-      width_pct: 78,
-      background: index === 0 ? 'rgba(15, 23, 42, 0.42)' : 'rgba(15, 23, 42, 0.66)',
-      animation: index === 0 ? 'pop' : 'slide_up_fade',
-    })
+    // A deterministic fallback has no visual understanding. It may preserve
+    // explicit user copy, but must not turn asset metadata into fake captions.
+    const overlayText = sceneCaptions[0] ?? (!asset && index === 0 ? copy.title : undefined)
+    if (overlayText) {
+      overlays.push({
+        id: `caption_${String(index + 1).padStart(3, '0')}`,
+        type: index === 0 ? 'title' : 'caption',
+        scene_id: sceneId,
+        start_sec: Number((start + Math.min(0.2, duration / 5)).toFixed(3)),
+        end_sec: Number((start + Math.max(0.4, duration - 0.15)).toFixed(3)),
+        text: overlayText,
+        x_pct: 50,
+        y_pct: index === 0 ? 78 : 86,
+        width_pct: 78,
+        background: index === 0 ? 'rgba(15, 23, 42, 0.42)' : 'rgba(15, 23, 42, 0.66)',
+        animation: index === 0 ? 'pop' : 'slide_up_fade',
+      })
+    }
     cursor += duration
   }
 
@@ -426,6 +434,7 @@ export function buildDeterministicRemotionTimelineSpec(
     },
     notes: [
       'Deterministic timeline planner uses Remotion for scene composition and does not generate custom components.',
+      'Deterministic planning preserves explicit user caption requirements but does not infer captions from image content.',
       input.materials?.length
         ? `Received ${input.materials.length} user materials; visual materials are promoted to main scenes by default, with image_badge only used when the requested scene count is smaller than the material count.`
         : 'No material array was provided; legacy single-asset fields were used.',

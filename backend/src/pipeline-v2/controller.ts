@@ -69,6 +69,20 @@ function sampleUnderstandingValue(value: unknown): V2PlannerInput['sampleUnderst
   return value as V2PlannerInput['sampleUnderstanding']
 }
 
+function planningContextValue(value: unknown): V2PlannerInput['planningContext'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const kind = record.kind
+  if (kind !== 'initial' && kind !== 'revision') return undefined
+  return {
+    kind,
+    draftId: stringValue(record.draftId) || undefined,
+    baseRevision: numberValue(record.baseRevision),
+    selectedClipId: stringValue(record.selectedClipId) || undefined,
+    authorizationEvidence: stringValue(record.authorizationEvidence) || undefined,
+  }
+}
+
 export function v2PlannerInputFromRequest(
   req: Request,
   taskId: string,
@@ -83,6 +97,7 @@ export function v2PlannerInputFromRequest(
     referenceVideoPath: stringValue(req.body?.referenceVideoPath) || undefined,
     sampleUnderstanding: sampleUnderstandingValue(req.body?.sampleUnderstanding),
     conversationSummary: stringValue(req.body?.conversationSummary) || undefined,
+    planningContext: planningContextValue(req.body?.planningContext),
     imageSrc: stringValue(req.body?.imageSrc) || undefined,
     materials: materialInputsValue(req.body?.materials),
     durationSec: numberValue(req.body?.durationSec),

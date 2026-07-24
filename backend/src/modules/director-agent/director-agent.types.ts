@@ -31,7 +31,7 @@ export type DirectorAgentStreamEvent =
       intent: string
       confidence: number
       contentDomain: string
-      source?: 'llm' | 'rule_fallback'
+      source?: 'llm' | 'llm_unstructured_safe_reply' | 'context_fallback'
     }
   | {
       type: 'slot_update'

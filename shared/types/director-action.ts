@@ -1,5 +1,6 @@
 import type {
   DirectorContextSlots,
+  DirectorExecutionEffect,
   DirectorIntentResult,
   DirectorUserIntent,
 } from './director-context.js'
@@ -86,6 +87,8 @@ export interface DirectorActionPayload {
   pluginId?: string
   requiresConfirmation?: boolean
   executionPlan?: DirectorExecutionPlan
+  executionEffect?: Exclude<DirectorExecutionEffect, 'none'>
+  authorizationEvidence?: string
 }
 
 export interface DirectorAction {

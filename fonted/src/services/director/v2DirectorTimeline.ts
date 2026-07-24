@@ -29,7 +29,7 @@ export interface V2DirectorTimelineInput {
   durationSec?: number
   materials: V2DirectorMaterial[]
   plannerMode?: 'deterministic' | 'llm'
-  conversationSummary?: string
+  planningContext?: api.V2TimelinePayload['planningContext']
 }
 
 interface PreparedAsset {
@@ -204,7 +204,7 @@ async function buildPayload(
     sampleUnderstanding: sample
       ? useV2TimelineStore.getState().sampleSession?.understanding ?? undefined
       : undefined,
-    conversationSummary: input.conversationSummary,
+    planningContext: input.planningContext,
     plannerMode: input.plannerMode ?? 'llm',
     allowPlannerFallback: true,
     durationSec: input.durationSec,
@@ -298,8 +298,15 @@ export async function previewV2DirectorTimeline(
   const { preparedMaterials, ...requestPayload } = payload
   taskStore.updateProgress(36, '生成 V2 Timeline', '[V2] 调用 timeline preview。')
   const current = useV2TimelineStore.getState()
+  const planningContext = payload.planningContext ?? {
+    kind: current.draftId ? 'revision' as const : 'initial' as const,
+    draftId: current.draftId ?? undefined,
+    baseRevision: current.draftRevision ?? undefined,
+    selectedClipId: current.selectedClipId ?? undefined,
+  }
   const preview = await api.previewV2TimelineDraft({
     ...requestPayload,
+    planningContext,
     ...(current.draftId && current.draftRevision
       ? { draftId: current.draftId, baseRevision: current.draftRevision }
       : {}),

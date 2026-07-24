@@ -51,7 +51,7 @@ export type DirectorAgentStreamEvent =
       intent: string
       confidence: number
       contentDomain: string
-      source?: 'llm' | 'rule_fallback'
+      source?: 'llm' | 'llm_unstructured_safe_reply' | 'context_fallback'
     }
   | {
       type: 'slot_update'
@@ -92,6 +92,13 @@ export interface V2TimelinePayload {
   referenceVideoPath?: string
   sampleUnderstanding?: V2SampleUnderstandingResult
   conversationSummary?: string
+  planningContext?: {
+    kind: 'initial' | 'revision'
+    draftId?: string
+    baseRevision?: number
+    selectedClipId?: string
+    authorizationEvidence?: string
+  }
   materials?: Array<{
     id: string
     name?: string

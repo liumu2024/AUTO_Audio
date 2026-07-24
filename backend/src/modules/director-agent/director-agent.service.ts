@@ -80,7 +80,12 @@ export async function* streamDirectorAgentChat(
   for (const thought of routed.publicThoughts) {
     yield {
       type: 'thought',
-      title: routed.source === 'llm' ? '导演判断' : '安全兜底',
+      title:
+        routed.source === 'context_fallback'
+          ? '上下文保留'
+          : routed.source === 'llm_unstructured_safe_reply'
+            ? '自由回复'
+            : '导演判断',
       content: thought,
     }
     await wait(20)
@@ -92,6 +97,10 @@ export async function* streamDirectorAgentChat(
     runtime: input.runtime,
     result: routed.result,
   })
+  const shouldExecute =
+    routed.result.executionEffect !== undefined &&
+    routed.result.executionEffect !== 'none' &&
+    action.type !== 'ASK_USER'
 
   yield {
     type: 'intent',
@@ -109,29 +118,37 @@ export async function* streamDirectorAgentChat(
   }
   await wait(15)
 
-  yield {
-    type: 'thought',
-    title: '下一步',
-    content: `${actionLabel(action.type)}。${action.message}`,
-  }
-  await wait(15)
-
-  yield {
-    type: 'action_plan',
-    action,
-  }
-  await wait(5)
-
-  if (input.context.directorState) {
+  if (shouldExecute) {
     yield {
-      type: 'state_update',
-      state: input.context.directorState,
+      type: 'thought',
+      title: '执行建议',
+      content: `${actionLabel(action.type)}。${action.message}`,
+    }
+    await wait(15)
+
+    yield {
+      type: 'action_plan',
+      action,
     }
     await wait(5)
+
+    if (input.context.directorState) {
+      yield {
+        type: 'state_update',
+        state: input.context.directorState,
+      }
+      await wait(5)
+    }
+
+    yield {
+      type: 'done',
+      action,
+    }
+    return
   }
 
   yield {
     type: 'done',
-    action,
+    message: routed.result.assistantMessage,
   }
 }

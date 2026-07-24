@@ -13,7 +13,11 @@ import type {
   DirectorPlanStep,
   DirectorToolName,
 } from '../types/director-action.js'
-import type { DirectorContext, DirectorContextSlots } from '../types/director-context.js'
+import type {
+  DirectorContext,
+  DirectorContextSlots,
+  DirectorExecutionEffect,
+} from '../types/director-context.js'
 import type { DirectorIntentResult, DirectorNextAction } from '../types/director-context.js'
 
 export type {
@@ -49,6 +53,10 @@ export interface DirectorActionExecutionContext {
   }>
   conversationSummary?: string
   activeTaskId?: string | null
+  execution?: {
+    effect?: Exclude<DirectorExecutionEffect, 'none'>
+    authorizationEvidence?: string
+  }
 }
 
 export interface DirectorActionExecutor {
@@ -211,6 +219,9 @@ export function directorActionFromIntentResult(input: ResolveDirectorActionInput
   const payload: DirectorActionPayload = {
     missingSlots: result.missingSlots,
     requiresConfirmation: result.requiresConfirmation,
+    ...(result.executionEffect && result.executionEffect !== 'none'
+      ? { executionEffect: result.executionEffect, authorizationEvidence: result.authorizationEvidence }
+      : {}),
   }
 
   if (includesPluginRequest(input.prompt)) {

@@ -3,7 +3,7 @@ import type { RemotionTimelineSpecV1 } from '@shared/types/remotion-timeline-spe
 import type { TimelineProject } from '@/types/timeline'
 
 function sceneTitle(scene: RemotionTimelineSpecV1['scenes'][number]): string {
-  return scene.title ?? scene.subtitle ?? scene.note ?? scene.id
+  return scene.creative_intent?.title ?? scene.title ?? scene.note ?? scene.id
 }
 
 /** A view-only projection. It does not create or update any V1 workflow state. */
@@ -24,8 +24,12 @@ export function buildV2TimelineProject(spec: RemotionTimelineSpecV1): TimelinePr
         end_sec: scene.start_sec + scene.duration_sec,
         label: `${scene.type}: ${sceneTitle(scene)}`,
         anchor_id: scene.id,
-        visual_generation_prompt: scene.note ?? scene.title,
-        content_rewrite_instruction: scene.subtitle ?? scene.body,
+        visual_generation_prompt:
+          scene.note ?? scene.creative_intent?.description ?? scene.title,
+        content_rewrite_instruction:
+          scene.type === 'user_video' || scene.type === 'ai_video' || scene.type === 'image_motion'
+            ? undefined
+            : scene.subtitle ?? scene.body,
       })),
       ...spec.overlays.map((overlay) => ({
         id: `v2-overlay-${overlay.id}`,

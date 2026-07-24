@@ -17,3 +17,5 @@
 - **Reference summary**: The compact, V2-facing creative facts distilled from a sample video; it guides style and structure but is never a final-video asset.
 - **Material summary**: The compact, V2-facing creative facts for one candidate user material; it guides timeline placement without exposing a legacy asset-analysis protocol.
 - **Timeline action**: A Director instruction to generate, revise, validate, or render a V2 Timeline. It is distinct from legacy RenderPlan actions.
+- **Scene creative intent**: Editor-only explanation of a shot's narrative role, visual treatment, and material usage. It is never on-screen copy.
+- **On-screen copy**: Text intentionally visible in the finished video. For image/video scenes it exists only in `overlays[].text`; scene title/subtitle/body are reserved for text/card scenes.

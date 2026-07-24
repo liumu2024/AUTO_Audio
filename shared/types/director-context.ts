@@ -34,6 +34,16 @@ export type DirectorNextAction =
   | 'NEED_SAMPLE'
   | 'WAIT'
 
+/**
+ * The model's assessment of whether a message should have a side effect.
+ * `none` is the normal result for discussion, questions, critique, and advice.
+ */
+export type DirectorExecutionEffect =
+  | 'none'
+  | 'workspace_change'
+  | 'draft_change'
+  | 'delivery'
+
 export type DirectorContentDomain =
   | 'landscape_montage'
   | 'music_video'
@@ -71,6 +81,8 @@ export interface DirectorContextSlots {
   subtitlePolicy: DirectorSubtitlePolicy
   audioPolicy: DirectorAudioPolicy
   selectedClipId?: string
+  /** A video material explicitly selected by the director as the sample reference. */
+  sampleMaterialId?: string
   pendingConfirmation?: DirectorPendingConfirmation
 }
 
@@ -83,6 +95,10 @@ export interface DirectorIntentResult {
   requiresConfirmation: boolean
   nextAction: DirectorNextAction
   assistantMessage: string
+  /** Optional for wire compatibility; V2 agent responses always provide it. */
+  executionEffect?: DirectorExecutionEffect
+  /** Exact user wording that the model treated as authorisation for a side effect. */
+  authorizationEvidence?: string
 }
 
 export interface SampleStyleRecipe {

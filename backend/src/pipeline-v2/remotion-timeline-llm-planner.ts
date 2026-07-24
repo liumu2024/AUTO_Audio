@@ -7,6 +7,8 @@ import {
   assertValidRemotionTimelineSpec,
   validateRemotionTimelineSpec,
 } from '../../../shared/lib/remotion-timeline-validator.js'
+import { normalizeV2TimelineTextOwnership } from '../../../shared/lib/remotion-timeline-text-ownership.js'
+import { isLikelyExternallyReachableUrl } from '../../../shared/lib/external-url-access.js'
 import {
   REMOTION_TIMELINE_SPEC_SCHEMA_VERSION,
   type RemotionTimelineSpecV1,
@@ -16,12 +18,28 @@ import {
   type V2RemotionTimelinePlannerInput,
 } from './remotion-timeline-planner.js'
 import { extractV2TimelineHardRequirements } from './hard-requirements.js'
+import {
+  deleteV2PlannerFile,
+  uploadV2PlannerImageFile,
+  waitForV2PlannerFileReady,
+} from './ark-file-input.js'
+
+const MAX_V2_PLANNER_IMAGE_INPUTS = 12
+
+export interface V2TimelineVisualInputReport {
+  requested_image_material_count: number
+  attached_image_input_count: number
+  ark_file_input_count: number
+  public_url_input_count: number
+  omitted_material_ids: string[]
+}
 
 export interface V2TimelineLlmPlannerResult {
   spec: RemotionTimelineSpecV1
   rawResponse: unknown
   extractionReport: StructuredJsonExtractionReport
   promptText: string
+  visualInputReport: V2TimelineVisualInputReport
 }
 
 function compactSampleUnderstanding(input: V2RemotionTimelinePlannerInput) {
@@ -55,7 +73,10 @@ function compactSampleUnderstanding(input: V2RemotionTimelinePlannerInput) {
   }
 }
 
-export function buildV2TimelinePlannerPrompt(input: V2RemotionTimelinePlannerInput): string {
+export function buildV2TimelinePlannerPrompt(
+  input: V2RemotionTimelinePlannerInput,
+  visualInputReport?: V2TimelineVisualInputReport,
+): string {
   const example = buildDeterministicRemotionTimelineSpec(input)
   const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
   const creationMode =
@@ -82,7 +103,10 @@ export function buildV2TimelinePlannerPrompt(input: V2RemotionTimelinePlannerInp
     '  - sample_replicate: learn structure, pacing, atmosphere, and transitions from sample_understanding; user materials or generated assets provide final visuals.',
     '  - material_brief: no sample video is available; infer structure from user_prompt and material_assets only. Do not mention sample rhythm or sample style.',
     '  - text_to_video: no sample and no visual material are available; plan AI video scenes for realistic visuals when the provider can support them, and keep Remotion captions/cards as fallback.',
-    '- conversation_summary is context only. user_prompt has priority when there is any conflict.',
+    '- planning_context contains stable draft/version facts only. user_prompt has priority when there is any conflict.',
+    '- revision_context, when present, is the authoritative persisted V2 draft being revised. It is not a chat recap.',
+    '- For a revision, preserve scenes, assets, transitions, overlays, and user notes that the user did not ask to change. Make a broader rewrite only when the user explicitly requests one.',
+    '- The selected revision item identifies the user\'s current focus, not an instruction to ignore the rest of the timeline.',
     '- render_policy.allow_custom_component must be false.',
     '- Avoid unnecessary generated video jobs, but do not hide user images just to keep the plan short.',
     '- If multiple image materials are provided and the user does not request a smaller scene count, promote each visual image to a main scene up to 12 scenes.',
@@ -92,7 +116,11 @@ export function buildV2TimelinePlannerPrompt(input: V2RemotionTimelinePlannerInp
     '- Choose user-facing scene wording from the detected content domain instead of a fixed template. Examples: product can use 展示/卖点/转化; narrative can use 起因/推进/转折/结尾; landscape/music can use 氛围/节奏/视觉重点; education can use 问题/解释/示例/总结.',
     '- If the content domain is unclear, use neutral structure labels such as 开篇引入、内容推进、重点展开、衔接过渡、结尾收束.',
     '- Scene title, subtitle, body, and overlay text should be concise Chinese when the user prompt is Chinese.',
-    '- Scene body should tell a normal user what appears in the shot, which material is used, how it moves, and how it connects to the next shot.',
+    '- For user_video, ai_video, and image_motion scenes, do not use title, subtitle, or body as visible copy. Put the shot explanation in creative_intent { title, description, material_label }; only overlays[].text is visible in the finished video.',
+    '- For remotion_card, caption_scene, and data_viz scenes, title, subtitle, and body are intentional on-screen card copy. Do not put internal filenames or planning prose there.',
+    '- Scene creative_intent should tell a normal user what appears in the shot, which material is used, how it moves, and how it connects to the next shot.',
+    '- Asset labels, file names, internal ids, and scene roles are production metadata. Never use them as overlay text unless the user explicitly asked to show that exact text.',
+    '- If attached image inputs are present, use their visible content to write scene creative_intent and optional original captions. If none are attached, do not claim that captions were derived from image content.',
     '- For every ai_video scene, set asset_id to the output_asset_id of that scene\'s generate_video material job. The generated asset may be absent from assets until material resolution.',
     '- A generate_video prompt must describe the concrete subject, environment, lighting, camera movement, and intended action; do not copy the user request as a meta instruction.',
     '- hard_requirements.required_captions are mandatory user-provided caption lines. Every required caption must appear verbatim in overlays[].text exactly once or more.',
@@ -116,7 +144,8 @@ export function buildV2TimelinePlannerPrompt(input: V2RemotionTimelinePlannerInp
         task_id: input.taskId,
         creation_mode: creationMode,
         user_prompt: input.prompt,
-        conversation_summary: input.conversationSummary ?? null,
+        planning_context: input.planningContext ?? null,
+        revision_context: input.revisionContext ?? null,
         main_video_asset_id: example.assets.find((asset) => asset.id === 'main_video_asset')?.id ?? null,
         main_video_path: example.assets.find((asset) => asset.id === 'main_video_asset')?.src ?? null,
         reference_video_path: input.referenceVideoPath ?? null,
@@ -133,6 +162,13 @@ export function buildV2TimelinePlannerPrompt(input: V2RemotionTimelinePlannerInp
         sample_understanding: compactSampleUnderstanding(input),
         hard_requirements: hardRequirements,
         external_input_image_url: input.inputImageUrl ?? null,
+        attached_image_inputs: visualInputReport ?? {
+          requested_image_material_count: (input.materials ?? []).filter((material) => material.type === 'image').length,
+          attached_image_input_count: 0,
+          ark_file_input_count: 0,
+          public_url_input_count: 0,
+          omitted_material_ids: [],
+        },
         seedance_default_image_available: Boolean(env.v2VideoGenerationDefaultImageUrl),
         canvas: example.canvas,
       },
@@ -196,7 +232,59 @@ function assertLlmMainSceneMaterialCoverage(input: V2RemotionTimelinePlannerInpu
   }
 }
 
-async function callResponsesApi(promptText: string): Promise<unknown> {
+type PlannerImageContent =
+  | { type: 'input_image'; image_url: string }
+  | { type: 'input_image'; file_id: string }
+
+async function preparePlannerImageInputs(input: V2RemotionTimelinePlannerInput): Promise<{
+  content: PlannerImageContent[]
+  temporaryFileIds: string[]
+  report: V2TimelineVisualInputReport
+}> {
+  const imageMaterials = (input.materials ?? []).filter((material) => material.type === 'image')
+  const selected = imageMaterials.slice(0, MAX_V2_PLANNER_IMAGE_INPUTS)
+  const content: PlannerImageContent[] = []
+  const temporaryFileIds: string[] = []
+  let publicUrlInputCount = 0
+
+  try {
+    for (const material of selected) {
+      const publicImageUrl = [material.publicUrl, material.src].find(isLikelyExternallyReachableUrl)
+      if (publicImageUrl) {
+        content.push({ type: 'input_image', image_url: publicImageUrl })
+        publicUrlInputCount += 1
+        continue
+      }
+      const uploaded = await uploadV2PlannerImageFile({
+        localPath: material.src,
+        originalName: material.name,
+      })
+      temporaryFileIds.push(uploaded.fileId)
+      await waitForV2PlannerFileReady(uploaded.fileId)
+      content.push({ type: 'input_image', file_id: uploaded.fileId })
+    }
+  } catch (error) {
+    await Promise.all(temporaryFileIds.map((fileId) => deleteV2PlannerFile(fileId)))
+    throw error
+  }
+
+  return {
+    content,
+    temporaryFileIds,
+    report: {
+      requested_image_material_count: imageMaterials.length,
+      attached_image_input_count: content.length,
+      ark_file_input_count: temporaryFileIds.length,
+      public_url_input_count: publicUrlInputCount,
+      omitted_material_ids: imageMaterials.slice(MAX_V2_PLANNER_IMAGE_INPUTS).map((material) => material.id),
+    },
+  }
+}
+
+async function callResponsesApi(
+  promptText: string,
+  imageInputs: PlannerImageContent[],
+): Promise<unknown> {
   if (!env.directorAgentApiKey) {
     throw new Error('DIRECTOR_AGENT_API_KEY is not configured.')
   }
@@ -212,7 +300,10 @@ async function callResponsesApi(promptText: string): Promise<unknown> {
       input: [
         {
           role: 'user',
-          content: [{ type: 'input_text', text: promptText }],
+          content: [
+            { type: 'input_text', text: promptText },
+            ...imageInputs,
+          ],
         },
       ],
     }),
@@ -235,8 +326,14 @@ export async function runV2TimelineLlmPlanner(
   input: V2RemotionTimelinePlannerInput,
   options: { promptText?: string } = {},
 ): Promise<V2TimelineLlmPlannerResult> {
-  const promptText = options.promptText ?? buildV2TimelinePlannerPrompt(input)
-  const rawResponse = await callResponsesApi(promptText)
+  const preparedImages = await preparePlannerImageInputs(input)
+  const promptText = options.promptText ?? buildV2TimelinePlannerPrompt(input, preparedImages.report)
+  let rawResponse: unknown
+  try {
+    rawResponse = await callResponsesApi(promptText, preparedImages.content)
+  } finally {
+    await Promise.all(preparedImages.temporaryFileIds.map((fileId) => deleteV2PlannerFile(fileId)))
+  }
   const extracted = extractStructuredJsonCandidate(
     rawResponse,
     (value): value is RemotionTimelineSpecV1 =>
@@ -255,12 +352,15 @@ export async function runV2TimelineLlmPlanner(
     )
   }
 
-  const validation = validateRemotionTimelineSpec(extracted.candidate)
+  const normalizedCandidate = normalizeV2TimelineTextOwnership(
+    extracted.candidate as RemotionTimelineSpecV1,
+  )
+  const validation = validateRemotionTimelineSpec(normalizedCandidate)
   if (!validation.ok) {
     throw new Error(`LLM timeline spec is invalid: ${JSON.stringify(validation.issues, null, 2)}`)
   }
 
-  const spec = assertValidRemotionTimelineSpec(extracted.candidate)
+  const spec = assertValidRemotionTimelineSpec(normalizedCandidate)
   assertLlmMainSceneMaterialCoverage(input, spec)
 
   return {
@@ -268,5 +368,6 @@ export async function runV2TimelineLlmPlanner(
     rawResponse,
     extractionReport: extracted.report,
     promptText,
+    visualInputReport: preparedImages.report,
   }
 }

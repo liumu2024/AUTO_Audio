@@ -7,6 +7,7 @@ import { validateRemotionTimelineSpec } from '../../../shared/lib/remotion-timel
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import { v2PlannerInputFromRequest } from './controller.js'
 import { previewV2RemotionTimeline, runV2RemotionTimeline } from './remotion-timeline-service.js'
+import { buildV2TimelineRevisionContext } from './timeline-revision-context.js'
 import {
   createV2TimelineDraftRepository,
   V2TimelineRevisionConflictError,
@@ -86,18 +87,58 @@ function sendConflict(res: Response, error: V2TimelineRevisionConflictError) {
   })
 }
 
+function persistedPlannerInput(input: ReturnType<typeof v2PlannerInputFromRequest>) {
+  const { revisionContext: _revisionContext, revisionBaseSpec: _revisionBaseSpec, ...persisted } = input
+  return persisted
+}
+
 export async function postV2TimelineDraftPreview(req: Request, res: Response): Promise<void> {
   const taskId = `v2_preview_${Date.now()}_${randomUUID().slice(0, 8)}`
-  const plannerInput = v2PlannerInputFromRequest(req, taskId)
+  const userId = userIdFrom(req)
+  const draftId = typeof req.body?.draftId === 'string' ? req.body.draftId : undefined
+  const baseRevision = revisionValue(req.body?.baseRevision)
+  let plannerInput = v2PlannerInputFromRequest(req, taskId)
+  if (draftId) {
+    if (!baseRevision) {
+      res.status(400).json({ error: 'baseRevision is required when revising a V2 draft.' })
+      return
+    }
+    const [draft, base] = await Promise.all([
+      repository.getDraft(draftId, userId),
+      repository.getRevision(draftId, baseRevision, userId),
+    ])
+    if (!draft || !base) {
+      res.status(404).json({ error: 'V2 timeline draft revision not found.' })
+      return
+    }
+    if (draft.revision !== baseRevision) {
+      sendConflict(res, new V2TimelineRevisionConflictError(draftId, baseRevision, draft.revision))
+      return
+    }
+    plannerInput = {
+      ...plannerInput,
+      planningContext: {
+        kind: 'revision',
+        draftId,
+        baseRevision,
+        selectedClipId: plannerInput.planningContext?.selectedClipId,
+        authorizationEvidence: plannerInput.planningContext?.authorizationEvidence,
+      },
+      revisionContext: buildV2TimelineRevisionContext({
+        draftId,
+        baseRevision,
+        spec: base.spec,
+        selectedClipId: plannerInput.planningContext?.selectedClipId,
+      }),
+      revisionBaseSpec: base.spec,
+    }
+  }
   const preview = await previewV2RemotionTimeline(plannerInput)
   if (!preview.validation.ok) {
     res.status(422).json({ error: 'V2 timeline preview is not valid.', validation: preview.validation })
     return
   }
 
-  const userId = userIdFrom(req)
-  const draftId = typeof req.body?.draftId === 'string' ? req.body.draftId : undefined
-  const baseRevision = revisionValue(req.body?.baseRevision)
   try {
     const draft = draftId
       ? await repository.saveDraft({
@@ -106,14 +147,14 @@ export async function postV2TimelineDraftPreview(req: Request, res: Response): P
           baseRevision: baseRevision ?? 0,
           spec: preview.spec,
           kind: 'preview',
-          plannerInput,
+          plannerInput: persistedPlannerInput(plannerInput),
           plannerSource: preview.plannerSource,
           review: preview.review,
           traceDir: preview.traceDir,
         })
       : await repository.createDraft({
           userId,
-          plannerInput,
+          plannerInput: persistedPlannerInput(plannerInput),
           spec: preview.spec,
           plannerSource: preview.plannerSource,
           review: preview.review,

@@ -166,17 +166,17 @@ export function buildV2TimelinePlanningReview(input: {
         start_sec: Number(scene.start_sec.toFixed(3)),
         duration_sec: Number(scene.duration_sec.toFixed(3)),
         transition_after: transition ? `${transition.type} / ${transition.duration_sec}s` : undefined,
-        title_zh: scene.title,
+        title_zh: scene.creative_intent?.title ?? scene.title,
         description_zh: [
-          scene.subtitle,
-          scene.body,
+          scene.creative_intent?.description ?? scene.body,
           scene.note,
           generationJob?.prompt ? `模型创作提示：${generationJob.prompt}` : undefined,
         ]
           .filter(Boolean)
           .join('；'),
         asset_id: scene.asset_id,
-        asset_label_zh: asset?.label ?? asset?.id,
+        asset_label_zh:
+          scene.creative_intent?.material_label ?? asset?.label ?? asset?.id,
         motion_zh: motionLabel(scene, generationJob),
         overlay_texts_zh: sceneOverlays
           .filter((overlay) => overlay.text)

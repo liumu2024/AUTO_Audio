@@ -174,9 +174,6 @@ function ImageMotionScene({
           position: 'absolute',
         }}
       />
-      <div style={{ bottom: 96, left: 64, position: 'absolute', right: 64 }}>
-        <SceneText scene={scene} />
-      </div>
     </AbsoluteFill>
   )
 }

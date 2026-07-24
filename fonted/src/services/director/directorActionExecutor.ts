@@ -21,8 +21,9 @@ import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 
 function v2TimelineInput(
   ctx: DirectorActionExecutionContext,
-  options: { includeConversationSummary?: boolean } = {},
+  options: { planningKind?: 'initial' | 'revision' } = {},
 ) {
+  const current = useV2TimelineStore.getState()
   return {
     taskId: ctx.activeTaskId,
     prompt: ctx.prompt,
@@ -32,9 +33,13 @@ function v2TimelineInput(
     durationSec: ctx.durationSec,
     materials: ctx.materials,
     plannerMode: 'llm' as const,
-    conversationSummary: options.includeConversationSummary
-      ? ctx.conversationSummary
-      : undefined,
+    planningContext: {
+      kind: options.planningKind ?? (current.draftId ? 'revision' : 'initial'),
+      draftId: current.draftId ?? undefined,
+      baseRevision: current.draftRevision ?? undefined,
+      selectedClipId: current.selectedClipId ?? undefined,
+      authorizationEvidence: ctx.execution?.authorizationEvidence,
+    },
   }
 }
 
@@ -106,7 +111,7 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
 
     async generateTimeline(ctx): Promise<DirectorActionOutcome> {
       const preview = await previewV2DirectorTimeline(
-        v2TimelineInput(ctx, { includeConversationSummary: true }),
+        v2TimelineInput(ctx),
       )
       useEditorStore.getState().setGenerationEditEnabled(true)
       useEditorStore.getState().setTimelineMode('generation')
@@ -132,14 +137,12 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
       const current = useV2TimelineStore.getState()
       if (current.spec) {
         const preview = await previewV2DirectorTimeline({
-          ...v2TimelineInput(ctx, { includeConversationSummary: true }),
+          ...v2TimelineInput(ctx, { planningKind: 'revision' }),
           taskId: current.taskId ?? ctx.activeTaskId,
-          prompt: [
-            current.lastPrompt ? `上一版意图：${current.lastPrompt}` : '',
-            `本次修改：${ctx.prompt}`,
-          ]
-            .filter(Boolean)
-            .join('\n'),
+          // The draft revision is supplied separately by previewV2DirectorTimeline.
+          // Keep the user's current instruction intact so a question cannot be
+          // re-labelled as a "revision" by string concatenation.
+          prompt: ctx.prompt,
         })
         return {
           phase: 'completed',
@@ -162,7 +165,7 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
 
     async renderVideo(ctx): Promise<DirectorActionOutcome> {
       const result = await renderV2DirectorTimeline(
-        v2TimelineInput(ctx, { includeConversationSummary: true }),
+        v2TimelineInput(ctx),
       )
       useEditorStore.getState().setTimelineMode('generation')
 

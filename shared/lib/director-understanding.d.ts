@@ -13,6 +13,12 @@ export interface DirectorConversationRuntime {
     v2TraceDir?: string | null;
     hasVisualMaterial: boolean;
     materialCount: number;
+    /** Video materials that the director may explicitly promote to a sample reference. */
+    sampleCandidates?: Array<{
+        id: string;
+        url: string;
+        name?: string;
+    }>;
 }
 export declare function createDefaultDirectorSlots(partial?: Partial<DirectorContextSlots>): DirectorContextSlots;
 export declare function mergeDirectorSlots(base: DirectorContextSlots, patch: Partial<DirectorContextSlots>): DirectorContextSlots;

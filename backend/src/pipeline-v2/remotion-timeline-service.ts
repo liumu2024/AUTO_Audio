@@ -5,6 +5,7 @@ import {
   validateRemotionTimelineSpec,
   type RemotionTimelineValidationReport,
 } from '../../../shared/lib/remotion-timeline-validator.js'
+import { normalizeV2TimelineTextOwnership } from '../../../shared/lib/remotion-timeline-text-ownership.js'
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import { createConfiguredV2MaterialGenerationAdapter } from './configured-material-adapter.js'
 import {
@@ -29,6 +30,8 @@ import {
 } from './remotion-timeline-review.js'
 import { createV2TraceWriter } from './trace.js'
 import type { V2PlannerInput } from './v2-input.js'
+import type { V2TimelineVisualInputReport } from './remotion-timeline-llm-planner.js'
+import { applyV2TimelineRevisionPreservation } from './timeline-revision-context.js'
 
 export interface V2TimelinePreviewResult {
   taskId: string
@@ -69,6 +72,24 @@ function outputRootFor(taskId: string): string {
   return path.resolve(process.cwd(), 'v2-renders', taskId)
 }
 
+function traceablePlannerInput(input: V2PlannerInput & { imageSrc?: string }) {
+  // The full persisted base spec is server-only preservation state. Trace the
+  // compact revision contract separately so input traces mirror model context.
+  const { revisionBaseSpec: _revisionBaseSpec, ...traceInput } = input
+  return traceInput
+}
+
+function semanticCaptionPolicy(plannerSource: string, attachedImages: number): string {
+  if (plannerSource === 'override') return 'render_existing_revision_without_replanning'
+  if (plannerSource === 'llm' && attachedImages > 0) {
+    return 'planner_may_create_captions_from_attached_image_inputs'
+  }
+  if (plannerSource === 'llm') {
+    return 'planner_must_not_claim_image_understanding_without_accessible_image_inputs'
+  }
+  return 'fallback_preserves_only_explicit_user_caption_requirements'
+}
+
 async function buildTimelineSpec(input: V2PlannerInput & { imageSrc?: string }): Promise<RemotionTimelineSpecV1> {
   return buildDeterministicRemotionTimelineSpec(plannerInputFrom(input))
 }
@@ -77,7 +98,11 @@ async function resolveTimelineSpec(input: {
   plannerInput: V2PlannerInput & { imageSrc?: string }
   trace: ReturnType<typeof createV2TraceWriter>
   timelineSpecOverride?: unknown
-}): Promise<{ spec: RemotionTimelineSpecV1; plannerSource: string }> {
+}): Promise<{
+  spec: RemotionTimelineSpecV1
+  plannerSource: string
+  visualInputReport?: V2TimelineVisualInputReport
+}> {
   if (input.timelineSpecOverride) {
     await input.trace.writeJson('02-planning', 'timeline-spec-override.json', input.timelineSpecOverride)
     return {
@@ -88,20 +113,16 @@ async function resolveTimelineSpec(input: {
 
   if (input.plannerInput.plannerMode === 'llm') {
     try {
-      const {
-        buildV2TimelinePlannerPrompt,
-        runV2TimelineLlmPlanner,
-      } = await import('./remotion-timeline-llm-planner.js')
-      const promptText = buildV2TimelinePlannerPrompt(plannerInputFrom(input.plannerInput))
-      await input.trace.writeText('02-planning', 'llm-timeline-planner-prompt.md', promptText)
-      const llmPlanner = await runV2TimelineLlmPlanner(plannerInputFrom(input.plannerInput), {
-        promptText,
-      })
+      const { runV2TimelineLlmPlanner } = await import('./remotion-timeline-llm-planner.js')
+      const llmPlanner = await runV2TimelineLlmPlanner(plannerInputFrom(input.plannerInput))
+      await input.trace.writeText('02-planning', 'llm-timeline-planner-prompt.md', llmPlanner.promptText)
       await input.trace.writeJson('02-planning', 'llm-timeline-planner-raw-response.json', llmPlanner.rawResponse)
       await input.trace.writeJson('02-planning', 'llm-timeline-planner-extraction-report.json', llmPlanner.extractionReport)
+      await input.trace.writeJson('02-planning', 'llm-timeline-visual-inputs.json', llmPlanner.visualInputReport)
       return {
         spec: llmPlanner.spec,
         plannerSource: 'llm',
+        visualInputReport: llmPlanner.visualInputReport,
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -127,17 +148,33 @@ export async function previewV2RemotionTimeline(
   input: V2PlannerInput & { imageSrc?: string },
 ): Promise<V2TimelinePreviewResult> {
   const trace = createV2TraceWriter({ taskId: input.taskId })
-  await trace.writeJson('01-input', 'timeline-planner-input.json', input)
+  await trace.writeJson('01-input', 'timeline-planner-input.json', traceablePlannerInput(input))
   const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
   await trace.writeJson('01-input', 'timeline-hard-requirements.json', hardRequirements)
   const resolved = await resolveTimelineSpec({
     plannerInput: input,
     trace,
   })
-  const spec = applyV2TimelineHardRequirements({
-    spec: resolved.spec,
+  const attachedImages = resolved.visualInputReport?.attached_image_input_count ?? 0
+  await trace.writeJson('02-planning', 'planning-decision.json', {
+    planner_source: resolved.plannerSource,
+    planning_context: input.planningContext ?? null,
+    image_inputs_attached: attachedImages,
+    visual_input_report: resolved.visualInputReport ?? null,
+    semantic_caption_policy: semanticCaptionPolicy(resolved.plannerSource, attachedImages),
+  })
+  let spec = applyV2TimelineHardRequirements({
+    spec: normalizeV2TimelineTextOwnership(resolved.spec),
     requirements: hardRequirements,
   })
+  const revision = input.revisionContext && input.revisionBaseSpec
+    ? applyV2TimelineRevisionPreservation({
+        baseSpec: input.revisionBaseSpec,
+        nextSpec: spec,
+        baseRevision: input.revisionContext.base_revision,
+      })
+    : undefined
+  if (revision) spec = revision.spec
   const validation = validateRemotionTimelineSpec(spec)
   const hardRequirementCheck = evaluateV2TimelineHardRequirements({
     spec,
@@ -147,6 +184,16 @@ export async function previewV2RemotionTimeline(
   await trace.writeJson('02-planning', 'timeline-spec.json', spec)
   await trace.writeJson('02-planning', 'timeline-validation.json', validation)
   await trace.writeJson('02-planning', 'timeline-hard-requirement-check.json', hardRequirementCheck)
+  if (input.revisionContext) {
+    await trace.writeJson('02-planning', 'revision-context.json', input.revisionContext)
+  }
+  if (revision) {
+    await trace.writeJson('02-planning', 'revision-diff.json', revision.audit)
+    await trace.writeJson('02-planning', 'revision-preservation.json', {
+      preserved_scene_notes: revision.audit.preserved_scene_notes,
+      warnings: revision.audit.warnings,
+    })
+  }
   await trace.writeJson('02-plan-review', 'timeline-review.json', review)
   await trace.writeText('02-plan-review', 'timeline-review.zh.md', renderV2TimelinePlanningReviewMarkdown(review))
   await trace.writeSummary([
@@ -181,7 +228,7 @@ export async function runV2RemotionTimeline(
       ? `${input.taskId}__run_${Date.now()}`
       : input.taskId,
   })
-  await trace.writeJson('01-input', 'timeline-planner-input.json', input)
+  await trace.writeJson('01-input', 'timeline-planner-input.json', traceablePlannerInput(input))
   const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
   await trace.writeJson('01-input', 'timeline-hard-requirements.json', hardRequirements)
   const outputRoot = outputRootFor(input.taskId)
@@ -192,10 +239,26 @@ export async function runV2RemotionTimeline(
     trace,
     timelineSpecOverride: input.timelineSpecOverride,
   })
-  const spec = applyV2TimelineHardRequirements({
-    spec: resolved.spec,
+  const attachedImages = resolved.visualInputReport?.attached_image_input_count ?? 0
+  await trace.writeJson('02-planning', 'planning-decision.json', {
+    planner_source: resolved.plannerSource,
+    planning_context: input.planningContext ?? null,
+    image_inputs_attached: attachedImages,
+    visual_input_report: resolved.visualInputReport ?? null,
+    semantic_caption_policy: semanticCaptionPolicy(resolved.plannerSource, attachedImages),
+  })
+  let spec = applyV2TimelineHardRequirements({
+    spec: normalizeV2TimelineTextOwnership(resolved.spec),
     requirements: hardRequirements,
   })
+  const revision = input.revisionContext && input.revisionBaseSpec
+    ? applyV2TimelineRevisionPreservation({
+        baseSpec: input.revisionBaseSpec,
+        nextSpec: spec,
+        baseRevision: input.revisionContext.base_revision,
+      })
+    : undefined
+  if (revision) spec = revision.spec
   const validation = validateRemotionTimelineSpec(spec)
   const hardRequirementCheck = evaluateV2TimelineHardRequirements({
     spec,
@@ -205,6 +268,16 @@ export async function runV2RemotionTimeline(
   await trace.writeJson('02-planning', 'timeline-spec.json', spec)
   await trace.writeJson('02-planning', 'timeline-validation.json', validation)
   await trace.writeJson('02-planning', 'timeline-hard-requirement-check.json', hardRequirementCheck)
+  if (input.revisionContext) {
+    await trace.writeJson('02-planning', 'revision-context.json', input.revisionContext)
+  }
+  if (revision) {
+    await trace.writeJson('02-planning', 'revision-diff.json', revision.audit)
+    await trace.writeJson('02-planning', 'revision-preservation.json', {
+      preserved_scene_notes: revision.audit.preserved_scene_notes,
+      warnings: revision.audit.warnings,
+    })
+  }
   await trace.writeJson('02-plan-review', 'timeline-review.json', review)
   await trace.writeText('02-plan-review', 'timeline-review.zh.md', renderV2TimelinePlanningReviewMarkdown(review))
   if (!validation.ok) {

@@ -1,0 +1,9 @@
+import type { RemotionTimelineSpecV1 } from '../types/remotion-timeline-spec.v1.js';
+/**
+ * Normalizes two invariants at the V2 protocol seam:
+ * - visual-scene planning metadata never becomes on-screen text;
+ * - a model-supplied text overlay with omitted layout numbers receives stable
+ *   geometry from its owning scene instead of discarding the whole plan.
+ */
+export declare function normalizeV2TimelineTextOwnership(spec: RemotionTimelineSpecV1): RemotionTimelineSpecV1;
+//# sourceMappingURL=remotion-timeline-text-ownership.d.ts.map

@@ -53,6 +53,18 @@ function materialPayload(attachments: InputAttachment[]) {
   }))
 }
 
+function selectedSampleAttachment(
+  action: DirectorAction,
+  attachments: InputAttachment[],
+): InputAttachment | undefined {
+  const selectedId = action.slots.sampleMaterialId
+  if (!selectedId) return undefined
+  return attachments.find(
+    (attachment) =>
+      attachment.type === 'video' && attachmentMaterialId(attachment) === selectedId,
+  )
+}
+
 function syncDirectorContext(input: {
   sampleUrl: string
   sampleName?: string
@@ -116,9 +128,11 @@ function eventThought(event: DirectorAgentStreamEvent): string | null {
     const source =
       event.source === 'llm'
         ? 'LLM Router'
-        : event.source === 'rule_fallback'
-          ? '安全兜底'
-          : 'Router'
+        : event.source === 'llm_unstructured_safe_reply'
+          ? '模型自由回复'
+          : event.source === 'context_fallback'
+            ? '上下文保留'
+            : 'Router'
     return `意图识别：${event.intent}，置信度 ${Math.round(
       event.confidence * 100,
     )}%，内容类型 ${event.contentDomain}，来源 ${source}。`
@@ -233,7 +247,6 @@ export function DirectorChatPanel() {
   const addProgressMessage = useDirectorChatStore((s) => s.addProgressMessage)
   const addThoughtMessage = useDirectorChatStore((s) => s.addThoughtMessage)
   const updateMessage = useDirectorChatStore((s) => s.updateMessage)
-  const pushGenerationResult = useDirectorChatStore((s) => s.pushGenerationResult)
   const setSending = useDirectorChatStore((s) => s.setSending)
 
   const activeTaskId = useTaskStore((s) => s.activeTaskId)
@@ -326,8 +339,30 @@ export function DirectorChatPanel() {
     conversationSummary?: string
     progressMessageId?: string
   }) => {
-    const { actionPlan, prompt, sampleVideoUrl, sampleVideoName, materials, conversationSummary } =
+    let { actionPlan, prompt, sampleVideoUrl, sampleVideoName, materials, conversationSummary } =
       input
+
+    // A newly uploaded video remains a creation material unless the director
+    // explicitly selected it through the structured candidate id. This happens
+    // after model routing, never through a client-side wording heuristic.
+    const selectedSample =
+      !sampleVideoUrl && actionPlan.type === 'ANALYZE_SAMPLE'
+        ? selectedSampleAttachment(actionPlan, materials)
+        : undefined
+    if (selectedSample) {
+      sampleVideoUrl = selectedSample.url
+      sampleVideoName = selectedSample.name
+      materials = materials.filter((item) => item.id !== selectedSample.id)
+      const creation = useCreationStore.getState()
+      creation.setSampleUrl(selectedSample.url, selectedSample.name)
+      creation.removeAttachment(selectedSample.id)
+      creation.setSampleParsed(false)
+      syncDirectorContext({
+        sampleUrl: sampleVideoUrl,
+        sampleName: sampleVideoName,
+        attachments: materials,
+      })
+    }
 
     recordActionRunning()
 
@@ -365,17 +400,21 @@ export function DirectorChatPanel() {
           materials: materialPayload(materials),
           conversationSummary,
           activeTaskId: useV2TimelineStore.getState().taskId ?? activeTaskId,
+          execution: {
+            effect: actionPlan.payload?.executionEffect,
+            authorizationEvidence: actionPlan.payload?.authorizationEvidence,
+          },
         },
       })
       recordActionCompleted(outcome)
       if (input.progressMessageId) {
         updateMessage(input.progressMessageId, {
-          content: outcome.message,
-          kind: 'text',
+          content: actionPlan.message,
+          kind: 'progress',
           status: 'done',
         })
       } else {
-        addAssistantMessage({ content: outcome.message })
+        addAssistantMessage({ content: actionPlan.message })
       }
       return
     }
@@ -403,42 +442,22 @@ export function DirectorChatPanel() {
           materials: materialPayload(materials),
           conversationSummary,
           activeTaskId: useV2TimelineStore.getState().taskId ?? activeTaskId,
+          execution: {
+            effect: actionPlan.payload?.executionEffect,
+            authorizationEvidence: actionPlan.payload?.authorizationEvidence,
+          },
         },
       })
       recordActionCompleted(outcome)
 
-      if (actionPlan.type === 'ANALYZE_SAMPLE') {
-        updateMessage(progressId, {
-          content:
-            '我把样例拆完了，先把它当成一张风格和节奏地图放在右侧。你可以继续问镜头、转场或节奏，也可以直接按文字生成方案，或补充素材后再生成。',
-          status: 'done',
-        })
-      } else if (actionPlan.type === 'GENERATE_TIMELINE') {
-        updateMessage(progressId, {
-          content: outcome.message,
-          kind: 'progress',
-          status: 'done',
-        })
-        addAssistantMessage({
-          content:
-            '方案已经放到右侧了。你可以直接告诉我哪一段要更快、更慢、换素材或改字幕；确认满意后再让我渲染。',
-        })
-      } else if (actionPlan.type === 'RENDER_VIDEO') {
-        updateMessage(progressId, {
-          content: outcome.message,
-          kind: 'progress',
-          status: 'done',
-        })
-        pushGenerationResult(
-          '视频已经出来了，先看整体节奏和转场是否顺。如果有哪一段不对，直接按时间点或片段编号告诉我，我继续改。',
-        )
-      } else {
-        updateMessage(progressId, {
-          content: outcome.message,
-          status: 'done',
-        })
-        addAssistantMessage({ content: outcome.message })
-      }
+      // The director's natural-language response remains the conversation.
+      // Execution status belongs to the progress state and the V2 workbench,
+      // rather than being replaced by a second, fixed assistant script.
+      updateMessage(progressId, {
+        content: actionPlan.message,
+        kind: 'progress',
+        status: 'done',
+      })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       recordActionFailed(actionPlan.type, msg)
@@ -459,32 +478,13 @@ export function DirectorChatPanel() {
     const pendingAttachmentIdsSnapshot = [...creationSnapshot.pendingAttachmentIds]
     const showSampleInInputTraySnapshot = creationSnapshot.showSampleInInputTray
     clearInputTray()
-    let effectiveSampleUrl = creationSnapshot.sampleUrl
-    let effectiveSampleName = creationSnapshot.sampleName
+    const effectiveSampleUrl = creationSnapshot.sampleUrl
+    const effectiveSampleName = creationSnapshot.sampleName
     const contextAttachments = [...creationSnapshot.attachments]
     const currentAspectRatio = creationSnapshot.aspectRatio
     const currentDurationSec = creationSnapshot.durationSec
     const currentStyleIntensity = creationSnapshot.styleIntensity
-    let currentIsSampleParsed = creationSnapshot.isSampleParsed
-
-    const asksSampleAnalysis =
-      /重新理解|重新解析|重新分析|解析.*(样例|视频)|分析.*(样例|视频|主要内容|创作手法|视频结构|镜头|转场|节奏)|理解.*(样例|视频)|拆解.*(样例|视频)|复刻/.test(
-        prompt,
-      )
-    if (asksSampleAnalysis) {
-      const pendingVideoIdx = contextAttachments.findIndex(
-        (item) => item.type === 'video' && pendingAttachmentIdsSnapshot.includes(item.id),
-      )
-      if (pendingVideoIdx >= 0) {
-        const video = contextAttachments.splice(pendingVideoIdx, 1)[0]!
-        useCreationStore.getState().setSampleUrl(video.url, video.name)
-        useCreationStore.getState().removeAttachment(video.id)
-        useCreationStore.getState().setSampleParsed(false)
-        effectiveSampleUrl = video.url
-        effectiveSampleName = video.name
-        currentIsSampleParsed = false
-      }
-    }
+    const currentIsSampleParsed = creationSnapshot.isSampleParsed
 
     const messageAttachments = contextAttachments.filter((item) =>
       pendingAttachmentIdsSnapshot.includes(item.id),
@@ -587,6 +587,13 @@ export function DirectorChatPanel() {
               (item) => item.type === 'video' || item.type === 'image',
             ),
             materialCount: contextAttachments.length,
+            sampleCandidates: contextAttachments
+              .filter((item) => item.type === 'video')
+              .map((item) => ({
+                id: attachmentMaterialId(item),
+                url: item.url,
+                name: item.name,
+              })),
           },
         },
         (event) => {

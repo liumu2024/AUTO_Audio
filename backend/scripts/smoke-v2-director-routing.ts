@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 
-import { applyDirectorIntentHardGuards } from '../src/modules/director-agent/llm-intent-router.ts'
-import { directorActionFromIntentResult } from '../../shared/lib/director-action-engine.js'
+import {
+  buildDirectorContextFallback,
+  finalizeModelDecision,
+  parseDirectorModelDecision,
+} from '../src/modules/director-agent/llm-intent-router.ts'
 import { createDefaultDirectorSlots, type DirectorConversationRuntime } from '../../shared/lib/director-understanding.js'
 import { buildV2TimelineRequestShape } from '../../shared/lib/v2-timeline-request-shape.js'
 import type { DirectorContext, DirectorIntentResult } from '../../shared/types/director-context.js'
@@ -25,27 +28,150 @@ function runtime(overrides: Partial<DirectorConversationRuntime> = {}): Director
   }
 }
 
-function generationResult(): DirectorIntentResult {
+function decision(overrides: Partial<DirectorIntentResult> = {}): DirectorIntentResult {
   return {
-    intent: 'generate_timeline',
+    intent: 'clarify',
     confidence: 0.9,
     contentDomain: 'general',
     slotsPatch: {},
     missingSlots: [],
     requiresConfirmation: false,
-    nextAction: 'GENERATE_TIMELINE',
-    assistantMessage: '生成一版方案。',
+    nextAction: 'ACKNOWLEDGE',
+    executionEffect: 'none',
+    assistantMessage: '自然回复。',
+    ...overrides,
   }
 }
 
-const textOnly = applyDirectorIntentHardGuards({
-  llmResult: generationResult(),
-  prompt: '生成一支 15 秒的雨后城市氛围视频',
+// A non-executing answer may serialize the optional execution-only evidence as
+// an empty string. It must still reach the user as the model's own answer.
+const freeConversation = parseDirectorModelDecision(
+  JSON.stringify({
+    intent: 'clarify',
+    confidence: 0.82,
+    contentDomain: 'general',
+    slotsPatch: {},
+    missingSlots: [],
+    requiresConfirmation: false,
+    executionEffect: 'none',
+    authorizationEvidence: '',
+    nextAction: 'ACKNOWLEDGE',
+    assistantMessage: '我会先根据画面内容设计字幕的语气、位置和节奏，再给出几个可选方向。',
+    publicThoughts: [],
+  }),
+)
+assert.equal(freeConversation.authorizationEvidence, undefined)
+assert.equal(freeConversation.assistantMessage, '我会先根据画面内容设计字幕的语气、位置和节奏，再给出几个可选方向。')
+
+// A question may contain production vocabulary, but the model's no-effect
+// decision remains authoritative. No keyword matcher may turn it into work.
+const discussion = finalizeModelDecision({
+  llmResult: decision({
+    nextAction: 'RENDER',
+    executionEffect: 'none',
+    assistantMessage: '我会先解释字幕和节奏的取舍。',
+  }),
+  context,
+  runtime: runtime({ hasPipeline: true, hasV2Timeline: true, v2SceneCount: 3 }),
+})
+assert.equal(discussion.executionEffect, 'none')
+assert.equal(discussion.nextAction, 'ACKNOWLEDGE')
+
+// A model outage must preserve the actual question and V2 facts, but must not
+// infer a side effect from any words in that question.
+const contextualFallback = buildDirectorContextFallback({
+  prompt: '字幕和转场怎么才能更像一支呼吸感强的音乐短片？',
+  context: {
+    ...context,
+    materials: [{ id: 'img_1', type: 'image', url: 'https://example.test/1.png', name: '海边.png' }],
+    currentTimeline: {
+      kind: 'v2_timeline',
+      status: 'draft',
+      draftId: 'draft_1',
+      currentRevision: 4,
+    },
+  },
+  runtime: runtime({ hasV2Timeline: true, v2SceneCount: 3 }),
+  reason: 'test outage',
+})
+assert.equal(contextualFallback.source, 'context_fallback')
+assert.equal(contextualFallback.result.executionEffect, 'none')
+assert.equal(contextualFallback.result.nextAction, 'ACKNOWLEDGE')
+assert.match(contextualFallback.result.assistantMessage, /字幕和转场/)
+assert.match(contextualFallback.result.assistantMessage, /修订 4/)
+
+const revision = finalizeModelDecision({
+  llmResult: decision({
+    intent: 'revise_timeline',
+    nextAction: 'REVISE_TIMELINE',
+    executionEffect: 'draft_change',
+    authorizationEvidence: '把第二段改得更克制，并生成一版新方案',
+  }),
+  context,
+  runtime: runtime({ hasPipeline: true, hasV2Timeline: true, v2SceneCount: 3 }),
+})
+assert.equal(revision.executionEffect, 'draft_change')
+assert.equal(revision.nextAction, 'REVISE_TIMELINE')
+
+// An uploaded video is not automatically a sample. The director may select a
+// declared candidate only through its structured id, and code verifies it.
+const selectedSampleCandidate = finalizeModelDecision({
+  llmResult: decision({
+    intent: 'analyze_sample',
+    nextAction: 'ANALYZE_SAMPLE',
+    executionEffect: 'workspace_change',
+    authorizationEvidence: '把刚上传的视频作为样例拆解。',
+    slotsPatch: { sampleMaterialId: 'video_material_1' },
+  }),
+  context,
+  runtime: runtime({
+    sampleCandidates: [
+      { id: 'video_material_1', url: 'https://example.test/sample.mp4', name: 'sample.mp4' },
+    ],
+  }),
+})
+assert.equal(selectedSampleCandidate.executionEffect, 'workspace_change')
+assert.equal(selectedSampleCandidate.nextAction, 'ANALYZE_SAMPLE')
+
+const unknownSampleCandidate = finalizeModelDecision({
+  llmResult: decision({
+    intent: 'analyze_sample',
+    nextAction: 'ANALYZE_SAMPLE',
+    executionEffect: 'workspace_change',
+    authorizationEvidence: '把刚上传的视频作为样例拆解。',
+    slotsPatch: { sampleMaterialId: 'not_in_context' },
+  }),
   context,
   runtime: runtime(),
 })
-assert.equal(textOnly.nextAction, 'GENERATE_TIMELINE')
-assert.deepEqual(textOnly.missingSlots, [])
+assert.equal(unknownSampleCandidate.executionEffect, 'none')
+assert.equal(unknownSampleCandidate.nextAction, 'NEED_SAMPLE')
+
+const ungroundedOperation = finalizeModelDecision({
+  llmResult: decision({
+    intent: 'render',
+    nextAction: 'RENDER',
+    executionEffect: 'delivery',
+  }),
+  context,
+  runtime: runtime({ hasPipeline: true, hasV2Timeline: true, v2SceneCount: 3 }),
+})
+assert.equal(ungroundedOperation.executionEffect, 'none')
+assert.equal(ungroundedOperation.nextAction, 'ASK_USER')
+
+const missingTimelineDelivery = finalizeModelDecision({
+  llmResult: decision({
+    intent: 'render',
+    nextAction: 'RENDER',
+    executionEffect: 'delivery',
+    authorizationEvidence: '请渲染当前版本',
+  }),
+  context,
+  runtime: runtime(),
+})
+assert.equal(missingTimelineDelivery.executionEffect, 'none')
+assert.deepEqual(missingTimelineDelivery.missingSlots, ['timeline'])
+
 assert.deepEqual(
   buildV2TimelineRequestShape({ sampleVideoPath: undefined, materials: [] }),
   {
@@ -58,104 +184,5 @@ assert.deepEqual(
     sourceUrl: '',
   },
 )
-
-const singleVideoMaterial = applyDirectorIntentHardGuards({
-  llmResult: generationResult(),
-  prompt: '用我上传的视频做一支 15 秒的产品短片',
-  context: {
-    ...context,
-    materials: [{ id: 'video_material', type: 'video', url: 'file:///material.mp4' }],
-  },
-  runtime: runtime({ hasVisualMaterial: true, materialCount: 1 }),
-})
-assert.equal(singleVideoMaterial.nextAction, 'GENERATE_TIMELINE')
-assert.deepEqual(singleVideoMaterial.missingSlots, [])
-const videoMaterial = {
-  id: 'video_material',
-  name: 'material.mp4',
-  type: 'video' as const,
-  src: 'https://cdn.example.test/material.mp4',
-}
-const materialRequest = buildV2TimelineRequestShape({
-  sampleVideoPath: undefined,
-  materials: [videoMaterial],
-})
-assert.equal(materialRequest.creationMode, 'material_brief')
-assert.equal(materialRequest.referenceVideoPath, undefined)
-assert.deepEqual(materialRequest.materials, [videoMaterial])
-
-const sampleAndMaterialRequest = buildV2TimelineRequestShape({
-  sampleVideoPath: 'https://cdn.example.test/sample.mp4',
-  materials: [videoMaterial],
-})
-assert.equal(sampleAndMaterialRequest.creationMode, 'sample_replicate')
-assert.equal(sampleAndMaterialRequest.referenceVideoPath, 'https://cdn.example.test/sample.mp4')
-assert.deepEqual(sampleAndMaterialRequest.materials, [videoMaterial])
-
-const explicitSampleWithoutVideo = applyDirectorIntentHardGuards({
-  llmResult: generationResult(),
-  prompt: '复刻这条样例视频的镜头和节奏',
-  context,
-  runtime: runtime(),
-})
-assert.equal(explicitSampleWithoutVideo.nextAction, 'NEED_SAMPLE')
-assert.deepEqual(explicitSampleWithoutVideo.missingSlots, ['sampleVideoStatus'])
-const blockedSampleAction = directorActionFromIntentResult({
-  prompt: '复刻这条样例视频的镜头和节奏',
-  context,
-  runtime: runtime(),
-  result: explicitSampleWithoutVideo,
-})
-assert.equal(blockedSampleAction.type, 'ASK_USER')
-assert.ok(
-  blockedSampleAction.payload?.executionPlan?.steps.every(
-    (step) => step.tool !== 'timeline.plan' && step.tool !== 'video.render',
-  ),
-)
-
-// A concrete edit request can omit words such as "modify". When a V2 timeline
-// is already open, edit constraints must not be upgraded to a render merely
-// because the intent model returned RENDER.
-const timelineEditWithoutDeliveryCommand = applyDirectorIntentHardGuards({
-  llmResult: {
-    intent: 'render',
-    confidence: 0.86,
-    contentDomain: 'general',
-    slotsPatch: {},
-    missingSlots: [],
-    requiresConfirmation: false,
-    nextAction: 'RENDER',
-    assistantMessage: '渲染当前方案',
-  },
-  prompt: '请让声音和镜头之间的过渡更平顺，并统一字幕的呈现方式。',
-  context,
-  runtime: runtime({ hasPipeline: true, hasV2Timeline: true, v2SceneCount: 3 }),
-})
-assert.equal(timelineEditWithoutDeliveryCommand.nextAction, 'REVISE_TIMELINE')
-
-const modelRenderWithoutDeliveryCommand = applyDirectorIntentHardGuards({
-  llmResult: {
-    ...timelineEditWithoutDeliveryCommand,
-    intent: 'render',
-    nextAction: 'RENDER',
-  },
-  prompt: '就这样继续。',
-  context,
-  runtime: runtime({ hasPipeline: true, hasV2Timeline: true, v2SceneCount: 3 }),
-})
-assert.equal(modelRenderWithoutDeliveryCommand.nextAction, 'ASK_USER')
-assert.equal(modelRenderWithoutDeliveryCommand.requiresConfirmation, true)
-
-const explicitEditThenRender = applyDirectorIntentHardGuards({
-  llmResult: {
-    ...timelineEditWithoutDeliveryCommand,
-    intent: 'render',
-    nextAction: 'RENDER',
-  },
-  prompt: '先把字幕改成透明，再渲染。',
-  context,
-  runtime: runtime({ hasPipeline: true, hasV2Timeline: true, v2SceneCount: 3 }),
-})
-assert.equal(explicitEditThenRender.nextAction, 'RENDER')
 
 console.info('[smoke-v2-director-routing] OK')

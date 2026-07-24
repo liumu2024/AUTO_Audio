@@ -15,6 +15,7 @@
     "test:smoke:v2:material-analysis": "npm run build:shared && tsx scripts/smoke-v2-material-analysis.ts",
     "test:smoke:v2:remotion-timeline-spec": "npm run build:shared && tsx scripts/smoke-v2-remotion-timeline-spec.ts",
     "test:smoke:v2:remotion-timeline-planner": "npm run build:shared && tsx scripts/smoke-v2-remotion-timeline-planner.ts",
+    "verify:v2:image-model-access": "tsx scripts/verify-v2-image-model-access.ts",
     "test:smoke:v2:remotion-timeline-material": "npm run build:shared && tsx scripts/smoke-v2-remotion-timeline-material-resolver.ts",
     "test:smoke:v2:creation-modes": "npm run build:shared && tsx scripts/smoke-v2-remotion-timeline-creation-modes.ts",
     "test:smoke:v2:text-to-video-run": "npm run build:shared && tsx scripts/smoke-v2-remotion-timeline-text-to-video-run.ts",
