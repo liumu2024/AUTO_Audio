@@ -5,7 +5,11 @@ import path from 'node:path'
 import { WebSocketServer } from 'ws'
 
 import { env } from './config/env.js'
-import { postDirectorAgentChat } from './modules/director-agent/director-agent.controller.js'
+import {
+  getDirectorWorkspace,
+  postDirectorAgentChat,
+  postDirectorWorkspaceOutcome,
+} from './modules/director-agent/director-agent.controller.js'
 import { postUpload } from './modules/upload/upload.controller.js'
 import { uploadMiddleware } from './modules/upload/upload.middleware.js'
 import { ensureUploadDir } from './modules/upload/upload.service.js'
@@ -43,6 +47,8 @@ app.post(
 )
 
 app.post('/api/director/chat', postDirectorAgentChat)
+app.get('/api/director/workspaces/:workspaceSessionId', getDirectorWorkspace)
+app.post('/api/director/workspaces/:workspaceSessionId/outcomes', postDirectorWorkspaceOutcome)
 app.use('/v2-renders', express.static(path.resolve(process.cwd(), 'v2-renders')))
 app.post('/api/v2/sample/analyze', postV2SampleAnalyze)
 app.post('/api/v2/timeline-drafts/preview', postV2TimelineDraftPreview)

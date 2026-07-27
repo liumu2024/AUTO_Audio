@@ -10,6 +10,14 @@ const visualSceneTypes = new Set<RemotionTimelineScene['type']>([
   'ai_video',
   'image_motion',
 ])
+const supportedOverlayAnimations = new Set([
+  'none',
+  'fade',
+  'slide_up_fade',
+  'pop',
+  'pulse',
+  'sweep',
+])
 
 function nonBlank(value: string | undefined): string | undefined {
   const text = value?.trim()
@@ -43,6 +51,18 @@ function sceneForOverlay(
   return undefined
 }
 
+function isBareMaterialMetadata(value: string | undefined, scenes: RemotionTimelineScene[]): boolean {
+  const text = nonBlank(value)
+  if (!text) return false
+  const materialLabels = new Set(
+    scenes
+      .filter((scene) => visualSceneTypes.has(scene.type))
+      .map((scene) => nonBlank(scene.creative_intent?.material_label))
+      .filter((label): label is string => Boolean(label)),
+  )
+  return materialLabels.has(text) || /^[^\n]{1,120}\.(png|jpe?g|webp|gif|mp4|mov|webm)$/i.test(text)
+}
+
 /**
  * Normalizes two invariants at the V2 protocol seam:
  * - visual-scene planning metadata never becomes on-screen text;
@@ -63,7 +83,15 @@ export function normalizeV2TimelineTextOwnership(
     return normalized
   })
 
-  const overlays = spec.overlays.map((overlay) => {
+  const overlays = spec.overlays
+    // A material label belongs to planning metadata, not an implicit caption.
+    // Explicit user caption requirements are applied after this normalizer.
+    .filter(
+      (overlay) =>
+        !['caption', 'title', 'label'].includes(overlay.type) ||
+        !isBareMaterialMetadata(overlay.text, scenes),
+    )
+    .map((overlay) => {
     if (!['caption', 'title', 'label'].includes(overlay.type)) return overlay
     const scene = sceneForOverlay(overlay, scenes)
     const start_sec = isFiniteNumber(overlay.start_sec)
@@ -85,8 +113,14 @@ export function normalizeV2TimelineTextOwnership(
           ? 80
           : 18,
       width_pct: isFiniteNumber(overlay.width_pct) ? overlay.width_pct : 84,
+      // A creative animation alias must not invalidate a whole timeline. The
+      // stable fade is deliberately chosen over inventing an unsupported effect.
+      animation:
+        overlay.animation && !supportedOverlayAnimations.has(overlay.animation)
+          ? 'fade'
+          : overlay.animation,
     }
-  })
+    })
 
   return { ...spec, scenes, overlays }
 }

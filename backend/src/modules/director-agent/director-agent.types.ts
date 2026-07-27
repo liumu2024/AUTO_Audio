@@ -6,11 +6,16 @@ import type {
 } from '../../../../shared/types/director-context.js'
 import type { DirectorConversationRuntime } from '../../../../shared/lib/director-understanding.js'
 import type { DirectorSurfaceMode } from './surface-router.js'
+import type { DirectorWorkspaceState } from './director-workspace-session.js'
 
 export interface DirectorAgentChatRequest {
   prompt: string
   context: DirectorContext
   runtime: DirectorConversationRuntime
+  /** Stable browser workspace id; the server creates a V2 session when absent. */
+  workspaceSessionId?: string
+  /** Injected by the controller from the authenticated/request user boundary. */
+  userId?: number
 }
 
 export type DirectorAgentStreamEvent =
@@ -45,6 +50,15 @@ export type DirectorAgentStreamEvent =
   | {
       type: 'state_update'
       state: DirectorSessionState
+    }
+  | {
+      type: 'workspace_session'
+      workspaceSessionId: string
+      state: DirectorWorkspaceState
+      traceDir: string
+      modelCalled: boolean
+      responseId?: string
+      responseContinuityDisabled?: boolean
     }
   | {
       type: 'done'

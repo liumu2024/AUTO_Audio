@@ -1,7 +1,6 @@
 import {
   directorIntentToUserIntent,
   mergeDirectorSlots,
-  routeDirectorConversation,
   type DirectorConversationRuntime,
 } from './director-understanding.js'
 import type {
@@ -239,16 +238,6 @@ export function directorActionFromIntentResult(input: ResolveDirectorActionInput
     result,
     payload,
   }
-}
-
-export function resolveDirectorAction(input: ResolveDirectorActionInput): DirectorAction {
-  const result = routeDirectorConversation({
-    prompt: input.prompt,
-    slots: input.context.slots,
-    runtime: input.runtime,
-  })
-
-  return directorActionFromIntentResult({ ...input, result })
 }
 
 export async function executeDirectorAction(input: {

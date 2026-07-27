@@ -60,7 +60,6 @@ export function buildDirectorContextFromUI(input: {
       tags: att.tags ?? [],
     })),
     userIntent: input.existing?.userIntent ?? {
-      goal: 'analyze_sample',
       aspectRatio: input.aspectRatio,
       styleIntensity: input.styleIntensity,
       durationSec: input.durationSec,

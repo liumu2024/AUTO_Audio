@@ -43,7 +43,6 @@ export declare function buildExecutionPlanFromDirectorAction(action: Pick<Direct
 export declare function directorActionFromIntentResult(input: ResolveDirectorActionInput & {
     result: DirectorIntentResult;
 }): DirectorAction;
-export declare function resolveDirectorAction(input: ResolveDirectorActionInput): DirectorAction;
 export declare function executeDirectorAction(input: {
     action: DirectorAction;
     executor: DirectorActionExecutor;

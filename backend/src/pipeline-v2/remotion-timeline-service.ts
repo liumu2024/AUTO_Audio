@@ -116,9 +116,20 @@ async function resolveTimelineSpec(input: {
       const { runV2TimelineLlmPlanner } = await import('./remotion-timeline-llm-planner.js')
       const llmPlanner = await runV2TimelineLlmPlanner(plannerInputFrom(input.plannerInput))
       await input.trace.writeText('02-planning', 'llm-timeline-planner-prompt.md', llmPlanner.promptText)
-      await input.trace.writeJson('02-planning', 'llm-timeline-planner-raw-response.json', llmPlanner.rawResponse)
+      await input.trace.writeJson('02-planning', 'llm-timeline-planner-model-response.audit.json', llmPlanner.initialResponseAudit)
+      await input.trace.writeJson('02-planning', 'llm-timeline-planner-json-candidate.audit.json', llmPlanner.rawResponse)
       await input.trace.writeJson('02-planning', 'llm-timeline-planner-extraction-report.json', llmPlanner.extractionReport)
       await input.trace.writeJson('02-planning', 'llm-timeline-visual-inputs.json', llmPlanner.visualInputReport)
+      await input.trace.writeJson('02-planning', 'llm-timeline-planner-repairs.json', llmPlanner.repairs)
+      await input.trace.writeJson('02-planning', 'llm-timeline-planner-protocol-diagnostic.json', {
+        structured_output: llmPlanner.structuredOutput,
+        json_repair_error: llmPlanner.jsonRepair?.error ?? null,
+      })
+      if (llmPlanner.jsonRepair) {
+        await input.trace.writeText('02-planning', 'llm-timeline-planner-json-repair-request.md', llmPlanner.jsonRepair.request)
+        await input.trace.writeJson('02-planning', 'llm-timeline-planner-json-repair-result.audit.json',
+          llmPlanner.jsonRepair.responseAudit ?? { error: llmPlanner.jsonRepair.error ?? null })
+      }
       return {
         spec: llmPlanner.spec,
         plannerSource: 'llm',
@@ -126,7 +137,26 @@ async function resolveTimelineSpec(input: {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      const protocol = error && typeof error === 'object' && 'diagnostic' in error
+        ? (error as { diagnostic?: Record<string, unknown> }).diagnostic
+        : undefined
       await input.trace.writeJson('02-planning', 'llm-timeline-planner-error.json', { message })
+      if (protocol) {
+        await input.trace.writeJson('02-planning', 'llm-timeline-planner-model-response.audit.json', protocol.initialResponseAudit ?? null)
+        await input.trace.writeJson('02-planning', 'llm-timeline-planner-json-candidate.audit.json', protocol.rawResponse ?? null)
+        await input.trace.writeJson('02-planning', 'llm-timeline-planner-extraction-report.json', protocol.extractionReport ?? null)
+        await input.trace.writeJson('02-planning', 'llm-timeline-planner-protocol-diagnostic.json', {
+          structured_output: protocol.structuredOutput ?? null,
+          validation_issues: protocol.validationIssues ?? null,
+          fallback_reason: 'unrepairable_structured_output',
+        })
+        const repair = protocol.jsonRepair as { request?: unknown; responseAudit?: unknown; error?: unknown } | undefined
+        if (typeof repair?.request === 'string') {
+          await input.trace.writeText('02-planning', 'llm-timeline-planner-json-repair-request.md', repair.request)
+          await input.trace.writeJson('02-planning', 'llm-timeline-planner-json-repair-result.audit.json',
+            repair.responseAudit ?? { error: repair.error ?? null })
+        }
+      }
       if (!input.plannerInput.allowPlannerFallback) throw error
       const spec = await buildTimelineSpec(input.plannerInput)
       await input.trace.writeJson('02-planning', 'timeline-fallback-spec.json', spec)

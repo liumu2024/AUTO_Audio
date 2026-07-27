@@ -19,6 +19,7 @@ import type { DirectorSessionState } from '@shared/types/director-state'
 
 interface DirectorContextState {
   context: DirectorContext
+  replaceContext: (context: DirectorContext) => void
   setSampleVideo: (sampleVideo?: DirectorSampleVideoContext) => void
   setMaterials: (materials: DirectorMaterialContext[]) => void
   setUserIntent: (patch: Partial<DirectorUserIntent>) => void
@@ -35,7 +36,6 @@ interface DirectorContextState {
 const initialContext: DirectorContext = {
   materials: [],
   userIntent: {
-    goal: 'analyze_sample',
     aspectRatio: '9:16',
     styleIntensity: 'medium',
   },
@@ -45,6 +45,8 @@ const initialContext: DirectorContext = {
 
 export const useDirectorContextStore = create<DirectorContextState>((set) => ({
   context: initialContext,
+
+  replaceContext: (context) => set({ context }),
 
   setSampleVideo: (sampleVideo) =>
     set((state) => ({

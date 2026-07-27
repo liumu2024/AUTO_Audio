@@ -12,6 +12,10 @@ function readNumber(key: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback
 }
 
+function readStructuredOutputMode(key: string): 'auto' | 'off' {
+  return readEnv(key) === 'off' ? 'off' : 'auto'
+}
+
 /**
  * API keys are managed by backend/.env.
  * Final video output is rendered locally through Remotion.
@@ -96,6 +100,10 @@ export const env = {
   videoUnderstandingDebugArtifactDir:
     readEnv('VIDEO_UNDERSTANDING_DEBUG_ARTIFACT_DIR') ??
     defaultAgentTraceDir,
+  /** Prefer provider JSON Schema output; retry once without it when unsupported. */
+  videoUnderstandingStructuredOutputMode: readStructuredOutputMode(
+    'VIDEO_UNDERSTANDING_STRUCTURED_OUTPUT_MODE',
+  ),
 
   /** Local Remotion rendering. */
   remotionRoot: readEnv('REMOTION_ROOT') ?? '../remotion',
@@ -128,6 +136,13 @@ export const env = {
     readNumber('VIDEO_UNDERSTANDING_FILE_READY_POLL_INTERVAL_MS', 2_000),
   ),
   directorAgentEnabled: readEnv('DIRECTOR_AGENT_ENABLED') !== 'false',
+  /** Enable only after the configured Responses provider accepts previous_response_id. */
+  directorAgentResponseContinuity:
+    readEnv('DIRECTOR_AGENT_RESPONSE_CONTINUITY') === 'true',
+  /** Prefer provider JSON Schema output; retry once without it when unsupported. */
+  directorAgentStructuredOutputMode: readStructuredOutputMode(
+    'DIRECTOR_AGENT_STRUCTURED_OUTPUT_MODE',
+  ),
 
   /** V2 generated material adapter. Provider-specific API shapes stay behind this boundary. */
   v2VideoGenerationProvider:

@@ -20,7 +20,6 @@ function runtime(overrides: Partial<DirectorConversationRuntime> = {}): Director
     backendEnabled: true,
     sampleUrl: '',
     isSampleParsed: false,
-    hasPipeline: false,
     hasV2Timeline: false,
     hasVisualMaterial: false,
     materialCount: 0,
@@ -63,6 +62,22 @@ const freeConversation = parseDirectorModelDecision(
 assert.equal(freeConversation.authorizationEvidence, undefined)
 assert.equal(freeConversation.assistantMessage, '我会先根据画面内容设计字幕的语气、位置和节奏，再给出几个可选方向。')
 
+// Older model prompts sometimes put the V2 branch in the retired UI field.
+// It remains auditable as v2CreationMode, but cannot poison V2 slots or
+// invalidate an otherwise valid create decision.
+const compatibleCreationMode = parseDirectorModelDecision(
+  JSON.stringify({
+    intent: 'generate_timeline', confidence: 0.91, contentDomain: 'general',
+    slotsPatch: { generationMode: 'text_to_video' }, missingSlots: [],
+    requiresConfirmation: false, executionEffect: 'draft_change',
+    authorizationEvidence: '请生成一版无素材文生视频方案', nextAction: 'GENERATE_TIMELINE',
+    assistantMessage: '我会创建一版可编辑的 V2 文生视频方案。', publicThoughts: [],
+    statePatch: {}, requirements: [],
+  }),
+)
+assert.equal(compatibleCreationMode.v2CreationMode, 'text_to_video')
+assert.deepEqual(compatibleCreationMode.slotsPatch, {})
+
 // A question may contain production vocabulary, but the model's no-effect
 // decision remains authoritative. No keyword matcher may turn it into work.
 const discussion = finalizeModelDecision({
@@ -72,7 +87,7 @@ const discussion = finalizeModelDecision({
     assistantMessage: '我会先解释字幕和节奏的取舍。',
   }),
   context,
-  runtime: runtime({ hasPipeline: true, hasV2Timeline: true, v2SceneCount: 3 }),
+  runtime: runtime({ hasV2Timeline: true, v2SceneCount: 3 }),
 })
 assert.equal(discussion.executionEffect, 'none')
 assert.equal(discussion.nextAction, 'ACKNOWLEDGE')
@@ -108,10 +123,23 @@ const revision = finalizeModelDecision({
     authorizationEvidence: '把第二段改得更克制，并生成一版新方案',
   }),
   context,
-  runtime: runtime({ hasPipeline: true, hasV2Timeline: true, v2SceneCount: 3 }),
+  runtime: runtime({ hasV2Timeline: true, v2SceneCount: 3 }),
 })
 assert.equal(revision.executionEffect, 'draft_change')
 assert.equal(revision.nextAction, 'REVISE_TIMELINE')
+
+const createWithoutQuotedEvidence = finalizeModelDecision({
+  llmResult: decision({
+    intent: 'generate_timeline',
+    nextAction: 'GENERATE_TIMELINE',
+    executionEffect: 'draft_change',
+    authorizationEvidence: undefined,
+  }),
+  context,
+  runtime: runtime(),
+})
+assert.equal(createWithoutQuotedEvidence.executionEffect, 'draft_change')
+assert.equal(createWithoutQuotedEvidence.nextAction, 'GENERATE_TIMELINE')
 
 // An uploaded video is not automatically a sample. The director may select a
 // declared candidate only through its structured id, and code verifies it.
@@ -154,7 +182,7 @@ const ungroundedOperation = finalizeModelDecision({
     executionEffect: 'delivery',
   }),
   context,
-  runtime: runtime({ hasPipeline: true, hasV2Timeline: true, v2SceneCount: 3 }),
+  runtime: runtime({ hasV2Timeline: true, v2SceneCount: 3 }),
 })
 assert.equal(ungroundedOperation.executionEffect, 'none')
 assert.equal(ungroundedOperation.nextAction, 'ASK_USER')

@@ -1,10 +1,12 @@
 import { Upload } from 'lucide-react'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ChatInput } from '@/components/sidebar/ChatInput'
 import { DirectorChatThread } from '@/components/sidebar/DirectorChatThread'
 import {
   streamDirectorChat,
+  getDirectorWorkspaceSession,
+  reportDirectorWorkspaceOutcome,
   type DirectorAgentStreamEvent,
 } from '@/lib/api'
 import {
@@ -31,6 +33,16 @@ import type {
   DirectorSessionState,
   DirectorTimelineSnapshot,
 } from '@shared/types/director-state'
+
+const DIRECTOR_WORKSPACE_STORAGE_KEY = 'v2.director.workspace-session-id'
+
+function browserWorkspaceSessionId(): string {
+  const existing = window.localStorage.getItem(DIRECTOR_WORKSPACE_STORAGE_KEY)
+  if (existing && /^[a-zA-Z0-9_-]{8,100}$/.test(existing)) return existing
+  const id = `v2_director_${crypto.randomUUID()}`
+  window.localStorage.setItem(DIRECTOR_WORKSPACE_STORAGE_KEY, id)
+  return id
+}
 
 function attachmentTypeFromMime(mime: string): InputAttachment['type'] | null {
   if (mime.startsWith('video/')) return 'video'
@@ -118,8 +130,8 @@ function isRevisionOnlyAction(type: DirectorActionType): boolean {
 }
 
 function shouldShowThoughtSurface(event: DirectorAgentStreamEvent) {
-  if (event.type !== 'surface') return false
-  return event.shouldRunIntentRouter || event.mode === 'repair'
+  // Surface routing is diagnostic-only. It is not a user-visible workflow.
+  return event.type === 'surface' && event.mode === 'repair'
 }
 
 function eventThought(event: DirectorAgentStreamEvent): string | null {
@@ -127,22 +139,20 @@ function eventThought(event: DirectorAgentStreamEvent): string | null {
   if (event.type === 'intent') {
     const source =
       event.source === 'llm'
-        ? 'LLM Router'
+        ? '导演模型'
         : event.source === 'llm_unstructured_safe_reply'
-          ? '模型自由回复'
+          ? '模型自由回复（未执行）'
           : event.source === 'context_fallback'
-            ? '上下文保留'
-            : 'Router'
-    return `意图识别：${event.intent}，置信度 ${Math.round(
-      event.confidence * 100,
-    )}%，内容类型 ${event.contentDomain}，来源 ${source}。`
+            ? '保留上下文的降级回复'
+            : '导演服务'
+    return `本轮理解：${event.intent}；${source}。`
   }
   if (event.type === 'slot_update') {
     return event.missingSlots.length
       ? `条件检查：还缺 ${event.missingSlots.join(', ')}。`
       : `条件检查：画幅 ${event.slots.aspectRatio}，风格强度 ${event.slots.styleIntensity}，素材状态 ${event.slots.materialStatus}。`
   }
-  if (event.type === 'action_plan') return `动作计划：${event.action.type}。`
+  if (event.type === 'action_plan') return `下一步：${event.action.type}。`
   if (event.type === 'error') return `分析失败：${event.message}`
   return null
 }
@@ -258,6 +268,19 @@ export function DirectorChatPanel() {
   const executorRef = useRef(createDirectorActionExecutor())
   const abortRef = useRef<AbortController | null>(null)
   const streamCancelRef = useRef(false)
+  const workspaceSessionIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const workspaceSessionId = browserWorkspaceSessionId()
+    workspaceSessionIdRef.current = workspaceSessionId
+    void getDirectorWorkspaceSession(workspaceSessionId)
+      .then((session) => {
+        if (session) useDirectorContextStore.getState().replaceContext(session.state.context)
+      })
+      .catch(() => {
+        // A missing/unavailable session must not block a new V2 discussion.
+      })
+  }, [])
   const activeProgressMessageIdRef = useRef<string | null>(null)
 
   const recordActionCompleted = (
@@ -341,6 +364,23 @@ export function DirectorChatPanel() {
   }) => {
     let { actionPlan, prompt, sampleVideoUrl, sampleVideoName, materials, conversationSummary } =
       input
+    const reportOutcome = (ok: boolean, outcome: string) => {
+      const workspaceSessionId = workspaceSessionIdRef.current
+      if (!workspaceSessionId) return
+      const v2 = useV2TimelineStore.getState()
+      void reportDirectorWorkspaceOutcome({
+        workspaceSessionId,
+        action: actionPlan.type,
+        ok,
+        outcome,
+        traceDir: v2.result?.traceDir ?? v2.preview?.traceDir,
+        currentTimeline: currentV2TimelineSnapshot(),
+      })
+        .then((session) => useDirectorContextStore.getState().replaceContext(session.state.context))
+        .catch(() => {
+          // The V2 action already has its own result; do not hide it if session reporting fails.
+        })
+    }
 
     // A newly uploaded video remains a creation material unless the director
     // explicitly selected it through the structured candidate id. This happens
@@ -373,6 +413,7 @@ export function DirectorChatPanel() {
         message: actionPlan.message,
         userFacingOnly: true,
       })
+      reportOutcome(true, actionPlan.message)
       if (input.progressMessageId) {
         updateMessage(input.progressMessageId, {
           content: actionPlan.message,
@@ -386,8 +427,9 @@ export function DirectorChatPanel() {
     }
 
     if (isRevisionOnlyAction(actionPlan.type)) {
-      const creation = useCreationStore.getState()
-      const outcome = await runDirectorAction({
+      try {
+        const creation = useCreationStore.getState()
+        const outcome = await runDirectorAction({
         action: actionPlan,
         executor: executorRef.current,
         context: {
@@ -405,16 +447,21 @@ export function DirectorChatPanel() {
             authorizationEvidence: actionPlan.payload?.authorizationEvidence,
           },
         },
-      })
-      recordActionCompleted(outcome)
-      if (input.progressMessageId) {
-        updateMessage(input.progressMessageId, {
-          content: actionPlan.message,
-          kind: 'progress',
-          status: 'done',
         })
-      } else {
-        addAssistantMessage({ content: actionPlan.message })
+        recordActionCompleted(outcome)
+        reportOutcome(true, outcome.message)
+        if (input.progressMessageId) {
+          updateMessage(input.progressMessageId, {
+            content: actionPlan.message,
+            kind: 'progress',
+            status: 'done',
+          })
+        } else {
+          addAssistantMessage({ content: actionPlan.message })
+        }
+      } catch (error) {
+        reportOutcome(false, error instanceof Error ? error.message : String(error))
+        throw error
       }
       return
     }
@@ -449,6 +496,7 @@ export function DirectorChatPanel() {
         },
       })
       recordActionCompleted(outcome)
+      reportOutcome(true, outcome.message)
 
       // The director's natural-language response remains the conversation.
       // Execution status belongs to the progress state and the V2 workbench,
@@ -461,6 +509,7 @@ export function DirectorChatPanel() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       recordActionFailed(actionPlan.type, msg)
+      reportOutcome(false, msg)
       updateMessage(progressId, {
         content: msg,
         kind: 'error',
@@ -571,13 +620,14 @@ export function DirectorChatPanel() {
       await streamDirectorChat(
         {
           prompt,
+          workspaceSessionId:
+            workspaceSessionIdRef.current ?? browserWorkspaceSessionId(),
           context: directorContext,
           runtime: {
             backendEnabled: true,
             sampleUrl: effectiveSampleUrl,
             sampleName: effectiveSampleName,
             isSampleParsed: currentIsSampleParsed,
-            hasPipeline: Boolean(v2State.spec),
             activeTaskId: v2State.taskId ?? activeTaskId,
             hasV2Timeline: Boolean(v2State.spec?.scenes.length),
             v2TaskId: v2State.taskId,
@@ -614,6 +664,17 @@ export function DirectorChatPanel() {
           if (event.type === 'state_update') {
             useDirectorContextStore.getState().setDirectorState(event.state)
           }
+          if (event.type === 'workspace_session') {
+            workspaceSessionIdRef.current = event.workspaceSessionId
+            window.localStorage.setItem(
+              DIRECTOR_WORKSPACE_STORAGE_KEY,
+              event.workspaceSessionId,
+            )
+            useDirectorContextStore.getState().replaceContext(event.state.context)
+            debugThoughts.push(
+              `V2 会话已同步；本轮${event.modelCalled ? '已调用导演模型' : '使用上下文降级'}。`,
+            )
+          }
           if (event.type === 'done') {
             if (event.action) actionPlan = event.action
             if (event.message) directMessage = event.message
@@ -641,11 +702,6 @@ export function DirectorChatPanel() {
 
       useDirectorContextStore.getState().updateDirectorState((state) =>
         recordDirectorActionPlanned({ state, action: actionPlan!, prompt }),
-      )
-      debugThoughts.push(
-        `状态机：${summarizeDirectorSessionState(
-          useDirectorContextStore.getState().context.directorState,
-        )}`,
       )
       applyActionContext(actionPlan)
       await executeAction({

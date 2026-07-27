@@ -292,6 +292,31 @@ export function validateRemotionTimelineSpec(value: unknown): RemotionTimelineVa
     }
   })
 
+  const audio = spec.audio == null ? [] : Array.isArray(spec.audio) ? spec.audio : []
+  if (spec.audio != null && !Array.isArray(spec.audio)) {
+    addIssue(issues, 'error', 'audio', 'audio must be an array when provided.')
+  }
+  const audioIds = new Set<string>()
+  audio.forEach((clip, index) => {
+    const path = `audio[${index}]`
+    validateUniqueId({ issues, ids: audioIds, path, id: clip.id, label: 'audio clip' })
+    if (!assetIds.has(clip.asset_id)) {
+      addIssue(issues, 'error', `${path}.asset_id`, 'audio clip asset_id must reference an existing asset.')
+    } else if (assets.find((asset) => asset.id === clip.asset_id)?.type !== 'audio') {
+      addIssue(issues, 'error', `${path}.asset_id`, 'audio clip asset_id must reference an audio asset.')
+    }
+    validateRange({
+      issues,
+      path,
+      start: clip.start_sec,
+      end: clip.end_sec,
+      durationSec,
+    })
+    if (clip.volume != null && (!finiteNumber(clip.volume) || clip.volume < 0 || clip.volume > 1)) {
+      addIssue(issues, 'error', `${path}.volume`, 'volume must be between 0 and 1.')
+    }
+  })
+
   const materialJobs = Array.isArray(spec.material_jobs) ? spec.material_jobs : []
   if (!Array.isArray(spec.material_jobs)) {
     addIssue(issues, 'error', 'material_jobs', 'material_jobs must be an array.')

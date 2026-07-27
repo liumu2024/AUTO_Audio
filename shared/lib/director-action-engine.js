@@ -1,4 +1,4 @@
-import { directorIntentToUserIntent, mergeDirectorSlots, routeDirectorConversation, } from './director-understanding.js';
+import { directorIntentToUserIntent, mergeDirectorSlots, } from './director-understanding.js';
 function includesPluginRequest(text) {
     return /插件|plugin|component|能力缺失|missing capability/i.test(text);
 }
@@ -92,14 +92,6 @@ export function directorActionFromIntentResult(input) {
         result,
         payload,
     };
-}
-export function resolveDirectorAction(input) {
-    const result = routeDirectorConversation({
-        prompt: input.prompt,
-        slots: input.context.slots,
-        runtime: input.runtime,
-    });
-    return directorActionFromIntentResult({ ...input, result });
 }
 export async function executeDirectorAction(input) {
     const { action, executor, context } = input;

@@ -14,6 +14,25 @@ import { resolveVideoInput } from '../modules/video-understanding/resolve-video-
 import type { VideoInput } from '../modules/video-understanding/video-input.js'
 import { createV2TraceWriter } from './trace.js'
 
+const SampleUnderstandingJsonSchema = {
+  type: 'object',
+  required: ['schema_version', 'task_id', 'summary_zh', 'segments'],
+  properties: {
+    schema_version: { type: 'string', const: V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION },
+    task_id: { type: 'string' },
+    summary_zh: { type: 'string' },
+    story_zh: { type: 'string' },
+    atmosphere_zh: { type: 'string' },
+    editing_zh: { type: 'string' },
+    rhythm_zh: { type: 'string' },
+    reusable_style_zh: { type: 'string' },
+    not_reusable_zh: { type: 'string' },
+    segments: { type: 'array', items: { type: 'object' } },
+    questions_for_user_zh: { type: 'array', items: { type: 'string' } },
+    warnings_zh: { type: 'array', items: { type: 'string' } },
+  },
+} as const
+
 export interface V2SampleAnalyzeInput {
   taskId: string
   prompt: string
@@ -223,35 +242,94 @@ async function waitForFileReady(fileId: string): Promise<void> {
 async function callUnderstandingModel(input: {
   fileId: string
   prompt: string
-}): Promise<unknown> {
-  const payload = {
+  includeVideo?: boolean
+  allowStructuredOutput?: boolean
+}): Promise<{
+  raw: unknown
+  structuredOutput: { requested: boolean; providerFallback: boolean; reason?: string }
+}> {
+  const requested = env.videoUnderstandingStructuredOutputMode === 'auto' && input.allowStructuredOutput !== false
+  const payload = (useSchema: boolean) => ({
     model: env.videoUnderstandingModel,
+    ...(useSchema
+      ? { text: { format: { type: 'json_schema', name: 'v2_sample_understanding', schema: SampleUnderstandingJsonSchema } } }
+      : {}),
     input: [
       {
         role: 'user',
         content: [
-          { type: 'input_video', file_id: input.fileId },
+          ...(input.includeVideo === false ? [] : [{ type: 'input_video' as const, file_id: input.fileId }]),
           { type: 'input_text', text: input.prompt },
         ],
       },
     ],
-  }
-  const response = await fetch(env.videoUnderstandingResponsesUrl, {
+  })
+  const request = async (useSchema: boolean) => fetch(env.videoUnderstandingResponsesUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${env.videoUnderstandingApiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(payload(useSchema)),
     signal: AbortSignal.timeout(env.videoUnderstandingTimeoutMs),
   })
-  const text = await response.text()
+  let response = await request(requested)
+  let text = await response.text()
+  const schemaRejected = requested && !response.ok && [400, 404, 422].includes(response.status)
+  if (schemaRejected) {
+    response = await request(false)
+    const retryText = await response.text()
+    if (!response.ok) throw new Error(`Responses API returned ${response.status}: ${retryText.slice(0, 500)}`)
+    try {
+      return { raw: JSON.parse(retryText), structuredOutput: { requested: true, providerFallback: true, reason: text.slice(0, 500) } }
+    } catch {
+      return { raw: retryText, structuredOutput: { requested: true, providerFallback: true, reason: text.slice(0, 500) } }
+    }
+  }
   if (!response.ok) throw new Error(`Responses API returned ${response.status}: ${text.slice(0, 500)}`)
   try {
-    return JSON.parse(text)
+    return { raw: JSON.parse(text), structuredOutput: { requested, providerFallback: false } }
   } catch {
-    return text
+    return { raw: text, structuredOutput: { requested, providerFallback: false } }
   }
+}
+
+function responseAudit(raw: unknown) {
+  const record = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+  return {
+    id: record.id,
+    model: record.model,
+    status: record.status,
+    created_at: record.created_at,
+    usage: record.usage,
+    output_text: extractText(raw),
+  }
+}
+
+function parseUnderstandingCandidate(raw: unknown) {
+  const extracted = extractStructuredJsonCandidate(
+    raw,
+    (value): value is V2SampleUnderstandingResult =>
+      typeof value === 'object' &&
+      value !== null &&
+      !Array.isArray(value) &&
+      (value as { schema_version?: unknown }).schema_version === V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION,
+  )
+  if (extracted.candidate) return { candidate: extracted.candidate, report: extracted.report }
+  const text = extractText(raw)
+  if (!text) throw new Error('理解模型未返回可提取的最终文本。')
+  return { candidate: JSON.parse(text), report: extracted.report }
+}
+
+function jsonRepairPrompt(input: { invalidText: string; error: string; taskId: string }) {
+  return [
+    '只修复下列 JSON 的格式，不重新分析视频，不增加或删除语义内容。',
+    `schema_version 必须是 "${V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION}"，task_id 必须是 "${input.taskId}"。`,
+    `解析错误：${input.error}`,
+    '只输出修复后的严格 JSON，不要 Markdown、解释或推理。',
+    '原始最终文本：',
+    input.invalidText,
+  ].join('\n')
 }
 
 function normalizeSegment(raw: unknown, index: number, fallback: V2SampleUnderstandingSegment): V2SampleUnderstandingSegment {
@@ -331,29 +409,43 @@ export async function analyzeV2Sample(input: V2SampleAnalyzeInput): Promise<V2Sa
       fileId = await uploadVideoFile(video)
       await trace.writeJson('02-sample-understanding', 'ark-file.json', { file_id: fileId })
       await waitForFileReady(fileId)
-      const raw = await callUnderstandingModel({ fileId, prompt })
-      await trace.writeJson('02-sample-understanding', 'sample-understanding-raw-response.json', raw)
-      const extracted = extractStructuredJsonCandidate(
-        raw,
-        (value): value is V2SampleUnderstandingResult =>
-          typeof value === 'object' &&
-          value !== null &&
-          !Array.isArray(value) &&
-          (value as { schema_version?: unknown }).schema_version === V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION,
-      )
-      await trace.writeJson('02-sample-understanding', 'sample-understanding-extraction-report.json', extracted.report)
-      const candidate = extracted.candidate ?? (extractText(raw) ? JSON.parse(extractText(raw)) : undefined)
+      const response = await callUnderstandingModel({ fileId, prompt })
+      const raw = response.raw
+      await trace.writeJson('02-sample-understanding', 'sample-understanding-model-response.audit.json', responseAudit(raw))
+      let parsed: ReturnType<typeof parseUnderstandingCandidate>
+      try {
+        parsed = parseUnderstandingCandidate(raw)
+      } catch (firstError) {
+        const message = firstError instanceof Error ? firstError.message : String(firstError)
+        await trace.writeJson('02-sample-understanding', 'sample-understanding-protocol-diagnostic.json', {
+          kind: 'json_syntax_or_extraction', message, retry: 'format_only_without_video',
+          structured_output: response.structuredOutput,
+        })
+        const repairPrompt = jsonRepairPrompt({ invalidText: extractText(raw), error: message, taskId: input.taskId })
+        await trace.writeText('02-sample-understanding', 'sample-understanding-json-repair-request.md', repairPrompt)
+        const repairedResponse = await callUnderstandingModel({
+          fileId, prompt: repairPrompt, includeVideo: false, allowStructuredOutput: false,
+        })
+        const repairedRaw = repairedResponse.raw
+        await trace.writeJson('02-sample-understanding', 'sample-understanding-json-repair-response.audit.json', responseAudit(repairedRaw))
+        parsed = parseUnderstandingCandidate(repairedRaw)
+      }
+      await trace.writeJson('02-sample-understanding', 'sample-understanding-extraction-report.json', parsed.report)
+      const candidate = parsed.candidate
       understanding = normalizeUnderstanding(candidate, fallback)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      const protocolFailure = /JSON|schema_version|extraction|Unexpected token/i.test(message)
       understanding = heuristicUnderstanding({
         taskId: input.taskId,
         prompt: input.prompt,
         video,
         hints,
-        warning: `理解模型调用失败，已使用本地兜底结构：${message}`,
+        warning: `${protocolFailure ? '理解模型输出协议失败' : '理解模型调用失败'}，已使用本地兜底结构：${message}`,
       })
-      await trace.writeJson('02-sample-understanding', 'sample-understanding-error.json', { message })
+      await trace.writeJson('02-sample-understanding', 'sample-understanding-error.json', {
+        kind: protocolFailure ? 'output_protocol_failure' : 'provider_request_failure', message,
+      })
     } finally {
       if (fileId) await maybeDeleteFile(fileId)
     }

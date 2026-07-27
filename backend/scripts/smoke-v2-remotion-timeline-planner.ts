@@ -4,11 +4,16 @@ import path from 'node:path'
 
 import { validateRemotionTimelineSpec } from '../../shared/lib/remotion-timeline-validator.js'
 import { normalizeV2TimelineTextOwnership } from '../../shared/lib/remotion-timeline-text-ownership.js'
+import {
+  applyV2TimelineHardRequirements,
+  extractV2TimelineHardRequirements,
+} from '../src/pipeline-v2/hard-requirements.js'
 import { buildDeterministicRemotionTimelineSpec } from '../src/pipeline-v2/remotion-timeline-planner.js'
 import {
   buildV2TimelinePlanningReview,
   renderV2TimelinePlanningReviewMarkdown,
 } from '../src/pipeline-v2/remotion-timeline-review.js'
+import { repairV2LlmGeneratedMaterialPrompts } from '../src/pipeline-v2/remotion-timeline-llm-planner.js'
 import {
   applyV2TimelineRevisionPreservation,
   buildV2TimelineRevisionContext,
@@ -34,6 +39,11 @@ const validation = validateRemotionTimelineSpec(spec)
 assert.equal(validation.ok, true, JSON.stringify(validation.issues, null, 2))
 assert.equal(spec.scenes.length, 3)
 assert.equal(spec.render_policy.allow_custom_component, false)
+
+const malformedAudioSpec = { ...spec, audio: {} } as unknown as typeof spec
+const malformedAudioValidation = validateRemotionTimelineSpec(malformedAudioSpec)
+assert.equal(malformedAudioValidation.ok, false)
+assert.ok(malformedAudioValidation.issues.some((issue) => issue.path === 'audio'))
 
 const imageFallback = buildDeterministicRemotionTimelineSpec({
   taskId: `v2_timeline_caption_fallback_${Date.now()}`,
@@ -75,6 +85,7 @@ const repairedModelSpec = normalizeV2TimelineTextOwnership({
       start_sec: imageFallback.scenes[0]!.start_sec,
       end_sec: Number.NaN,
       text: '模型给出的字幕',
+      animation: 'zoom_in',
       x_pct: Number.NaN,
       y_pct: Number.NaN,
     },
@@ -86,7 +97,68 @@ assert.equal(repairedFirstScene.subtitle, undefined)
 assert.equal(repairedFirstScene.body, undefined)
 assert.equal(repairedFirstScene.creative_intent?.material_label, '4.png')
 assert.equal(repairedModelSpec.overlays[0]?.text, '模型给出的字幕')
+assert.equal(repairedModelSpec.overlays[0]?.animation, 'fade')
 assert.equal(validateRemotionTimelineSpec(repairedModelSpec).ok, true)
+
+const missingPromptSpec = buildDeterministicRemotionTimelineSpec({
+  taskId: `v2_timeline_missing_material_prompt_${Date.now()}`,
+  creationMode: 'text_to_video',
+  prompt: '生成一版不依赖用户素材的科技招生短片。',
+  durationSec: 6,
+})
+const missingPromptRepair = repairV2LlmGeneratedMaterialPrompts({
+  ...missingPromptSpec,
+  material_jobs: missingPromptSpec.material_jobs.map((job) =>
+    job.type === 'generate_video' ? { ...job, prompt: undefined } : job,
+  ),
+})
+assert.ok(missingPromptRepair.repairs.length > 0)
+assert.ok(
+  missingPromptRepair.spec.material_jobs
+    .filter((job) => job.type === 'generate_video')
+    .every((job) => Boolean(job.prompt?.trim())),
+  'Recoverable missing generation prompts must be derived from their linked scene intent.',
+)
+assert.equal(validateRemotionTimelineSpec(missingPromptRepair.spec).ok, true)
+
+const unsupportedAudioRepair = repairV2LlmGeneratedMaterialPrompts({
+  ...missingPromptSpec,
+  assets: [{ id: 'planned_bgm', type: 'audio', src: '', source: 'generated_asset' }],
+  audio: [{ id: 'planned_bgm_clip', asset_id: 'planned_bgm', start_sec: 0, end_sec: 6 }],
+  material_jobs: [
+    ...missingPromptSpec.material_jobs,
+    { id: 'generate_bgm', scene_id: missingPromptSpec.scenes[0]!.id, type: 'generate_video', status: 'planned', output_asset_id: 'planned_bgm' },
+  ],
+})
+assert.equal(unsupportedAudioRepair.spec.assets.some((asset) => asset.id === 'planned_bgm'), false)
+assert.equal(unsupportedAudioRepair.spec.audio?.some((clip) => clip.asset_id === 'planned_bgm'), false)
+assert.equal(unsupportedAudioRepair.spec.material_jobs.some((job) => job.id === 'generate_bgm'), false)
+assert.ok(unsupportedAudioRepair.repairs.some((repair) => repair.field === 'audio'))
+assert.equal(validateRemotionTimelineSpec(unsupportedAudioRepair.spec).ok, true)
+
+const metadataCaption = normalizeV2TimelineTextOwnership({
+  ...imageFallback,
+  overlays: [
+    {
+      id: 'caption_from_material_label',
+      type: 'caption',
+      scene_id: imageFallback.scenes[0]!.id,
+      start_sec: 0,
+      end_sec: 1,
+      text: '4.png',
+      x_pct: 50,
+      y_pct: 80,
+      width_pct: 84,
+    },
+  ],
+})
+assert.equal(metadataCaption.overlays.length, 0)
+
+const explicitMetadataCaption = applyV2TimelineHardRequirements({
+  spec: metadataCaption,
+  requirements: extractV2TimelineHardRequirements('字幕显示“4.png”'),
+})
+assert.equal(explicitMetadataCaption.overlays.some((overlay) => overlay.text === '4.png'), true)
 
 const baseRevisionSpec = {
   ...spec,

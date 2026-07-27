@@ -33,6 +33,13 @@ export function extractV2TimelineHardRequirements(prompt: string): V2TimelineHar
   const requiredCaptions: string[] = []
   for (const rawLine of prompt.split(/\r?\n/)) {
     const line = rawLine.trim()
+    const explicitCaption = line.match(
+      /(?:字幕|标题|文案)(?:内容)?\s*(?:为|写成|显示|使用)\s*["“]([^"”]+)["”]/,
+    )
+    if (explicitCaption?.[1]) {
+      requiredCaptions.push(normalizeCaptionText(explicitCaption[1]))
+      continue
+    }
     const quotedSegmentMatch = line.match(
       /^片段\s*\d+\s*[:：]\s*["“](.+?)["”](?:\s*[（(][^）)]*[）)])?\s*$/,
     )

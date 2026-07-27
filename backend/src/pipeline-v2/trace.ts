@@ -19,7 +19,10 @@ export function createV2TraceWriter(input: {
   cwd?: string
 }): V2TraceWriter {
   const cwd = input.cwd ?? process.cwd()
-  const baseDir = input.baseDir ?? 'tmp/v2-agent-trace'
+  // A test process may set this once so every V2 trace it triggers shares one
+  // named session folder. Production callers keep the established default.
+  const configuredBaseDir = process.env.V2_TRACE_BASE_DIR?.trim()
+  const baseDir = input.baseDir ?? configuredBaseDir ?? 'tmp/v2-agent-trace'
   const rootDir = path.join(
     path.isAbsolute(baseDir) ? baseDir : path.resolve(cwd, baseDir),
     safePart(input.taskId),

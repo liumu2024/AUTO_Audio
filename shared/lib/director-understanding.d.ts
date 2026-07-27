@@ -5,7 +5,6 @@ export interface DirectorConversationRuntime {
     sampleUrl: string;
     sampleName?: string;
     isSampleParsed: boolean;
-    hasPipeline: boolean;
     activeTaskId?: string | null;
     hasV2Timeline?: boolean;
     v2TaskId?: string | null;
@@ -25,13 +24,6 @@ export declare function mergeDirectorSlots(base: DirectorContextSlots, patch: Pa
 export declare function deriveRuntimeSlotStatus(runtime: DirectorConversationRuntime): Pick<DirectorContextSlots, 'sampleVideoStatus' | 'materialStatus'>;
 export declare function inferContentDomain(text: string): DirectorContentDomain;
 export declare function isLandscapeLikeDomain(domain: DirectorContentDomain): boolean;
-export declare function parseDirectorIntent(text: string): DirectorUserIntent;
-export declare function parseDirectorSlotsFromText(text: string): Partial<DirectorContextSlots>;
-export declare function routeDirectorConversation(input: {
-    prompt: string;
-    slots: DirectorContextSlots;
-    runtime: DirectorConversationRuntime;
-}): DirectorIntentResult;
 export declare function directorIntentToUserIntent(result: DirectorIntentResult, current: DirectorUserIntent, prompt: string): DirectorUserIntent;
 export declare function summarizeDirectorReference(understanding: V2SampleUnderstandingResult): DirectorReferenceSummary;
 export interface DirectorMaterialSummaryInput {

@@ -1,6 +1,7 @@
 import { env } from '@/config/env'
 import type { DirectorAction } from '@shared/types/director-action'
 import type { DirectorSessionState } from '@shared/types/director-state'
+import type { DirectorWorkspaceState } from '@shared/types/director-workspace-session'
 import type { DirectorConversationRuntime } from '@shared/lib/director-understanding'
 import type { DirectorContext } from '@shared/types/director-context'
 import type { RemotionTimelineSpecV1 } from '@shared/types/remotion-timeline-spec.v1'
@@ -67,6 +68,15 @@ export type DirectorAgentStreamEvent =
       state: DirectorSessionState
     }
   | {
+      type: 'workspace_session'
+      workspaceSessionId: string
+      state: DirectorWorkspaceState
+      traceDir: string
+      modelCalled: boolean
+      responseId?: string
+      responseContinuityDisabled?: boolean
+    }
+  | {
       type: 'done'
       action?: DirectorAction
       message?: string
@@ -80,6 +90,13 @@ export interface DirectorAgentChatPayload {
   prompt: string
   context: DirectorContext
   runtime: DirectorConversationRuntime
+  workspaceSessionId?: string
+}
+
+export interface DirectorWorkspaceSessionResponse {
+  workspaceSessionId: string
+  state: DirectorWorkspaceState
+  updatedAt: string
 }
 
 export interface V2TimelinePayload {
@@ -428,4 +445,40 @@ export async function streamDirectorChat(
       onEvent(JSON.parse(json) as DirectorAgentStreamEvent)
     }
   }
+}
+
+export async function getDirectorWorkspaceSession(workspaceSessionId: string) {
+  const res = await fetch(
+    `${env.apiBase}/api/director/workspaces/${encodeURIComponent(workspaceSessionId)}`,
+    { headers: { 'X-User-Id': String(env.userId) } },
+  )
+  if (res.status === 404) return null
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(body.error ?? `HTTP ${res.status} director workspace`)
+  }
+  return res.json() as Promise<DirectorWorkspaceSessionResponse>
+}
+
+export async function reportDirectorWorkspaceOutcome(input: {
+  workspaceSessionId: string
+  action: string
+  ok: boolean
+  outcome: string
+  traceDir?: string
+  currentTimeline?: DirectorContext['currentTimeline']
+}) {
+  const res = await fetch(
+    `${env.apiBase}/api/director/workspaces/${encodeURIComponent(input.workspaceSessionId)}/outcomes`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': String(env.userId) },
+      body: JSON.stringify(input),
+    },
+  )
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(body.error ?? `HTTP ${res.status} director workspace outcome`)
+  }
+  return res.json() as Promise<DirectorWorkspaceSessionResponse & { traceDir: string }>
 }

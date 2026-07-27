@@ -11,6 +11,7 @@ import type {
   DirectorExecutionEffect,
   DirectorIntentResult,
 } from '../../../../shared/types/director-context.js'
+import type { DirectorWorkspacePatch } from './director-workspace-session.js'
 
 const AspectRatioSchema = z.enum(['9:16', '16:9', '1:1', '4:3'])
 const ContentDomainSchema = z.enum([
@@ -46,6 +47,44 @@ const ExecutionEffectSchema = z.enum([
   'draft_change',
   'delivery',
 ])
+const WorkspaceIntentSchema = z.enum(['chat', 'create', 'revise', 'execute', 'clarify'])
+const V2CreationModeSchema = z.enum(['sample_replicate', 'material_brief', 'text_to_video'])
+const DirectorDecisionJsonSchema = {
+  type: 'object',
+  required: ['intent', 'confidence', 'contentDomain', 'slotsPatch', 'nextAction', 'assistantMessage'],
+  properties: {
+    intent: { type: 'string', enum: IntentSchema.options },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+    contentDomain: { type: 'string', enum: ContentDomainSchema.options },
+    slotsPatch: { type: 'object' },
+    missingSlots: { type: 'array', items: { type: 'string' } },
+    requiresConfirmation: { type: 'boolean' },
+    executionEffect: { type: 'string', enum: ExecutionEffectSchema.options },
+    authorizationEvidence: { type: 'string' },
+    nextAction: { type: 'string', enum: NextActionSchema.options },
+    assistantMessage: { type: 'string' },
+    publicThoughts: { type: 'array', items: { type: 'string' } },
+    v2CreationMode: { type: 'string', enum: V2CreationModeSchema.options },
+    conversationIntent: { type: 'string', enum: WorkspaceIntentSchema.options },
+    statePatch: { type: 'object' },
+    nextStep: { type: 'string' },
+    requirements: { type: 'array', items: { type: 'string' } },
+  },
+} as const
+const WorkspaceStatePatchSchema = z.object({
+  selectedItemId: z.string().nullable().optional(),
+  pendingQuestion: z.string().nullable().optional(),
+  context: z
+    .object({
+      userIntent: z
+        .object({
+          requestedStyle: z.string().nullable().optional(),
+          constraints: z.array(z.string()).nullable().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+}).default({})
 
 /**
  * Models commonly serialize an omitted optional field as an empty string.
@@ -69,11 +108,7 @@ const LlmIntentResultSchema = z.object({
       aspectRatio: AspectRatioSchema.optional(),
       durationSec: z.number().min(1).max(600).optional(),
       styleIntensity: z.enum(['light', 'medium', 'strong']).optional(),
-      generationMode: z
-        .enum(['style_replicate', 'montage', 'beat_sync', 'custom'])
-        .optional(),
       subtitlePolicy: z.enum(['keep', 'none', 'rewrite']).optional(),
-      audioPolicy: z.enum(['keep_sample_bgm', 'user_audio', 'mute']).optional(),
       selectedClipId: z.string().optional(),
       sampleMaterialId: z.string().optional(),
     })
@@ -88,6 +123,12 @@ const LlmIntentResultSchema = z.object({
   ),
   assistantMessage: z.string().min(1),
   publicThoughts: z.array(z.string()).default([]),
+  /** Advisory only; effective V2 creation mode is derived from actual inputs. */
+  v2CreationMode: V2CreationModeSchema.optional(),
+  conversationIntent: WorkspaceIntentSchema.optional(),
+  statePatch: WorkspaceStatePatchSchema,
+  nextStep: z.enum(['discuss', 'plan_create', 'plan_revise', 'execute', 'await_input']).optional(),
+  requirements: z.array(z.string()).default([]),
 })
 
 type LlmIntentResult = z.infer<typeof LlmIntentResultSchema>
@@ -97,6 +138,22 @@ export interface LlmIntentRouterOutput {
   result: DirectorIntentResult
   publicThoughts: string[]
   fallbackReason?: string
+  responseId?: string
+  responseContinuityRejected?: boolean
+  modelCalled: boolean
+  modelOutputText?: string
+  modelResponseAudit?: unknown
+  protocolError?: { kind: 'json_syntax' | 'field_validation'; message: string }
+  proposedV2CreationMode?: z.infer<typeof V2CreationModeSchema>
+  structuredOutput?: { requested: boolean; providerFallback: boolean; reason?: string }
+  jsonRepair?: {
+    request: string
+    responseAudit?: unknown
+    protocolError?: { kind: 'json_syntax' | 'field_validation'; message: string }
+  }
+  conversationIntent?: z.infer<typeof WorkspaceIntentSchema>
+  statePatch?: DirectorWorkspacePatch
+  requirements?: string[]
 }
 
 function summarizeCurrentTimeline(context: DirectorContext) {
@@ -203,9 +260,8 @@ export function compactDirectorContextForPrompt(input: {
     currentEditableTimeline: summarizeCurrentTimeline(input.context),
     directorState: compactDirectorState,
     userIntent: input.context.userIntent,
-    // V2 receives only its structured timeline context. A legacy free-text
-    // summary can carry old outline/diff wording, so it is excluded entirely.
-    ...(isV2 ? {} : { conversationSummary: input.context.conversationSummary }),
+    // This is server-owned V2 session memory, never a legacy timeline summary.
+    conversationMemory: input.context.conversationSummary,
   }
 }
 
@@ -271,9 +327,7 @@ Revision / state machine rules:
     "aspectRatio": "9:16|16:9|1:1|4:3",
     "durationSec": 10,
     "styleIntensity": "light|medium|strong",
-    "generationMode": "style_replicate|montage|beat_sync|custom",
     "subtitlePolicy": "keep|none|rewrite",
-    "audioPolicy": "keep_sample_bgm|user_audio|mute"
   },
   "missingSlots": [],
   "requiresConfirmation": false,
@@ -281,7 +335,16 @@ Revision / state machine rules:
   "authorizationEvidence": "仅在 executionEffect 不是 none 时，摘录用户明确授权执行的原话；否则省略",
   "nextAction": "ASK_USER|ANALYZE_SAMPLE|GENERATE_TIMELINE|RENDER|REVISE_TIMELINE|ACKNOWLEDGE|NEED_BACKEND|NEED_SAMPLE|WAIT",
   "assistantMessage": "自然中文回复",
-  "publicThoughts": ["给用户看的简短步骤"]
+  "publicThoughts": ["给用户看的简短步骤"],
+  "v2CreationMode": "sample_replicate|material_brief|text_to_video（仅说明建议；实际分支由服务端真实输入决定）",
+  "conversationIntent": "chat|create|revise|execute|clarify",
+  "statePatch": {
+    "selectedItemId": "only when the user explicitly selects an item",
+    "pendingQuestion": "only when essential information is missing",
+    "context": { "userIntent": { "requestedStyle": "optional", "constraints": ["only newly confirmed constraints"] } }
+  },
+  "nextStep": "discuss|plan_create|plan_revise|execute|await_input",
+  "requirements": ["only facts essential for the requested next step"]
 }
 
 当前上下文：
@@ -330,37 +393,120 @@ function extractJson(text: string): unknown {
 
 /** Exported for the routing smoke test and for a single, audited model boundary. */
 export function parseDirectorModelDecision(text: string): LlmIntentResult {
-  return LlmIntentResultSchema.parse(extractJson(text))
+  const value = extractJson(text)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return LlmIntentResultSchema.parse(value)
+  const candidate = { ...(value as Record<string, unknown>) }
+  const slots = candidate.slotsPatch
+  if (slots && typeof slots === 'object' && !Array.isArray(slots)) {
+    const normalizedSlots = { ...(slots as Record<string, unknown>) }
+    const legacyMode = normalizedSlots.generationMode
+    delete normalizedSlots.generationMode
+    candidate.slotsPatch = normalizedSlots
+    if (candidate.v2CreationMode === undefined && V2CreationModeSchema.safeParse(legacyMode).success) {
+      candidate.v2CreationMode = legacyMode
+    }
+  }
+  return LlmIntentResultSchema.parse(candidate)
 }
 
-async function callResponsesApi(promptText: string): Promise<unknown> {
+function responseAudit(raw: unknown, finalText: string) {
+  if (!raw || typeof raw !== 'object') return { output_text: finalText }
+  const record = raw as Record<string, unknown>
+  return {
+    id: record.id,
+    model: record.model,
+    status: record.status,
+    created_at: record.created_at,
+    usage: record.usage,
+    output_text: finalText,
+  }
+}
+
+async function callResponsesApi(input: {
+  promptText: string
+  previousResponseId?: string
+  allowStructuredOutput?: boolean
+}): Promise<{
+  raw: unknown
+  structuredOutput: { requested: boolean; providerFallback: boolean; reason?: string }
+}> {
   if (!env.directorAgentApiKey) {
     throw new Error('DIRECTOR_AGENT_API_KEY is not configured.')
   }
 
-  const response = await fetch(env.directorAgentResponsesUrl, {
+  const requested = env.directorAgentStructuredOutputMode === 'auto' && input.allowStructuredOutput !== false
+  const body = (useSchema: boolean) => ({
+    model: env.directorAgentModel,
+    ...(env.directorAgentResponseContinuity && input.previousResponseId
+      ? { previous_response_id: input.previousResponseId }
+      : {}),
+    ...(useSchema
+      ? { text: { format: { type: 'json_schema', name: 'v2_director_decision', schema: DirectorDecisionJsonSchema } } }
+      : {}),
+    input: [
+      {
+        role: 'user',
+        content: [{ type: 'input_text', text: input.promptText }],
+      },
+    ],
+  })
+  const request = async (useSchema: boolean) => fetch(env.directorAgentResponsesUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${env.directorAgentApiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model: env.directorAgentModel,
-      input: [
-        {
-          role: 'user',
-          content: [{ type: 'input_text', text: promptText }],
-        },
-      ],
-    }),
+    body: JSON.stringify(body(useSchema)),
     signal: AbortSignal.timeout(env.directorAgentTimeoutMs),
   })
-
-  const text = await response.text()
+  let response = await request(requested)
+  let text = await response.text()
+  const schemaRejected = requested && !response.ok && [400, 404, 422].includes(response.status)
+  if (schemaRejected) {
+    response = await request(false)
+    const retryText = await response.text()
+    if (!response.ok) throw new Error(`Responses API returned ${response.status}: ${retryText.slice(0, 500)}`)
+    try {
+      return {
+        raw: JSON.parse(retryText),
+        structuredOutput: { requested: true, providerFallback: true, reason: text.slice(0, 500) },
+      }
+    } catch {
+      return {
+        raw: retryText,
+        structuredOutput: { requested: true, providerFallback: true, reason: text.slice(0, 500) },
+      }
+    }
+  }
   if (!response.ok) {
     throw new Error(`Responses API returned ${response.status}: ${text.slice(0, 500)}`)
   }
-  return JSON.parse(text)
+  try {
+    return { raw: JSON.parse(text), structuredOutput: { requested, providerFallback: false } }
+  } catch {
+    return { raw: text, structuredOutput: { requested, providerFallback: false } }
+  }
+}
+
+function responseIdFrom(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined
+  const id = (payload as Record<string, unknown>).id
+  return typeof id === 'string' && id.trim() ? id : undefined
+}
+
+function workspaceIntentFor(candidate: LlmIntentResult): z.infer<typeof WorkspaceIntentSchema> {
+  if (candidate.conversationIntent) return candidate.conversationIntent
+  if (candidate.executionEffect !== 'none') {
+    if (candidate.nextAction === 'RENDER') return 'execute'
+    if (candidate.nextAction === 'REVISE_TIMELINE') return 'revise'
+    return 'create'
+  }
+  return candidate.intent === 'clarify' ? 'clarify' : 'chat'
+}
+
+function continuityWasRejected(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /previous_response_id|previous response/i.test(message)
 }
 
 function toDirectorIntentResult(candidate: LlmIntentResult): DirectorIntentResult {
@@ -441,7 +587,7 @@ export function finalizeModelDecision(input: {
     }
   }
 
-  if (!llmResult.authorizationEvidence?.trim() || !actionMatchesExecutionEffect(effect, llmResult.nextAction)) {
+  if (!actionMatchesExecutionEffect(effect, llmResult.nextAction)) {
     return {
       ...llmResult,
       slotsPatch,
@@ -452,6 +598,25 @@ export function finalizeModelDecision(input: {
       executionEffect: 'none',
       authorizationEvidence: undefined,
       assistantMessage: `${llmResult.assistantMessage}\n\n如果你希望我实际执行，请直接确认要生成新方案、修改当前方案，或渲染当前版本。`,
+    }
+  }
+
+  // The original user turn is already durably recorded with the decision.
+  // Treat the model's quoted evidence as audit data for draft/workspace work:
+  // a missing quote must not turn an explicit create or revise request into a
+  // stale clarification loop. Rendering remains a delivery boundary and still
+  // requires the model to supply an explicit authorization record.
+  if (effect === 'delivery' && !llmResult.authorizationEvidence?.trim()) {
+    return {
+      ...llmResult,
+      slotsPatch,
+      intent: 'clarify',
+      nextAction: 'ASK_USER',
+      missingSlots: [],
+      requiresConfirmation: false,
+      executionEffect: 'none',
+      authorizationEvidence: undefined,
+      assistantMessage: `${llmResult.assistantMessage}\n\n请明确确认按当前 V2 方案渲染后，我再提交交付任务。`,
     }
   }
 
@@ -545,13 +710,14 @@ export function buildDirectorContextFallback(input: {
 }): LlmIntentRouterOutput {
   const facts = fallbackContextFacts(input)
   const question = quotedPrompt(input.prompt)
-  const contextLine = facts.length ? ` 我目前掌握的是：${facts.join('；')}。` : ''
+  const contextLine = facts.length ? ` 当前保留的 V2 事实是：${facts.join('；')}。` : ''
   const assistantMessage = question
-    ? `我先保留你刚才的问题：“${question}”。${contextLine} 导演理解暂时不可用，所以我不会把这句话猜成修改、生成或渲染指令；你可以继续展开你的想法，模型恢复后会按完整语义再判断。`
-    : `我会保留当前讨论和已有的 V2 上下文，不会发起修改、生成或渲染。你可以继续描述想法。`
+    ? `我没能可靠完成这轮判断，因此不会擅自把“${question}”变成修改、生成或渲染。${contextLine}`
+    : `这一轮无法可靠判断下一步；当前讨论和已有 V2 方案都会保留，也不会触发任何执行。${contextLine}`
 
   return {
     source: 'context_fallback',
+    modelCalled: false,
     result: {
       intent: 'clarify',
       confidence: 0,
@@ -567,7 +733,7 @@ export function buildDirectorContextFallback(input: {
       assistantMessage,
     },
     fallbackReason: input.reason,
-    publicThoughts: ['导演理解暂时不可用；已保留这轮问题与当前 V2 上下文，不会执行工作流。'],
+    publicThoughts: ['本轮未得到可执行模型决策；已保留问题与 V2 上下文，未触发工作流。'],
   }
 }
 
@@ -581,6 +747,7 @@ function safeUnstructuredLlmReply(input: {
 
   return {
     source: 'llm_unstructured_safe_reply',
+    modelCalled: true,
     result: {
       intent: 'clarify',
       confidence: 0.5,
@@ -599,10 +766,23 @@ function safeUnstructuredLlmReply(input: {
   }
 }
 
+function directorJsonRepairPrompt(input: { invalidText: string; error: string }) {
+  return [
+    'Repair only the JSON format of the final answer below.',
+    'Do not reinterpret the user request, change intent, add/remove business meaning, or propose execution.',
+    'Return JSON only, following this schema:',
+    JSON.stringify(DirectorDecisionJsonSchema),
+    `Parse error: ${input.error}`,
+    'Original final answer:',
+    input.invalidText,
+  ].join('\n')
+}
+
 export async function routeDirectorIntentWithLlm(input: {
   prompt: string
   context: DirectorContext
   runtime: DirectorConversationRuntime
+  previousResponseId?: string
 }): Promise<LlmIntentRouterOutput> {
   if (!env.directorAgentEnabled) {
     return buildDirectorContextFallback({
@@ -612,19 +792,60 @@ export async function routeDirectorIntentWithLlm(input: {
   }
 
   try {
-    const raw = await callResponsesApi(buildPrompt(input))
+    const response = await callResponsesApi({
+      promptText: buildPrompt(input),
+      previousResponseId: input.previousResponseId,
+    })
+    const raw = response.raw
     const text = extractText(raw)
+    const audit = responseAudit(raw, text)
     let parsed: LlmIntentResult
     try {
       parsed = parseDirectorModelDecision(text)
-    } catch {
-      return (
-        safeUnstructuredLlmReply({ ...input, text }) ??
-        buildDirectorContextFallback({
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const protocolError = { kind: text.trim().startsWith('{') ? 'field_validation' as const : 'json_syntax' as const, message }
+      const repairPrompt = directorJsonRepairPrompt({ invalidText: text, error: message })
+      let repairAudit: unknown
+      try {
+        const repairedResponse = await callResponsesApi({ promptText: repairPrompt, allowStructuredOutput: false })
+        const repairedText = extractText(repairedResponse.raw)
+        repairAudit = responseAudit(repairedResponse.raw, repairedText)
+        const repaired = parseDirectorModelDecision(repairedText)
+        const guarded = finalizeModelDecision({
+          llmResult: toDirectorIntentResult(repaired), context: input.context, runtime: input.runtime,
+        })
+        return {
+          source: 'llm', modelCalled: true, result: guarded,
+          publicThoughts: repaired.publicThoughts.slice(0, 4), responseId: responseIdFrom(raw),
+          modelOutputText: text, modelResponseAudit: audit,
+          conversationIntent: workspaceIntentFor(repaired), statePatch: repaired.statePatch as DirectorWorkspacePatch,
+          requirements: repaired.requirements, proposedV2CreationMode: repaired.v2CreationMode,
+          structuredOutput: response.structuredOutput,
+          jsonRepair: { request: repairPrompt, responseAudit: repairAudit },
+        }
+      } catch (repairError) {
+        const repairMessage = repairError instanceof Error ? repairError.message : String(repairError)
+        const safeReply = safeUnstructuredLlmReply({ ...input, text })
+        if (safeReply) return {
+          ...safeReply, responseId: responseIdFrom(raw), modelOutputText: text, modelResponseAudit: audit,
+          protocolError, structuredOutput: response.structuredOutput,
+          jsonRepair: { request: repairPrompt, responseAudit: repairAudit, protocolError: { kind: 'json_syntax', message: repairMessage } },
+        }
+      return {
+        ...buildDirectorContextFallback({
           ...input,
           reason: 'director model returned no valid response protocol',
-        })
-      )
+        }),
+        modelCalled: true,
+        responseId: responseIdFrom(raw),
+        modelOutputText: text,
+        modelResponseAudit: audit,
+        protocolError,
+        structuredOutput: response.structuredOutput,
+        jsonRepair: { request: repairPrompt, responseAudit: repairAudit, protocolError: { kind: 'json_syntax', message: repairMessage } },
+      }
+      }
     }
     const guarded = finalizeModelDecision({
       llmResult: toDirectorIntentResult(parsed),
@@ -634,13 +855,28 @@ export async function routeDirectorIntentWithLlm(input: {
 
     return {
       source: 'llm',
+      modelCalled: true,
       result: guarded,
       publicThoughts: parsed.publicThoughts.slice(0, 4),
+      responseId: responseIdFrom(raw),
+      modelOutputText: text,
+      modelResponseAudit: audit,
+      conversationIntent: workspaceIntentFor(parsed),
+      statePatch: parsed.statePatch as DirectorWorkspacePatch,
+      requirements: parsed.requirements,
+      proposedV2CreationMode: parsed.v2CreationMode,
+      structuredOutput: response.structuredOutput,
     }
   } catch (error) {
-    return buildDirectorContextFallback({
+    const fallback = buildDirectorContextFallback({
       ...input,
       reason: error instanceof Error ? error.name : 'director model request failed',
     })
+    return {
+      ...fallback,
+      modelCalled: true,
+      responseContinuityRejected:
+        Boolean(input.previousResponseId) && continuityWasRejected(error),
+    }
   }
 }

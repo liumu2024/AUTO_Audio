@@ -90,7 +90,10 @@ export function buildV2TimelineRevisionContext(input: {
         output_asset_id: job.output_asset_id,
         fallback_asset_id: job.fallback_asset_id,
       })),
-      audio: spec.audio?.map((clip) => ({ ...clip })),
+      // Persisted drafts can predate the array contract. Do not let malformed
+      // optional audio metadata crash a revision; validation still reports it
+      // before the timeline is accepted for a new plan or render.
+      audio: Array.isArray(spec.audio) ? spec.audio.map((clip) => ({ ...clip })) : undefined,
     },
   }
 }

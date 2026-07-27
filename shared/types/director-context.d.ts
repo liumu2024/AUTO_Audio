@@ -13,9 +13,7 @@ export type DirectorExecutionEffect = 'none' | 'workspace_change' | 'draft_chang
 export type DirectorContentDomain = 'landscape_montage' | 'music_video' | 'product_marketing' | 'general';
 export type DirectorSampleVideoStatus = 'missing' | 'attached' | 'parsed';
 export type DirectorMaterialStatus = 'missing' | 'partial' | 'ready';
-export type DirectorGenerationMode = 'style_replicate' | 'montage' | 'beat_sync' | 'custom';
 export type DirectorSubtitlePolicy = 'keep' | 'none' | 'rewrite';
-export type DirectorAudioPolicy = 'keep_sample_bgm' | 'user_audio' | 'mute';
 export interface DirectorPendingConfirmation {
     intent: DirectorConversationIntent;
     summary: string;
@@ -28,9 +26,7 @@ export interface DirectorContextSlots {
     aspectRatio: DirectorAspectRatio;
     durationSec?: number;
     styleIntensity: 'light' | 'medium' | 'strong';
-    generationMode: DirectorGenerationMode;
     subtitlePolicy: DirectorSubtitlePolicy;
-    audioPolicy: DirectorAudioPolicy;
     selectedClipId?: string;
     /** A video material explicitly selected by the director as the sample reference. */
     sampleMaterialId?: string;
@@ -93,7 +89,8 @@ export interface DirectorMaterialSummary {
     summary: string;
 }
 export interface DirectorUserIntent {
-    goal: DirectorGoal;
+    /** Absent until the user or model has actually established a task goal. */
+    goal?: DirectorGoal;
     aspectRatio?: DirectorAspectRatio;
     durationSec?: number;
     fps?: number;
