@@ -13,6 +13,7 @@ import { extractAudioVisualUnderstandingHints } from '../modules/sample-understa
 import { resolveVideoInput } from '../modules/video-understanding/resolve-video-input.js'
 import type { VideoInput } from '../modules/video-understanding/video-input.js'
 import { createV2TraceWriter } from './trace.js'
+import type { V2AgentSkillContext, V2AgentToolContext } from './v2-input.js'
 
 const SampleUnderstandingJsonSchema = {
   type: 'object',
@@ -38,6 +39,8 @@ export interface V2SampleAnalyzeInput {
   prompt: string
   sampleVideoPath: string
   sampleVideoName?: string
+  agentSkillContext?: V2AgentSkillContext
+  agentToolContext?: V2AgentToolContext
 }
 
 export interface V2SampleAnalyzeResult {
@@ -138,6 +141,8 @@ function buildPrompt(input: {
   prompt: string
   video: VideoInput
   fallback: V2SampleUnderstandingResult
+  agentSkillContext?: V2AgentSkillContext
+  agentToolContext?: V2AgentToolContext
 }): string {
   return [
     '你是短视频样例理解 Agent，只负责理解 reference sample，不生成成片方案，不输出 RemotionTimelineSpec。',
@@ -166,6 +171,8 @@ function buildPrompt(input: {
         sample_mime: input.video.mimeType,
         sample_size_bytes: input.video.sizeBytes,
         fallback_time_structure: input.fallback,
+        agent_skill_context: input.agentSkillContext ?? null,
+        agent_tool_context: input.agentToolContext ?? null,
       },
       null,
       2,
@@ -404,7 +411,14 @@ export async function analyzeV2Sample(input: V2SampleAnalyzeInput): Promise<V2Sa
   if (env.videoUnderstandingApiKey) {
     let fileId: string | undefined
     try {
-      const prompt = buildPrompt({ taskId: input.taskId, prompt: input.prompt, video, fallback })
+      const prompt = buildPrompt({
+        taskId: input.taskId,
+        prompt: input.prompt,
+        video,
+        fallback,
+        agentSkillContext: input.agentSkillContext,
+        agentToolContext: input.agentToolContext,
+      })
       await trace.writeText('02-sample-understanding', 'sample-understanding-prompt.md', prompt)
       fileId = await uploadVideoFile(video)
       await trace.writeJson('02-sample-understanding', 'ark-file.json', { file_id: fileId })

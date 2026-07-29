@@ -9,7 +9,7 @@
 - 当前项目主线是 V2，不是 V1 RenderPlan workflow。
 - 新的视频生成、规划、素材生成、渲染能力优先接入 `backend/src/pipeline-v2/`。
 - V2 的核心协议是 `shared/types/remotion-timeline-spec.v1.ts` 中的 `RemotionTimelineSpecV1`。
-- V2 的前端执行入口主要看 `fonted/src/services/director/directorActionExecutor.ts` 和 `fonted/src/services/director/v2DirectorTimeline.ts`。
+- V2 导演正式执行入口是后端 `modules/director-agent/director-agent.service.ts`，Tool/Skill 权威目录与调度位于 `backend/src/pipeline-v2/agent-tools/`、`agent-skills/`；前端只发送输入、展示事件并同步服务端草稿快照。
 - V2 的后端 API 是 `/api/v2/sample/analyze`、`/api/v2/timeline/preview`、`/api/v2/timeline/run`。
 - V2 的 trace 在 `backend/tmp/v2-agent-trace/<taskId>`，不要把旧的 `backend/tmp/agent-trace` 当成主线证据。
 - V2 支持三条分支：有样例视频的 `sample_replicate`、无样例但有素材的 `material_brief`、纯文字的 `text_to_video`。
@@ -109,6 +109,9 @@ V2 是目前应当优先维护的主链路，核心目录是 `backend/src/pipeli
 主要文件职责：
 
 - `v2-input.ts`：V2 Planner 输入类型。
+- `agent-skills/registry.ts`：官方 V2 Skill 目录、阶段化加载、依赖与 Tool 许可关系。
+- `agent-tools/registry.ts`：模型可选 Tool 的 schema、可用性、权限和恢复元数据。
+- `agent-tools/dispatcher.ts`：后端唯一的 V2 Tool 调度入口。
 - `controller.ts`：V2 API 控制器。
 - `sample-understanding-service.ts`：样例视频理解。
 - `remotion-timeline-llm-planner.ts`：LLM Planner prompt、调用、JSON 提取和校验。
@@ -176,7 +179,7 @@ V2 run 链路：
 - `components/sidebar/DirectorChatPanel.tsx`：导演聊天面板。
 - `components/sidebar/ChatInput.tsx`：输入框、附件、画幅等控制项。
 - `components/shell/V2TimelineView.tsx`：V2 timeline 方案展示和执行入口。
-- `services/director/directorActionExecutor.ts`：把智能体 action 映射为前端实际执行函数。
+- `services/director/directorActionExecutor.ts`：旧前端 action 兼容入口，不是 V2 Director Tool 的权威执行器。
 - `services/director/v2DirectorTimeline.ts`：前端组装 V2 API payload、上传 blob、同步工作台状态。
 - `lib/api.ts`：前端 HTTP API 封装。
 - `stores/directorChatStore.ts`：对话消息状态。
@@ -189,13 +192,12 @@ V2 run 链路：
 
 1. 用户发送自然语言和附件。
 2. 前端整理当前上下文、附件、画幅、时长和已有 V2 timeline。
-3. 调用 `/api/director/chat` 获取智能体意图和下一步 action。
-4. 前端根据 action 调用对应工具：
-   - `ANALYZE_SAMPLE` -> `/api/v2/sample/analyze`
-   - `GENERATE_RENDER_PLAN` -> `/api/v2/timeline/preview`
-   - `RENDER_VIDEO` -> `/api/v2/timeline/run`
-   - `ASK_USER` -> 只展示消息
-5. API 返回后同步右侧预览区、时间线和 trace 地址。
+3. 调用 `/api/director/chat`；理解模型在结构化决策中选择本轮 Skill 与 Tool。
+4. 后端 Registry 校验 Skill/Tool 关系、参数、V2 状态与交付授权，并按阶段调度 Tool。
+5. Tool 真实结果先写回 V2 草稿/会话，再由理解模型基于结果生成自然回复。
+6. 前端消费 `skill_selected`、`skill_loaded`、`tool_*`、`assistant_reply` 和 `workspace_snapshot` 事件，更新右侧预览区、时间线和 trace 地址。
+
+`/api/v2/sample/analyze`、`/api/v2/timeline/preview`、`/api/v2/timeline/run` 仍保留给直接 API 与 smoke；导演正式链路不再由前端 action 映射决定执行顺序。
 
 当前前端同时存在 V1 数据结构适配层和 V2 timeline store，这能保证旧 UI 仍可显示，但也增加了状态同步复杂度。
 
@@ -453,8 +455,10 @@ V2 trace 默认写入：
    - LLM Planner 失败时回退到 deterministic planner。
 
 3. Tool/Skill 层
-   - 上传、hash 去重、公共 URL 发布、素材生成、FFmpeg 标准化、Remotion 渲染都更像工具。
-   - 官方 Remotion skills 暂未深度接入模型主链路，但可作为后续组件生成或沙箱代码生成的知识输入。
+   - 理解模型选择 Skill 和 Agent 级 Tool；后端 Registry 负责许可、阶段化加载、参数校验、调度、结果回写与 trace。
+   - 当前可用 Skill 包括 V2 时间线创作、样例参考分析、字幕轨创作和 V2 渲染交付。
+   - Remotion 字幕与渲染官方 Skill 作为只读依赖按需加载，不赋予模型写 JSX、安装依赖或执行任意代码的权限。
+   - 素材任务解析、生成、FFmpeg 标准化、Remotion props 与渲染仍是 Tool 内部确定性步骤，不暴露成大量模型工具。
 
 4. 审查与兜底层
    - Validator 检查 spec。
@@ -476,12 +480,13 @@ V2 trace 默认写入：
 
 1. 用户输入。
 2. 意图识别。
-3. 根据 action 调用固定工具。
-4. Planner 输出固定 JSON。
-5. Validator 校验。
-6. 素材生成/复用。
-7. Remotion 渲染。
-8. 返回结果和 trace。
+3. 模型按当前任务阶段选择 Skill 与 Tool。
+4. 后端 Registry 校验并调度，执行结果回写 V2 工作区。
+5. Planner 输出固定 JSON。
+6. Validator 校验。
+7. 素材生成/复用。
+8. Remotion 渲染。
+9. 理解模型依据真实结果回复，返回工作区快照和 trace。
 
 它已经具备 agent 化特征：
 
@@ -497,7 +502,7 @@ V2 trace 默认写入：
 - 没有成熟的多轮任务规划和自我反思机制。
 - 没有基于结果质量自动决定是否重试。
 - 没有可靠的视觉结果理解和自动评价闭环。
-- 多数工具调用仍由固定 action 映射驱动。
+- Tool/Skill 选择与当前可用执行器已闭环；音频、长期记忆和自定义 Remotion 组件仍处于 planned/disabled 状态，不向模型伪装为可用能力。
 
 合理方向不是抛弃 workflow，而是把固定流程里的“决策点”交给智能体，把稳定的工程动作沉淀为工具。
 

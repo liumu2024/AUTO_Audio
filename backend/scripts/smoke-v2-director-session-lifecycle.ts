@@ -7,7 +7,7 @@ import {
   restoreWorkspaceDraft,
   type WorkspaceSessionStorage,
 } from '../../fonted/src/services/director/workspaceSessionLifecycle.js'
-import { bindToolAuthorizationEvidence } from '../src/pipeline-v2/agent-tools/authorization.js'
+import { deliveryAuthorizationFromDirectorDecision } from '../src/pipeline-v2/agent-tools/authorization.js'
 
 class MemoryStorage implements WorkspaceSessionStorage {
   private readonly values = new Map<string, string>()
@@ -72,35 +72,29 @@ const restored = await restoreWorkspaceDraft({
 assert.equal(restored, true)
 assert.equal(restoredDraftId, 'v2_draft_existing')
 
-const createPrompt = '创建一版 15 秒暴雨通勤提醒短片，先出可编辑方案，不要渲染'
-const authorizedRequests = bindToolAuthorizationEvidence({
-  prompt: createPrompt,
-  decisionAuthorizationEvidence: createPrompt,
-  requests: [
-    {
-      callId: 'call_create',
-      toolId: 'timeline.plan',
-      skillId: 'v2-timeline-authoring',
-      arguments: {},
-      requestedMode: 'preview',
-    },
-  ],
+const draftAuthorization = deliveryAuthorizationFromDirectorDecision({
+  prompt: '创建一版 15 秒暴雨通勤提醒短片，先出可编辑方案，不要渲染',
+  executionEffect: 'draft_change',
+  nextAction: 'GENERATE_TIMELINE',
+  conversationIntent: 'create',
 })
-assert.equal(authorizedRequests[0]?.authorizationEvidence, createPrompt)
+assert.equal(draftAuthorization, undefined)
 
-const staleAuthorization = bindToolAuthorizationEvidence({
-  prompt: '我们先讨论字幕风格',
-  decisionAuthorizationEvidence: '创建一版 15 秒暴雨通勤提醒短片',
-  requests: [
-    {
-      callId: 'call_stale',
-      toolId: 'timeline.plan',
-      skillId: 'v2-timeline-authoring',
-      arguments: {},
-      requestedMode: 'preview',
-    },
-  ],
+const deliveryAuthorization = deliveryAuthorizationFromDirectorDecision({
+  prompt: '当前版本可以了，请直接导出 MP4',
+  executionEffect: 'delivery',
+  nextAction: 'RENDER',
+  conversationIntent: 'execute',
 })
-assert.equal(staleAuthorization[0]?.authorizationEvidence, undefined)
+assert.equal(deliveryAuthorization?.granted, true)
+assert.equal(deliveryAuthorization?.evidence, '当前版本可以了，请直接导出 MP4')
+
+const discussionAuthorization = deliveryAuthorizationFromDirectorDecision({
+  prompt: '你觉得现在适合导出吗？',
+  executionEffect: 'none',
+  nextAction: 'ACKNOWLEDGE',
+  conversationIntent: 'chat',
+})
+assert.equal(discussionAuthorization, undefined)
 
 console.log('V2 director session lifecycle smoke passed')

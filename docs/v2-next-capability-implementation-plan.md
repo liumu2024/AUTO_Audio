@@ -1,6 +1,18 @@
 # V2 下一阶段能力实施计划
 
-状态：待本轮真实 Tool/Skill 与字幕轨测试通过后执行。所有内容只接入 V2 草稿、版本、`RemotionTimelineSpecV1` 和 V2 trace；禁止读取或恢复 V1 RenderPlan。
+状态：Agent Tool/Skill 运行闭环已于 2026-07-29 补齐；以下为其上的后续能力。所有内容只接入 V2 草稿、版本、`RemotionTimelineSpecV1` 和 V2 trace；禁止读取或恢复 V1 RenderPlan。
+
+## 0. Agent Tool / Skill 运行闭环（已实现）
+
+- 理解模型通过 `skillRequests` 与 `toolRequests` 自由选择当前阶段能力，不使用关键词路由替代模型。
+- 服务端将两者解析为单一执行计划；Tool 必须绑定本轮已选主 Skill。
+- 运行时加载主 Skill 的 manifest、`SKILL.md` 和声明依赖，并把版本、来源、hash 与内容写入 trace。
+- 每个可用 Tool 暴露并校验真实输入 Schema；执行器消费标准化参数。
+- Tool 结果写回 V2 工作区后再次交给理解模型生成最终回复；失败时按真实结果降级。
+- Tool 异常被收敛为结构化失败，不中断会话状态保存。
+- 正式交付授权来自本轮模型的结构化执行决定，不依赖原文字符串匹配。
+
+对应可重复测试：`smoke-v2-agent-tool-skill-registry`、`smoke-v2-director-tool-feedback`、`smoke-v2-director-skill-tool-loop`、`smoke-v2-director-session-lifecycle`。
 
 ## 1. 局部时间线修订
 

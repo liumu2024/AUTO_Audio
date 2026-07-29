@@ -3,10 +3,17 @@ import { randomUUID } from 'node:crypto'
 import { createV2TraceWriter } from '../../pipeline-v2/trace.js'
 import { buildV2TimelineFactDigest } from '../../pipeline-v2/timeline-revision-outcome-review.js'
 import { createV2TimelineDraftRepository } from '../../pipeline-v2/timeline-draft-repository.js'
-import { dispatchV2AgentTool, toolResultTimelineFacts } from '../../pipeline-v2/agent-tools/dispatcher.js'
-import { bindToolAuthorizationEvidence } from '../../pipeline-v2/agent-tools/authorization.js'
-import { resolveV2SkillRequests } from '../../pipeline-v2/agent-skills/registry.js'
-import { routeDirectorIntentWithLlm } from './llm-intent-router.js'
+import {
+  dispatchV2AgentTool,
+  toolResultTimelineFacts,
+  type V2AgentToolResult,
+} from '../../pipeline-v2/agent-tools/dispatcher.js'
+import { resolveV2AgentExecutionPlan } from '../../pipeline-v2/agent-skills/registry.js'
+import { deliveryAuthorizationFromDirectorDecision } from '../../pipeline-v2/agent-tools/authorization.js'
+import {
+  respondToDirectorToolResultsWithLlm,
+  routeDirectorIntentWithLlm,
+} from './llm-intent-router.js'
 import {
   appendDirectorWorkspaceTurn,
   applyDirectorWorkspacePatch,
@@ -184,6 +191,17 @@ function runtimeObservationPatch(input: DirectorAgentChatRequest) {
         ...(explicitUiControls?.styleIntensity ? { styleIntensity: explicitUiControls.styleIntensity } : {}),
       },
       explicitUiControls,
+      userIntent: {
+        ...(explicitUiControls?.aspectRatio
+          ? { aspectRatio: explicitUiControls.aspectRatio }
+          : {}),
+        ...(explicitUiControls?.durationSec !== undefined
+          ? { durationSec: explicitUiControls.durationSec }
+          : {}),
+        ...(explicitUiControls?.styleIntensity
+          ? { styleIntensity: explicitUiControls.styleIntensity }
+          : {}),
+      },
     },
     draftId: input.context.currentTimeline?.draftId,
     baseRevision: input.context.currentTimeline?.currentRevision,
@@ -387,11 +405,7 @@ export async function* streamDirectorAgentChat(
       styleIntensity: effectiveCreativeConfig.styleIntensity,
     },
   }
-  const requestedTools = bindToolAuthorizationEvidence({
-    prompt: input.prompt,
-    decisionAuthorizationEvidence: routed.result.authorizationEvidence,
-    requests: routed.result.toolRequests ?? [],
-  })
+  const requestedTools = routed.result.toolRequests ?? []
   const shouldExecute =
     routed.result.executionEffect !== undefined &&
     routed.result.executionEffect !== 'none' &&
@@ -430,26 +444,110 @@ export async function* streamDirectorAgentChat(
     content: input.prompt,
     at: new Date().toISOString(),
   })
-  const selectedSkills = resolveV2SkillRequests(routed.result.skillRequests)
-  for (const selected of selectedSkills.accepted) {
+  const executionPlan = await resolveV2AgentExecutionPlan({
+    skillRequests: routed.result.skillRequests,
+    toolRequests: requestedTools,
+  })
+  await trace.writeJson('00-director-turn', 'skill-tool-execution-plan.json', {
+    requested_skills: routed.result.skillRequests ?? [],
+    selected_skills: executionPlan.selectedSkills,
+    rejected_skills: executionPlan.rejectedSkills,
+    rejected_tools: executionPlan.rejectedTools,
+    loaded_skills: executionPlan.loadedSkills.map(({ id, version, source, stage, loadLevel, hash }) => ({
+      id, version, source, stage, load_level: loadLevel, hash,
+    })),
+    stages: executionPlan.stages.map((stage) => ({
+      call_id: stage.toolRequest.callId,
+      tool_id: stage.toolRequest.toolId,
+      primary_skill_id: stage.primarySkill.id,
+      dependency_skill_ids: stage.references.map((reference) => reference.id),
+      normalized_arguments: stage.toolRequest.arguments,
+    })),
+  })
+  if (executionPlan.loadedSkills.length) {
+    await trace.writeText(
+      '00-director-turn',
+      'loaded-skill-instructions.md',
+      executionPlan.loadedSkills
+        .map((skill) => [
+          `# ${skill.id}`,
+          `version: ${skill.version}`,
+          `source: ${skill.source}`,
+          `sha256: ${skill.hash}`,
+          '',
+          skill.content,
+        ].join('\n'))
+        .join('\n\n---\n\n'),
+    )
+  }
+  for (const selected of executionPlan.selectedSkills) {
     yield { type: 'skill_selected', skillId: selected.skillId, purpose: selected.purpose }
   }
-  const toolResults = []
+  for (const loaded of executionPlan.loadedSkills) {
+    yield {
+      type: 'skill_loaded',
+      skillId: loaded.id,
+      version: loaded.version,
+      source: loaded.source,
+      hash: loaded.hash,
+      dependency: !executionPlan.selectedSkills.some((selected) => selected.skillId === loaded.id),
+    }
+  }
+  const toolResults: V2AgentToolResult[] = []
+  let dispatchedToolCount = 0
+  const deliveryAuthorization = deliveryAuthorizationFromDirectorDecision({
+    prompt: input.prompt,
+    executionEffect: routed.result.executionEffect ?? 'none',
+    nextAction: routed.result.nextAction,
+    conversationIntent: routed.conversationIntent,
+  })
   if (shouldExecute) {
     for (const request of requestedTools) {
       yield { type: 'tool_proposed', callId: request.callId, toolId: request.toolId, requestedMode: request.requestedMode }
-      yield { type: 'tool_started', callId: request.callId, toolId: request.toolId }
-      const result = await dispatchV2AgentTool({
-        request,
-        prompt: input.prompt,
-        userId,
-        context: workspaceState.context,
-        workspace: workspaceState,
-      })
+      const rejected = executionPlan.rejectedTools.find((item) => item.callId === request.callId)
+      const stage = executionPlan.stages.find((item) => item.toolRequest.callId === request.callId)
+      let result: V2AgentToolResult
+      if (rejected || !stage) {
+        result = {
+          callId: request.callId,
+          toolId: request.toolId,
+          ok: false,
+          summary: rejected?.reason ?? '本轮 Skill/Tool 执行阶段无法建立。',
+          recovery: '请让导演模型重新选择一致且可用的 Skill 与 Tool。',
+        }
+      } else {
+        dispatchedToolCount += 1
+        yield { type: 'tool_started', callId: request.callId, toolId: request.toolId }
+        try {
+          result = await dispatchV2AgentTool({
+            stage,
+            prompt: input.prompt,
+            userId,
+            context: workspaceState.context,
+            workspace: workspaceState,
+            authorization: deliveryAuthorization,
+          })
+        } catch (error) {
+          result = {
+            callId: request.callId,
+            toolId: request.toolId,
+            ok: false,
+            summary: `Tool 执行异常：${error instanceof Error ? error.message : String(error)}`,
+            recovery: '当前 V2 会话和草稿保持不变；修复异常后可从本轮继续。',
+          }
+        }
+      }
       toolResults.push(result)
       await trace.writeJson('00-director-turn', `tool-${request.callId}.json`, {
         request: { call_id: request.callId, tool_id: request.toolId, skill_id: request.skillId, requested_mode: request.requestedMode, arguments: request.arguments },
-        result: { ok: result.ok, summary: result.summary, trace_dir: result.draft?.traceDir ?? result.output?.traceDir ?? null, recovery: result.recovery ?? null },
+        result: {
+          ok: result.ok,
+          summary: result.summary,
+          output: result.output ?? null,
+          draft: result.draft ? { id: result.draft.id, revision: result.draft.revision, trace_dir: result.draft.traceDir ?? null } : null,
+          trace_dir: result.draft?.traceDir ?? result.output?.traceDir ?? null,
+          recovery: result.recovery ?? null,
+        },
       })
       const facts = toolResultTimelineFacts(result)
       if (result.sampleUnderstanding && workspaceState.context.sampleVideo) {
@@ -509,18 +607,70 @@ export async function* streamDirectorAgentChat(
       }
       if (!result.ok) break
     }
+  } else if (
+    routed.result.executionEffect !== undefined &&
+    routed.result.executionEffect !== 'none' &&
+    requestedTools.length === 0
+  ) {
+    toolResults.push({
+      callId: `missing_tool_${Date.now()}`,
+      toolId: 'agent.execution-plan',
+      ok: false,
+      summary: '导演模型声明了执行动作，但没有给出可调度的 V2 Tool。',
+      recovery: '保留本轮需求，由导演模型重新输出完整 Skill/Tool 提案。',
+    })
   }
   const failedTool = toolResults.find((result) => !result.ok)
-  const assistantMessage = failedTool
-    ? `本轮没有完成所请求的操作：${failedTool.summary}${failedTool.recovery ? ` ${failedTool.recovery}` : ''}`
-    : routed.result.assistantMessage
+  const feedback = toolResults.length
+    ? await respondToDirectorToolResultsWithLlm({
+        prompt: input.prompt,
+        previousResponseId: routed.responseId,
+        initialAssistantMessage: routed.result.assistantMessage,
+        workspaceFacts: compactDirectorWorkspaceContext(workspaceState),
+        selectedSkills: executionPlan.selectedSkills.flatMap((selected) => {
+          const loaded = executionPlan.loadedSkills.find((skill) => skill.id === selected.skillId)
+          return loaded ? [{ id: loaded.id, version: loaded.version, hash: loaded.hash }] : []
+        }),
+        toolResults: toolResults.map((result) => ({
+          callId: result.callId,
+          toolId: result.toolId,
+          ok: result.ok,
+          summary: result.summary,
+          output: result.output,
+          recovery: result.recovery,
+        })),
+      })
+    : undefined
+  if (feedback) {
+    await trace.writeJson('00-director-turn', 'tool-result-model-response.audit.json', {
+      model_called: feedback.modelCalled,
+      response: feedback.responseAudit ?? null,
+      fallback_reason: feedback.fallbackReason ?? null,
+      json_repair: feedback.jsonRepair ?? null,
+      final_message: feedback.assistantMessage,
+    })
+    if (feedback.responseId) {
+      workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+        responseId: feedback.responseId,
+      })
+    }
+    if (feedback.responseContinuityRejected) {
+      workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+        responseContinuityDisabled: true,
+      })
+    }
+    for (const thought of feedback.publicThoughts) {
+      yield { type: 'thought', title: '执行结果', content: thought }
+    }
+  }
+  const assistantMessage = feedback?.assistantMessage ?? routed.result.assistantMessage
   workspaceState = appendDirectorWorkspaceTurn(workspaceState, {
     role: 'assistant',
     content: assistantMessage,
     at: new Date().toISOString(),
     intent: intentForWorkspace({ actionType: action.type, modelIntent: routed.conversationIntent }),
-    outcome: shouldExecute
-      ? `${failedTool ? 'failed' : 'completed'}:${requestedTools.map((tool) => tool.toolId).join(',')}`
+    outcome: toolResults.length > 0
+      ? `${failedTool ? 'failed' : 'completed'}:${toolResults.map((tool) => tool.toolId).join(',')}`
       : 'discussion',
   })
   workspaceState = compactDirectorWorkspaceTurns(workspaceState)
@@ -528,8 +678,10 @@ export async function* streamDirectorAgentChat(
   await trace.writeJson('00-director-turn', 'turn-result.json', {
     router_called: true,
     core_model_called: routed.modelCalled,
+    result_model_called: feedback?.modelCalled ?? false,
     planner_called: toolResults.some((result) => result.plannerInvoked),
-    tool_called: toolResults.length > 0,
+    tool_called: dispatchedToolCount > 0,
+    tool_call_count: dispatchedToolCount,
     source: routed.source,
     intent: intentForWorkspace({ actionType: action.type, modelIntent: routed.conversationIntent }),
     action: action.type,
@@ -542,7 +694,14 @@ export async function* streamDirectorAgentChat(
     proposed_v2_creation_mode: routed.proposedV2CreationMode ?? null,
     effective_v2_creation_mode: effectiveV2CreationMode(saved.state.context),
     skill_requests: routed.result.skillRequests ?? [],
-    selected_skills: selectedSkills,
+    selected_skills: executionPlan.selectedSkills,
+    loaded_skills: executionPlan.loadedSkills.map(({ id, version, source, hash }) => ({ id, version, source, hash })),
+    rejected_skills: executionPlan.rejectedSkills,
+    rejected_tools: executionPlan.rejectedTools,
+    tool_requests_ignored:
+      requestedTools.length > 0 && routed.result.executionEffect === 'none'
+        ? 'execution_effect_none'
+        : null,
     tool_requests: requestedTools,
     tool_results: toolResults.map((result) => ({ call_id: result.callId, tool_id: result.toolId, ok: result.ok, summary: result.summary })),
   })

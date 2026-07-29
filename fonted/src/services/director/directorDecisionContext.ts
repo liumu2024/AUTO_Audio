@@ -42,6 +42,19 @@ export function buildDirectorContextFromUI(input: {
     durationSec: input.durationSec,
     styleIntensity: input.styleIntensity,
   }
+  const explicitUiControls = input.explicitUiControls
+  const userIntent: DirectorUserIntent = {
+    ...(input.existing?.userIntent ?? {}),
+    ...(explicitUiControls?.aspectRatio
+      ? { aspectRatio: explicitUiControls.aspectRatio }
+      : {}),
+    ...(explicitUiControls?.durationSec !== undefined
+      ? { durationSec: explicitUiControls.durationSec }
+      : {}),
+    ...(explicitUiControls?.styleIntensity
+      ? { styleIntensity: explicitUiControls.styleIntensity }
+      : {}),
+  }
 
   return {
     sampleVideo: input.sampleUrl.trim()
@@ -60,15 +73,11 @@ export function buildDirectorContextFromUI(input: {
       name: att.name,
       tags: att.tags ?? [],
     })),
-    userIntent: input.existing?.userIntent ?? {
-      aspectRatio: input.aspectRatio,
-      styleIntensity: input.styleIntensity,
-      durationSec: input.durationSec,
-    },
+    userIntent,
     currentTimeline: input.existing?.currentTimeline,
     directorState: input.existing?.directorState,
     conversationSummary: input.existing?.conversationSummary,
-    explicitUiControls: input.explicitUiControls,
+    explicitUiControls,
     slots: mergeDirectorSlots(baseSlots, runtimeSlots),
   }
 }

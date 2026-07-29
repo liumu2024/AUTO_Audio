@@ -55,6 +55,14 @@ export type DirectorAgentStreamEvent =
       purpose: string
     }
   | {
+      type: 'skill_loaded'
+      skillId: string
+      version: string
+      source: 'v2_official' | 'official_remotion'
+      hash: string
+      dependency: boolean
+    }
+  | {
       type: 'tool_proposed'
       callId: string
       toolId: string

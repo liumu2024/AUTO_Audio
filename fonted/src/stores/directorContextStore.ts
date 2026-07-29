@@ -35,10 +35,7 @@ interface DirectorContextState {
 
 const initialContext: DirectorContext = {
   materials: [],
-  userIntent: {
-    aspectRatio: '9:16',
-    styleIntensity: 'medium',
-  },
+  userIntent: {},
   slots: createDefaultDirectorSlots(),
   directorState: createInitialDirectorSessionState(),
 }

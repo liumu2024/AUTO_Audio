@@ -211,7 +211,7 @@ const unknownSampleCandidate = finalizeModelDecision({
 assert.equal(unknownSampleCandidate.executionEffect, 'none')
 assert.equal(unknownSampleCandidate.nextAction, 'NEED_SAMPLE')
 
-const ungroundedOperation = finalizeModelDecision({
+const structuredDeliveryDecision = finalizeModelDecision({
   llmResult: decision({
     intent: 'render',
     nextAction: 'RENDER',
@@ -220,8 +220,8 @@ const ungroundedOperation = finalizeModelDecision({
   context,
   runtime: runtime({ hasV2Timeline: true, v2SceneCount: 3 }),
 })
-assert.equal(ungroundedOperation.executionEffect, 'none')
-assert.equal(ungroundedOperation.nextAction, 'ASK_USER')
+assert.equal(structuredDeliveryDecision.executionEffect, 'delivery')
+assert.equal(structuredDeliveryDecision.nextAction, 'RENDER')
 
 const missingTimelineDelivery = finalizeModelDecision({
   llmResult: decision({

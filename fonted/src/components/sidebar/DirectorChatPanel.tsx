@@ -678,7 +678,12 @@ export function DirectorChatPanel() {
           const thought = eventThought(event)
           if (thought) debugThoughts.push(thought)
           if (event.type === 'action_plan') actionPlan = event.action
-          if (event.type === 'skill_selected') debugThoughts.push(`已选择创作能力：${event.skillId}。`)
+           if (event.type === 'skill_selected') debugThoughts.push(`已选择创作能力：${event.skillId}。`)
+           if (event.type === 'skill_loaded') {
+             debugThoughts.push(
+               `${event.dependency ? '已加载依赖说明' : '已加载能力说明'}：${event.skillId} v${event.version}。`,
+             )
+           }
           if (event.type === 'tool_proposed') debugThoughts.push(`后端已提案：${event.toolId}。`)
           if (event.type === 'tool_started') debugThoughts.push(`后端正在执行：${event.toolId}。`)
           if (event.type === 'tool_result') {

@@ -78,7 +78,6 @@ export interface DirectorIntentResult {
         skillId: string;
         arguments: Record<string, unknown>;
         requestedMode: 'preview' | 'execute';
-        authorizationEvidence?: string;
     }>;
 }
 export interface SampleStyleRecipe {

@@ -21,6 +21,25 @@ export interface V2PlanningContext {
   authorizationEvidence?: string
 }
 
+export interface V2AgentSkillInstruction {
+  id: string
+  version: string
+  source: 'v2_official' | 'official_remotion'
+  hash: string
+  content: string
+}
+
+export interface V2AgentSkillContext {
+  primary: V2AgentSkillInstruction & { purpose: string }
+  references: V2AgentSkillInstruction[]
+}
+
+export interface V2AgentToolContext {
+  callId: string
+  toolId: string
+  arguments: Record<string, unknown>
+}
+
 export interface V2PlannerInput {
   taskId: string
   prompt: string
@@ -35,6 +54,9 @@ export interface V2PlannerInput {
   revisionContext?: V2TimelineRevisionContext
   /** Server-only full base spec used for preservation/audit; never sent to the model. */
   revisionBaseSpec?: RemotionTimelineSpecV1
+  /** Server-resolved instructions and normalized arguments for this Agent stage. */
+  agentSkillContext?: V2AgentSkillContext
+  agentToolContext?: V2AgentToolContext
   materials?: V2PlannerMaterialInput[]
   durationSec?: number
   plannerMode?: 'deterministic' | 'llm'

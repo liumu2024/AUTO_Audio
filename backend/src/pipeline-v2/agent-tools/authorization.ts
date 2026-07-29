@@ -1,25 +1,23 @@
-function groundedEvidence(prompt: string, evidence: string | undefined): string | undefined {
-  const candidate = evidence?.trim()
-  if (!candidate) return undefined
-  return prompt.includes(candidate) ? candidate : undefined
-}
+import type { V2AgentToolAuthorizationGrant } from './dispatcher.js'
 
-export function bindToolAuthorizationEvidence<
-  T extends { authorizationEvidence?: string },
->(input: {
+/**
+ * Delivery permission is derived from the core model's coherent decision for
+ * the current user turn. It never depends on the model copying an exact phrase
+ * from the prompt and it never authorizes read/draft Tools.
+ */
+export function deliveryAuthorizationFromDirectorDecision(input: {
   prompt: string
-  decisionAuthorizationEvidence?: string
-  requests: T[]
-}): T[] {
-  const decisionEvidence = groundedEvidence(
-    input.prompt,
-    input.decisionAuthorizationEvidence,
-  )
-
-  return input.requests.map((request) => ({
-    ...request,
-    authorizationEvidence:
-      groundedEvidence(input.prompt, request.authorizationEvidence) ??
-      decisionEvidence,
-  }))
+  executionEffect: 'none' | 'workspace_change' | 'draft_change' | 'delivery'
+  nextAction: string
+  conversationIntent?: 'chat' | 'create' | 'revise' | 'execute' | 'clarify'
+}): V2AgentToolAuthorizationGrant | undefined {
+  if (
+    input.executionEffect !== 'delivery' ||
+    input.nextAction !== 'RENDER' ||
+    input.conversationIntent !== 'execute' ||
+    !input.prompt.trim()
+  ) {
+    return undefined
+  }
+  return { granted: true, evidence: input.prompt.trim() }
 }

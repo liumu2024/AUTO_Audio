@@ -2,6 +2,12 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { V2AgentToolRequest } from '../agent-tools/dispatcher.js'
+import { validateV2AgentToolRequest } from '../agent-tools/registry.js'
+import { manifest as timelineAuthoringManifest } from './v2-timeline-authoring/manifest.js'
+import { manifest as sampleReferenceManifest } from './sample-reference-analysis/manifest.js'
+import { manifest as subtitleAuthoringManifest } from './subtitle-track-authoring/manifest.js'
+import { manifest as renderDeliveryManifest } from './v2-render-delivery/manifest.js'
 
 export type V2SkillStatus = 'available' | 'planned' | 'disabled'
 export type V2SkillSource = 'v2_official' | 'official_remotion'
@@ -17,29 +23,69 @@ export interface V2AgentSkillManifest {
   allowedTools: string[]
   dependencies?: string[]
   loadLevel: 'agent_selectable' | 'controlled_reference' | 'maintainer_only'
+  prerequisites?: readonly string[]
+  requiredFacts?: readonly string[]
+  outputRequirements?: readonly string[]
+  validation?: readonly string[]
+  recovery?: string
+}
+
+export interface LoadedV2AgentSkill {
+  id: string
+  version: string
+  source: V2SkillSource
+  stage: V2AgentSkillManifest['stage']
+  loadLevel: V2AgentSkillManifest['loadLevel']
+  content: string
+  hash: string
+}
+
+export interface V2AgentExecutionStage {
+  primarySkill: LoadedV2AgentSkill & { purpose: string }
+  references: LoadedV2AgentSkill[]
+  toolRequest: V2AgentToolRequest
+}
+
+export interface V2AgentExecutionPlan {
+  selectedSkills: Array<{ skillId: string; purpose: string }>
+  loadedSkills: LoadedV2AgentSkill[]
+  rejectedSkills: Array<{ skillId: string; reason: string }>
+  rejectedTools: Array<{ callId: string; toolId: string; reason: string }>
+  stages: V2AgentExecutionStage[]
 }
 
 const directory = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(directory, '../../../..')
 
-const local = (id: string, stage: V2AgentSkillManifest['stage'], card: string, allowedTools: string[], dependencies?: string[]): V2AgentSkillManifest => ({
-  id,
-  version: '1.0.0',
+type LocalSkillPackageManifest =
+  | typeof timelineAuthoringManifest
+  | typeof sampleReferenceManifest
+  | typeof subtitleAuthoringManifest
+  | typeof renderDeliveryManifest
+
+const local = (manifest: LocalSkillPackageManifest): V2AgentSkillManifest => ({
+  id: manifest.id,
+  version: manifest.version,
   source: 'v2_official',
-  sourcePath: path.join(directory, id, 'SKILL.md'),
+  sourcePath: path.join(directory, manifest.id, 'SKILL.md'),
   status: 'available',
-  card,
-  stage,
-  allowedTools,
-  dependencies,
+  card: manifest.card,
+  stage: manifest.stage,
+  allowedTools: [...manifest.tools],
+  dependencies: [...manifest.dependencies],
   loadLevel: 'agent_selectable',
+  prerequisites: manifest.prerequisites,
+  requiredFacts: manifest.requiredFacts,
+  outputRequirements: manifest.outputRequirements,
+  validation: manifest.validation,
+  recovery: manifest.recovery,
 })
 
 export const V2_AGENT_SKILLS: readonly V2AgentSkillManifest[] = [
-  local('v2-timeline-authoring', 'authoring', '创建或整体修订 V2 时间线；逐镜头决定 AI、Remotion 或混合视觉策略。', ['timeline.plan', 'timeline.patch']),
-  local('sample-reference-analysis', 'analysis', '将用户选中的样例仅作为节奏、结构与风格参考，不复制画面或文案。', ['sample.analyze', 'timeline.plan']),
-  local('subtitle-track-authoring', 'authoring', '创作或局部修订多段字幕轨；区分可见文案与展示约束。', ['timeline.patch'], ['official.remotion-captions']),
-  local('v2-render-delivery', 'delivery', '检查当前 V2 草稿、授权与交付条件后提交正式渲染。', ['timeline.render'], ['official.remotion-render']),
+  local(timelineAuthoringManifest),
+  local(sampleReferenceManifest),
+  local(subtitleAuthoringManifest),
+  local(renderDeliveryManifest),
   {
     id: 'official.remotion-captions', version: 'repository', source: 'official_remotion',
     sourcePath: path.join(repoRoot, 'official-skills', 'skills', 'remotion-captions', 'SKILL.md'), status: 'available',
@@ -72,11 +118,32 @@ export function findV2AgentSkill(id: string) {
   return V2_AGENT_SKILLS.find((skill) => skill.id === id)
 }
 
-export async function loadControlledSkillReference(id: string): Promise<{ id: string; content: string; hash: string } | null> {
+export async function loadControlledSkillReference(id: string): Promise<LoadedV2AgentSkill | null> {
   const skill = findV2AgentSkill(id)
   if (!skill || skill.status !== 'available' || skill.loadLevel === 'maintainer_only') return null
-  const content = await readFile(skill.sourcePath, 'utf8')
-  return { id, content, hash: createHash('sha256').update(content).digest('hex') }
+  const sourceContent = await readFile(skill.sourcePath, 'utf8')
+  const runtimeContract = skill.source === 'v2_official'
+    ? [
+        '## Runtime contract',
+        JSON.stringify({
+          prerequisites: skill.prerequisites ?? [],
+          required_facts: skill.requiredFacts ?? [],
+          output_requirements: skill.outputRequirements ?? [],
+          validation: skill.validation ?? [],
+          recovery: skill.recovery ?? null,
+        }, null, 2),
+      ].join('\n')
+    : ''
+  const content = [sourceContent.trim(), runtimeContract].filter(Boolean).join('\n\n')
+  return {
+    id,
+    version: skill.version,
+    source: skill.source,
+    stage: skill.stage,
+    loadLevel: skill.loadLevel,
+    content,
+    hash: createHash('sha256').update(content).digest('hex'),
+  }
 }
 
 export function resolveV2SkillRequests(requests: Array<{ skillId: string; purpose: string }> | undefined) {
@@ -91,4 +158,105 @@ export function resolveV2SkillRequests(requests: Array<{ skillId: string; purpos
     accepted.push({ skillId: skill.id, purpose: request.purpose.trim().slice(0, 240) })
   }
   return { accepted, rejected }
+}
+
+async function loadSkillTree(
+  skillId: string,
+  loaded: Map<string, LoadedV2AgentSkill>,
+  stack = new Set<string>(),
+): Promise<void> {
+  if (stack.has(skillId)) throw new Error(`cyclic skill dependency: ${skillId}`)
+  if (loaded.has(skillId)) return
+  const manifest = findV2AgentSkill(skillId)
+  if (!manifest || manifest.status !== 'available' || manifest.loadLevel === 'maintainer_only') {
+    throw new Error(`skill dependency is unavailable: ${skillId}`)
+  }
+  const nextStack = new Set(stack).add(skillId)
+  const skill = await loadControlledSkillReference(skillId)
+  if (!skill) throw new Error(`skill instructions could not be loaded: ${skillId}`)
+  loaded.set(skillId, skill)
+  for (const dependency of manifest.dependencies ?? []) {
+    await loadSkillTree(dependency, loaded, nextStack)
+  }
+}
+
+function dependencyClosure(skillId: string, result = new Set<string>()): Set<string> {
+  const manifest = findV2AgentSkill(skillId)
+  for (const dependency of manifest?.dependencies ?? []) {
+    if (result.has(dependency)) continue
+    result.add(dependency)
+    dependencyClosure(dependency, result)
+  }
+  return result
+}
+
+/**
+ * Resolves one authoritative, model-selected execution plan. A Tool can only
+ * run through a primary Skill selected in this turn; declared dependencies are
+ * loaded as read-only references and never become independent Tool authority.
+ */
+export async function resolveV2AgentExecutionPlan(input: {
+  skillRequests: Array<{ skillId: string; purpose: string }> | undefined
+  toolRequests: V2AgentToolRequest[] | undefined
+}): Promise<V2AgentExecutionPlan> {
+  const resolved = resolveV2SkillRequests(input.skillRequests)
+  const loaded = new Map<string, LoadedV2AgentSkill>()
+  const selectedSkills: Array<{ skillId: string; purpose: string }> = []
+  const rejectedSkills = [...resolved.rejected]
+
+  for (const selected of resolved.accepted) {
+    if (selectedSkills.some((item) => item.skillId === selected.skillId)) continue
+    try {
+      await loadSkillTree(selected.skillId, loaded)
+      selectedSkills.push(selected)
+    } catch (error) {
+      rejectedSkills.push({
+        skillId: selected.skillId,
+        reason: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  const selectedIds = new Set(selectedSkills.map((item) => item.skillId))
+  const rejectedTools: V2AgentExecutionPlan['rejectedTools'] = []
+  const stages: V2AgentExecutionStage[] = []
+  for (const request of input.toolRequests ?? []) {
+    const requestedSkill = findV2AgentSkill(request.skillId)
+    if (!requestedSkill?.allowedTools.includes(request.toolId)) {
+      rejectedTools.push({
+        callId: request.callId,
+        toolId: request.toolId,
+        reason: 'selected Skill manifest does not allow this Tool',
+      })
+      continue
+    }
+    const checked = validateV2AgentToolRequest(request, { selectedSkillIds: selectedIds })
+    if (!checked.ok) {
+      rejectedTools.push({ callId: request.callId, toolId: request.toolId, reason: checked.reason })
+      continue
+    }
+    const selected = selectedSkills.find((item) => item.skillId === request.skillId)
+    const primary = loaded.get(request.skillId)
+    const manifest = findV2AgentSkill(request.skillId)
+    if (!selected || !primary || !manifest) {
+      rejectedTools.push({ callId: request.callId, toolId: request.toolId, reason: 'selected skill instructions are unavailable' })
+      continue
+    }
+    const references = [...dependencyClosure(manifest.id)]
+      .map((id) => loaded.get(id))
+      .filter((item): item is LoadedV2AgentSkill => Boolean(item))
+    stages.push({
+      primarySkill: { ...primary, purpose: selected.purpose },
+      references,
+      toolRequest: { ...request, arguments: checked.arguments },
+    })
+  }
+
+  return {
+    selectedSkills,
+    loadedSkills: [...loaded.values()],
+    rejectedSkills,
+    rejectedTools,
+    stages,
+  }
 }

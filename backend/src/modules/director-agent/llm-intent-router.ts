@@ -72,9 +72,22 @@ const DirectorDecisionJsonSchema = {
     nextStep: { type: 'string' },
     requirements: { type: 'array', items: { type: 'string' } },
     skillRequests: { type: 'array', items: { type: 'object', required: ['skillId', 'purpose'], properties: { skillId: { type: 'string' }, purpose: { type: 'string' } } } },
-    toolRequests: { type: 'array', items: { type: 'object', required: ['callId', 'toolId', 'skillId', 'arguments', 'requestedMode'], properties: { callId: { type: 'string' }, toolId: { type: 'string' }, skillId: { type: 'string' }, arguments: { type: 'object' }, requestedMode: { type: 'string', enum: ['preview', 'execute'] }, authorizationEvidence: { type: 'string' } } } },
+    toolRequests: { type: 'array', items: { type: 'object', required: ['callId', 'toolId', 'skillId', 'arguments', 'requestedMode'], properties: { callId: { type: 'string' }, toolId: { type: 'string' }, skillId: { type: 'string' }, arguments: { type: 'object' }, requestedMode: { type: 'string', enum: ['preview', 'execute'] } } } },
   },
 } as const
+const DirectorToolFeedbackJsonSchema = {
+  type: 'object',
+  required: ['assistantMessage', 'publicThoughts'],
+  properties: {
+    assistantMessage: { type: 'string', minLength: 1 },
+    publicThoughts: { type: 'array', items: { type: 'string' }, maxItems: 4 },
+  },
+  additionalProperties: false,
+} as const
+const DirectorToolFeedbackSchema = z.object({
+  assistantMessage: z.string().trim().min(1),
+  publicThoughts: z.array(z.string().trim().min(1)).max(4).default([]),
+})
 const WorkspaceStatePatchSchema = z.object({
   selectedItemId: z.string().nullable().optional(),
   pendingQuestion: z.string().nullable().optional(),
@@ -137,7 +150,6 @@ const LlmIntentResultSchema = z.object({
   toolRequests: z.array(z.object({
     callId: z.string().trim().min(1), toolId: z.string().trim().min(1), skillId: z.string().trim().min(1),
     arguments: z.record(z.string(), z.unknown()).default({}), requestedMode: z.enum(['preview', 'execute']),
-    authorizationEvidence: z.preprocess(optionalNonBlankString, z.string().trim().min(1).optional()),
   })).default([]),
 })
 
@@ -360,12 +372,23 @@ Revision / state machine rules:
     "context": { "userIntent": { "requestedStyle": "optional", "constraints": ["only newly confirmed constraints"] } }
   },
   "nextStep": "discuss|plan_create|plan_revise|execute|await_input",
-  "requirements": ["only facts essential for the requested next step"]
+  "requirements": ["only facts essential for the requested next step"],
+  "skillRequests": [{"skillId": "one available Skill id", "purpose": "why this Skill is needed now"}],
+  "toolRequests": [{
+    "callId": "stable unique id for this turn",
+    "toolId": "one available Tool id",
+    "skillId": "must also appear in skillRequests",
+    "arguments": {"follow": "the Tool inputSchema exactly"},
+    "requestedMode": "preview|execute"
+  }]
 }
 
 当前上下文：
 Tool / Skill policy:
 - skillRequests and toolRequests are server proposals, never proof that a tool ran. For chat or advice, return empty arrays.
+- Every toolRequests[].skillId must also appear in skillRequests and must be allowed by that Skill. Follow each Tool inputSchema exactly; do not add undeclared arguments.
+- Select only the Skill needed for the current Tool stage. Dependencies are loaded by the backend and must not be requested as primary Skills.
+- assistantMessage before Tool execution may say what you are about to do, but must not claim that the Tool already succeeded. A second model pass will receive the real Tool results and produce the final reply.
 - An explicitly authorized creation may request timeline.plan in preview mode. A narrow subtitle edit may request timeline.patch only with {"scope":"subtitle"}. A delivery request needs timeline.render in execute mode and explicit authorization.
 - Use only the cards below. Never request planned, disabled, arbitrary, or internal pipeline tools. Select skills for the current phase only.
 
@@ -454,6 +477,7 @@ async function callResponsesApi(input: {
   promptText: string
   previousResponseId?: string
   allowStructuredOutput?: boolean
+  structuredOutput?: { name: string; schema: Record<string, unknown> }
 }): Promise<{
   raw: unknown
   structuredOutput: { requested: boolean; providerFallback: boolean; reason?: string }
@@ -463,13 +487,17 @@ async function callResponsesApi(input: {
   }
 
   const requested = env.directorAgentStructuredOutputMode === 'auto' && input.allowStructuredOutput !== false
+  const structuredOutput = input.structuredOutput ?? {
+    name: 'v2_director_decision',
+    schema: DirectorDecisionJsonSchema,
+  }
   const body = (useSchema: boolean) => ({
     model: env.directorAgentModel,
     ...(env.directorAgentResponseContinuity && input.previousResponseId
       ? { previous_response_id: input.previousResponseId }
       : {}),
     ...(useSchema
-      ? { text: { format: { type: 'json_schema', name: 'v2_director_decision', schema: DirectorDecisionJsonSchema } } }
+      ? { text: { format: { type: 'json_schema', name: structuredOutput.name, schema: structuredOutput.schema } } }
       : {}),
     input: [
       {
@@ -513,6 +541,138 @@ async function callResponsesApi(input: {
     return { raw: JSON.parse(text), structuredOutput: { requested, providerFallback: false } }
   } catch {
     return { raw: text, structuredOutput: { requested, providerFallback: false } }
+  }
+}
+
+export interface DirectorToolFeedbackInput {
+  prompt: string
+  previousResponseId?: string
+  initialAssistantMessage: string
+  workspaceFacts: unknown
+  selectedSkills: Array<{ id: string; version: string; hash: string }>
+  toolResults: Array<{
+    callId: string
+    toolId: string
+    ok: boolean
+    summary: string
+    output?: unknown
+    recovery?: string
+  }>
+}
+
+export interface DirectorToolFeedbackOutput {
+  assistantMessage: string
+  publicThoughts: string[]
+  modelCalled: boolean
+  responseId?: string
+  responseAudit?: unknown
+  fallbackReason?: string
+  jsonRepair?: { request: string; responseAudit?: unknown; error?: string }
+  responseContinuityRejected?: boolean
+}
+
+function groundedToolFeedbackFallback(input: DirectorToolFeedbackInput, reason: string): DirectorToolFeedbackOutput {
+  const failed = input.toolResults.find((result) => !result.ok)
+  const completed = input.toolResults.filter((result) => result.ok)
+  const assistantMessage = failed
+    ? `本轮没有完成所请求的操作：${failed.summary}${failed.recovery ? ` ${failed.recovery}` : ''}`
+    : completed.length
+      ? completed.map((result) => result.summary).join('；')
+      : input.initialAssistantMessage
+  return {
+    assistantMessage,
+    publicThoughts: ['已按真实 Tool 结果生成保守回复。'],
+    modelCalled: true,
+    fallbackReason: reason,
+  }
+}
+
+/**
+ * Completes the Agent loop after external state has changed. The first model
+ * call chooses Skills and Tools; this second call can only explain actual
+ * results and cannot propose or execute another Tool.
+ */
+export async function respondToDirectorToolResultsWithLlm(
+  input: DirectorToolFeedbackInput,
+): Promise<DirectorToolFeedbackOutput> {
+  const facts = JSON.stringify({
+    user_prompt: input.prompt,
+    initial_model_reply: input.initialAssistantMessage,
+    workspace_facts_after_tools: input.workspaceFacts,
+    selected_skills: input.selectedSkills,
+    actual_tool_results: input.toolResults,
+  }).slice(0, 16_000)
+  const promptText = [
+    'You are the V2 director after the backend has finished the model-selected Tool stage.',
+    'Reply naturally in Chinese and ground every claim in actual_tool_results and workspace_facts_after_tools.',
+    'Do not claim success for a failed Tool. Do not claim a draft, render, material analysis, or output that is absent.',
+    'If a Tool failed, explain the real failure and one concrete recovery. Do not request or propose another Tool in this response.',
+    'Return JSON only with assistantMessage and publicThoughts.',
+    facts,
+  ].join('\n')
+
+  try {
+    const response = await callResponsesApi({
+      promptText,
+      previousResponseId: input.previousResponseId,
+      structuredOutput: {
+        name: 'v2_director_tool_feedback',
+        schema: DirectorToolFeedbackJsonSchema,
+      },
+    })
+    const text = extractText(response.raw)
+    try {
+      const parsed = DirectorToolFeedbackSchema.parse(extractJson(text))
+      return {
+        ...parsed,
+        modelCalled: true,
+        responseId: responseIdFrom(response.raw),
+        responseAudit: responseAudit(response.raw, text),
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const repairPrompt = [
+        'Repair only the JSON syntax/shape of this Tool-result reply.',
+        'Do not change whether any Tool succeeded or failed and do not invent results.',
+        JSON.stringify(DirectorToolFeedbackJsonSchema),
+        `Validation error: ${message}`,
+        text,
+      ].join('\n')
+      try {
+        const repaired = await callResponsesApi({
+          promptText: repairPrompt,
+          allowStructuredOutput: false,
+        })
+        const repairedText = extractText(repaired.raw)
+        const parsed = DirectorToolFeedbackSchema.parse(extractJson(repairedText))
+        return {
+          ...parsed,
+          modelCalled: true,
+          responseId: responseIdFrom(response.raw),
+          responseAudit: responseAudit(response.raw, text),
+          jsonRepair: { request: repairPrompt, responseAudit: responseAudit(repaired.raw, repairedText) },
+        }
+      } catch (repairError) {
+        return {
+          ...groundedToolFeedbackFallback(input, 'tool feedback protocol repair failed'),
+          responseId: responseIdFrom(response.raw),
+          responseAudit: responseAudit(response.raw, text),
+          jsonRepair: {
+            request: repairPrompt,
+            error: repairError instanceof Error ? repairError.message : String(repairError),
+          },
+        }
+      }
+    }
+  } catch (error) {
+    return {
+      ...groundedToolFeedbackFallback(
+        input,
+        error instanceof Error ? error.message : String(error),
+      ),
+      responseContinuityRejected:
+        Boolean(input.previousResponseId) && continuityWasRejected(error),
+    }
   }
 }
 
@@ -593,10 +753,11 @@ function toDirectorIntentResult(candidate: LlmIntentResult): DirectorIntentResul
 function actionMatchesExecutionEffect(
   effect: DirectorExecutionEffect,
   nextAction: DirectorIntentResult['nextAction'],
+  intent: DirectorIntentResult['intent'],
 ) {
   if (effect === 'none') return true
   if (effect === 'workspace_change') {
-    return nextAction === 'ANALYZE_SAMPLE'
+    return nextAction === 'ANALYZE_SAMPLE' || intent === 'analyze_materials'
   }
   if (effect === 'draft_change') {
     return nextAction === 'GENERATE_TIMELINE' || nextAction === 'REVISE_TIMELINE'
@@ -639,7 +800,7 @@ export function finalizeModelDecision(input: {
     }
   }
 
-  if (!actionMatchesExecutionEffect(effect, llmResult.nextAction)) {
+  if (!actionMatchesExecutionEffect(effect, llmResult.nextAction, llmResult.intent)) {
     return {
       ...llmResult,
       modelInferredSlots: llmResult.slotsPatch,
@@ -651,26 +812,6 @@ export function finalizeModelDecision(input: {
       executionEffect: 'none',
       authorizationEvidence: undefined,
       assistantMessage: `${llmResult.assistantMessage}\n\n如果你希望我实际执行，请直接确认要生成新方案、修改当前方案，或渲染当前版本。`,
-    }
-  }
-
-  // The original user turn is already durably recorded with the decision.
-  // Treat the model's quoted evidence as audit data for draft/workspace work:
-  // a missing quote must not turn an explicit create or revise request into a
-  // stale clarification loop. Rendering remains a delivery boundary and still
-  // requires the model to supply an explicit authorization record.
-  if (effect === 'delivery' && !llmResult.authorizationEvidence?.trim()) {
-    return {
-      ...llmResult,
-      modelInferredSlots: llmResult.slotsPatch,
-      slotsPatch,
-      intent: 'clarify',
-      nextAction: 'ASK_USER',
-      missingSlots: [],
-      requiresConfirmation: false,
-      executionEffect: 'none',
-      authorizationEvidence: undefined,
-      assistantMessage: `${llmResult.assistantMessage}\n\n请明确确认按当前 V2 方案渲染后，我再提交交付任务。`,
     }
   }
 
@@ -688,6 +829,10 @@ export function finalizeModelDecision(input: {
 
   if (
     effect === 'workspace_change' &&
+    (
+      llmResult.nextAction === 'ANALYZE_SAMPLE' ||
+      llmResult.toolRequests?.some((request) => request.toolId === 'sample.analyze')
+    ) &&
     !runtime.sampleUrl.trim() &&
     !hasSelectedSampleCandidate(runtime, llmResult.slotsPatch.sampleMaterialId)
   ) {
