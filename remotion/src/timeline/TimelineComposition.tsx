@@ -55,7 +55,7 @@ export function TimelineComposition(props: RemotionTimelineSpecV1) {
           return items
         })}
       </TransitionSeries>
-      <OverlayRendererV2 overlays={props.overlays} assets={props.assets} />
+      <OverlayRendererV2 overlays={props.overlays} assets={props.assets} captionTracks={props.caption_tracks} />
     </AbsoluteFill>
   )
 }

@@ -6,6 +6,7 @@ import { DirectorChatThread } from '@/components/sidebar/DirectorChatThread'
 import {
   streamDirectorChat,
   getDirectorWorkspaceSession,
+  getV2TimelineDraft,
   reportDirectorWorkspaceOutcome,
   type DirectorAgentStreamEvent,
 } from '@/lib/api'
@@ -22,6 +23,11 @@ import {
   createDirectorActionExecutor,
   runDirectorAction,
 } from '@/services/director/directorActionExecutor'
+import {
+  rememberActiveDirectorWorkspaceSessionId,
+  resolveActiveDirectorWorkspaceSessionId,
+  restoreWorkspaceDraft,
+} from '@/services/director/workspaceSessionLifecycle'
 import { useCreationStore, type InputAttachment } from '@/stores/creationStore'
 import { useDirectorChatStore } from '@/stores/directorChatStore'
 import { useDirectorContextStore } from '@/stores/directorContextStore'
@@ -34,14 +40,12 @@ import type {
   DirectorTimelineSnapshot,
 } from '@shared/types/director-state'
 
-const DIRECTOR_WORKSPACE_STORAGE_KEY = 'v2.director.workspace-session-id'
-
 function browserWorkspaceSessionId(): string {
-  const existing = window.localStorage.getItem(DIRECTOR_WORKSPACE_STORAGE_KEY)
-  if (existing && /^[a-zA-Z0-9_-]{8,100}$/.test(existing)) return existing
-  const id = `v2_director_${crypto.randomUUID()}`
-  window.localStorage.setItem(DIRECTOR_WORKSPACE_STORAGE_KEY, id)
-  return id
+  return resolveActiveDirectorWorkspaceSessionId({
+    sessionStorage: window.sessionStorage,
+    legacyStorage: window.localStorage,
+    createId: () => `v2_director_${crypto.randomUUID()}`,
+  })
 }
 
 function attachmentTypeFromMime(mime: string): InputAttachment['type'] | null {
@@ -110,15 +114,6 @@ function applyActionContext(action: DirectorAction) {
   contextStore.applyIntentResult(action.result)
   contextStore.patchSlots(action.slots)
   contextStore.setUserIntent(action.intent)
-  if (action.slots.aspectRatio) {
-    useCreationStore.getState().setAspectRatio(action.slots.aspectRatio)
-  }
-  if (action.slots.durationSec) {
-    useCreationStore.getState().setDurationSec(action.slots.durationSec)
-  }
-  if (action.slots.styleIntensity) {
-    useCreationStore.getState().setStyleIntensity(action.slots.styleIntensity)
-  }
 }
 
 function isMessageOnlyAction(type: DirectorActionType): boolean {
@@ -151,6 +146,15 @@ function eventThought(event: DirectorAgentStreamEvent): string | null {
     return event.missingSlots.length
       ? `条件检查：还缺 ${event.missingSlots.join(', ')}。`
       : `条件检查：画幅 ${event.slots.aspectRatio}，风格强度 ${event.slots.styleIntensity}，素材状态 ${event.slots.materialStatus}。`
+  }
+  if (event.type === 'constraint_resolution') {
+    const conflicts = event.config.conflicts
+    if (!conflicts.length) {
+      return `条件检查：最终采用画幅 ${event.config.aspectRatio}（${event.config.sources.aspectRatio ?? 'default'}）。`
+    }
+    return `条件冲突：${conflicts
+      .map((item) => `${item.field} 的 UI 值 ${item.uiValue} 覆盖模型理解 ${item.modelValue}`)
+      .join('；')}；最终采用 ${event.config.aspectRatio}。`
   }
   if (event.type === 'action_plan') return `下一步：${event.action.type}。`
   if (event.type === 'error') return `分析失败：${event.message}`
@@ -274,8 +278,15 @@ export function DirectorChatPanel() {
     const workspaceSessionId = browserWorkspaceSessionId()
     workspaceSessionIdRef.current = workspaceSessionId
     void getDirectorWorkspaceSession(workspaceSessionId)
-      .then((session) => {
-        if (session) useDirectorContextStore.getState().replaceContext(session.state.context)
+      .then(async (session) => {
+        if (!session) return
+        useDirectorContextStore.getState().replaceContext(session.state.context)
+        await restoreWorkspaceDraft({
+          workspace: session.state,
+          loadDraft: async (draftId) => (await getV2TimelineDraft(draftId)).draft,
+          openDraft: (draft) =>
+            useV2TimelineStore.getState().openPersistedDraft(draft),
+        })
       })
       .catch(() => {
         // A missing/unavailable session must not block a new V2 discussion.
@@ -531,8 +542,10 @@ export function DirectorChatPanel() {
     const effectiveSampleName = creationSnapshot.sampleName
     const contextAttachments = [...creationSnapshot.attachments]
     const currentAspectRatio = creationSnapshot.aspectRatio
+    const currentAspectRatioExplicit = creationSnapshot.aspectRatioExplicit
     const currentDurationSec = creationSnapshot.durationSec
     const currentStyleIntensity = creationSnapshot.styleIntensity
+    const currentStyleIntensityExplicit = creationSnapshot.styleIntensityExplicit
     const currentIsSampleParsed = creationSnapshot.isSampleParsed
 
     const messageAttachments = contextAttachments.filter((item) =>
@@ -559,6 +572,10 @@ export function DirectorChatPanel() {
       aspectRatio: currentAspectRatio,
       durationSec: currentDurationSec,
       styleIntensity: currentStyleIntensity,
+      explicitUiControls: {
+        aspectRatio: currentAspectRatioExplicit ? currentAspectRatio : undefined,
+        styleIntensity: currentStyleIntensityExplicit ? currentStyleIntensity : undefined,
+      },
       isSampleParsed: currentIsSampleParsed,
       existing: useDirectorContextStore.getState().context,
     })
@@ -661,13 +678,28 @@ export function DirectorChatPanel() {
           const thought = eventThought(event)
           if (thought) debugThoughts.push(thought)
           if (event.type === 'action_plan') actionPlan = event.action
+          if (event.type === 'skill_selected') debugThoughts.push(`已选择创作能力：${event.skillId}。`)
+          if (event.type === 'tool_proposed') debugThoughts.push(`后端已提案：${event.toolId}。`)
+          if (event.type === 'tool_started') debugThoughts.push(`后端正在执行：${event.toolId}。`)
+          if (event.type === 'tool_result') {
+            if (event.ok && event.draft) {
+              useV2TimelineStore.getState().openPersistedDraft(event.draft)
+              debugThoughts.push(`已同步 V2 草稿 v${event.draft.revision} 到时间线工作区。`)
+            }
+            debugThoughts.push(event.ok ? `后端结果：${event.summary}` : `后端未完成：${event.summary}`)
+          }
+          if (event.type === 'assistant_reply') directMessage = event.message
+          if (event.type === 'workspace_snapshot') {
+            workspaceSessionIdRef.current = event.workspaceSessionId
+            useDirectorContextStore.getState().replaceContext(event.state.context)
+          }
           if (event.type === 'state_update') {
             useDirectorContextStore.getState().setDirectorState(event.state)
           }
           if (event.type === 'workspace_session') {
             workspaceSessionIdRef.current = event.workspaceSessionId
-            window.localStorage.setItem(
-              DIRECTOR_WORKSPACE_STORAGE_KEY,
+            rememberActiveDirectorWorkspaceSessionId(
+              window.sessionStorage,
               event.workspaceSessionId,
             )
             useDirectorContextStore.getState().replaceContext(event.state.context)

@@ -94,7 +94,8 @@ export function directorActionFromIntentResult(input) {
     };
 }
 export async function executeDirectorAction(input) {
-    const { action, executor, context } = input;
+    const { action, executor } = input;
+    const context = { ...input.context, assistantMessage: action.message };
     switch (action.type) {
         case 'ANALYZE_SAMPLE':
             return executor.analyzeSample(context);

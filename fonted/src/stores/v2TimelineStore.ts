@@ -40,7 +40,7 @@ interface V2TimelineState {
     previewAssetUrls?: Record<string, string>,
   ) => void
   setPersistedDraft: (draft: V2TimelineDraftDto) => void
-  openPersistedDraft: (draft: V2TimelineDraftDto) => void
+  openPersistedDraft: (draft: Pick<V2TimelineDraftDto, 'draftId' | 'revision' | 'spec' | 'traceDir'>) => void
   updateSpec: (update: (spec: RemotionTimelineSpecV1) => RemotionTimelineSpecV1) => void
   selectClip: (clipId: string | null) => void
   clear: () => void

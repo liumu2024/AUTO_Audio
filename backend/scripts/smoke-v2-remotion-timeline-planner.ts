@@ -100,6 +100,22 @@ assert.equal(repairedModelSpec.overlays[0]?.text, '模型给出的字幕')
 assert.equal(repairedModelSpec.overlays[0]?.animation, 'fade')
 assert.equal(validateRemotionTimelineSpec(repairedModelSpec).ok, true)
 
+const captionLineLimit = normalizeV2TimelineTextOwnership({
+  ...repairedModelSpec,
+  overlays: repairedModelSpec.overlays.map((overlay) => ({
+    ...overlay,
+    max_lines: 2,
+  })),
+})
+assert.equal(captionLineLimit.overlays[0]?.max_lines, 2)
+assert.equal(validateRemotionTimelineSpec(captionLineLimit).ok, true)
+const invalidCaptionLineLimit = validateRemotionTimelineSpec({
+  ...captionLineLimit,
+  overlays: captionLineLimit.overlays.map((overlay) => ({ ...overlay, max_lines: 0 })),
+})
+assert.equal(invalidCaptionLineLimit.ok, false)
+assert.ok(invalidCaptionLineLimit.issues.some((issue) => issue.path.endsWith('.max_lines')))
+
 const missingPromptSpec = buildDeterministicRemotionTimelineSpec({
   taskId: `v2_timeline_missing_material_prompt_${Date.now()}`,
   creationMode: 'text_to_video',
@@ -120,6 +136,19 @@ assert.ok(
   'Recoverable missing generation prompts must be derived from their linked scene intent.',
 )
 assert.equal(validateRemotionTimelineSpec(missingPromptRepair.spec).ok, true)
+
+const stagedAiVideoReview = buildV2TimelinePlanningReview({
+  spec: missingPromptRepair.spec,
+  validation: validateRemotionTimelineSpec(missingPromptRepair.spec),
+})
+assert.ok(stagedAiVideoReview.metrics.planned_ai_video_scene_count > 0)
+assert.equal(
+  stagedAiVideoReview.metrics.remotion_preview_fallback_scene_count,
+  stagedAiVideoReview.metrics.planned_ai_video_scene_count,
+  'Unresolved generate_video jobs must be reported as preview fallbacks, not pure Remotion scenes.',
+)
+assert.equal(stagedAiVideoReview.metrics.remotion_scene_count, 0)
+assert.ok(renderV2TimelinePlanningReviewMarkdown(stagedAiVideoReview).includes('当前 Remotion 兜底镜头'))
 
 const unsupportedAudioRepair = repairV2LlmGeneratedMaterialPrompts({
   ...missingPromptSpec,

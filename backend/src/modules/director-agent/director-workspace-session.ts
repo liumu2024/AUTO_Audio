@@ -17,6 +17,7 @@ export interface DirectorWorkspacePatch {
   recentFailure?: DirectorWorkspaceState['recentFailure'] | null
   responseId?: string | null
   responseContinuityDisabled?: boolean
+  recentToolCallIds?: string[]
 }
 
 function clone<T>(value: T): T {
@@ -79,6 +80,7 @@ export function applyDirectorWorkspacePatch(
     'pendingQuestion',
     'recentFailure',
     'responseId',
+    'recentToolCallIds',
   ] as const) {
     if (patch[key] === undefined) continue
     const value = patch[key]
@@ -124,8 +126,10 @@ export function compactDirectorWorkspaceContext(state: DirectorWorkspaceState) {
       baseRevision: state.baseRevision,
       selectedItemId: state.selectedItemId,
       slots: state.context.slots,
+      effectiveCreativeConfig: state.context.effectiveCreativeConfig,
       userIntent: state.context.userIntent,
       currentTimeline: state.context.currentTimeline,
+      timelineFacts: state.context.timelineFacts,
       materialRoles: state.context.materials.map((item) => ({
         id: item.id,
         type: item.type,

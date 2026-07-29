@@ -59,10 +59,25 @@ export type DirectorAgentStreamEvent =
       slots: DirectorContext['slots']
       missingSlots: string[]
     }
+  | { type: 'constraint_resolution'; config: NonNullable<DirectorContext['effectiveCreativeConfig']> }
   | {
       type: 'action_plan'
       action: DirectorAction
     }
+  | { type: 'skill_selected'; skillId: string; purpose: string }
+  | { type: 'tool_proposed'; callId: string; toolId: string; requestedMode: 'preview' | 'execute' }
+  | { type: 'tool_started'; callId: string; toolId: string }
+  | {
+      type: 'tool_result'
+      callId: string
+      toolId: string
+      ok: boolean
+      summary: string
+      result?: Record<string, unknown>
+      draft?: Pick<V2TimelineDraftDto, 'draftId' | 'revision' | 'spec' | 'traceDir'>
+    }
+  | { type: 'assistant_reply'; message: string }
+  | { type: 'workspace_snapshot'; workspaceSessionId: string; state: DirectorWorkspaceState }
   | {
       type: 'state_update'
       state: DirectorSessionState

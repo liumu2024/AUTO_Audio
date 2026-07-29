@@ -26,5 +26,7 @@ export interface DirectorWorkspaceState {
     turns: DirectorWorkspaceTurn[];
     responseId?: string;
     responseContinuityDisabled?: boolean;
+    /** Bounded idempotency ledger for server-authorized V2 tool calls. */
+    recentToolCallIds?: string[];
 }
 //# sourceMappingURL=director-workspace-session.d.ts.map

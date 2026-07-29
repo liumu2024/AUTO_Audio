@@ -10,6 +10,8 @@ export interface ResolveDirectorActionInput {
 }
 export interface DirectorActionExecutionContext {
     prompt: string;
+    /** Natural-language acknowledgement produced by the core director model. */
+    assistantMessage?: string;
     sampleVideoUrl: string;
     sampleVideoName?: string;
     aspectRatio: DirectorContextSlots['aspectRatio'];

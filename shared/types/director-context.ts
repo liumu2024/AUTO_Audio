@@ -2,6 +2,7 @@ import type {
   DirectorSessionState,
   DirectorTimelineSnapshot,
 } from './director-state.js'
+import type { V2SampleUnderstandingResult } from './v2-sample-understanding.js'
 
 export type DirectorGoal =
   | 'analyze_sample'
@@ -76,11 +77,33 @@ export interface DirectorContextSlots {
   pendingConfirmation?: DirectorPendingConfirmation
 }
 
+/** Values deliberately selected in the UI; they outrank model inference. */
+export interface DirectorExplicitUiControls {
+  aspectRatio?: DirectorAspectRatio
+  durationSec?: number
+  styleIntensity?: 'light' | 'medium' | 'strong'
+}
+
+export interface DirectorEffectiveCreativeConfig {
+  aspectRatio: DirectorAspectRatio
+  durationSec?: number
+  styleIntensity: 'light' | 'medium' | 'strong'
+  sources: Partial<Record<'aspectRatio' | 'durationSec' | 'styleIntensity', 'ui' | 'confirmed' | 'model' | 'default'>>
+  conflicts: Array<{
+    field: 'aspectRatio' | 'durationSec' | 'styleIntensity'
+    uiValue: string | number
+    modelValue: string | number
+    effectiveValue: string | number
+  }>
+}
+
 export interface DirectorIntentResult {
   intent: DirectorConversationIntent
   confidence: number
   contentDomain: DirectorContentDomain
   slotsPatch: Partial<DirectorContextSlots>
+  /** Model-inferred values before explicit UI controls are resolved. */
+  modelInferredSlots?: Partial<DirectorContextSlots>
   missingSlots: string[]
   requiresConfirmation: boolean
   nextAction: DirectorNextAction
@@ -89,6 +112,17 @@ export interface DirectorIntentResult {
   executionEffect?: DirectorExecutionEffect
   /** Exact user wording that the model treated as authorisation for a side effect. */
   authorizationEvidence?: string
+  /** Agent-selected operational guidance. The backend validates every id. */
+  skillRequests?: Array<{ skillId: string; purpose: string }>
+  /** Provider-neutral tool proposals. They never execute on the client. */
+  toolRequests?: Array<{
+    callId: string
+    toolId: string
+    skillId: string
+    arguments: Record<string, unknown>
+    requestedMode: 'preview' | 'execute'
+    authorizationEvidence?: string
+  }>
 }
 
 export interface SampleStyleRecipe {
@@ -154,6 +188,8 @@ export interface DirectorSampleVideoContext {
   name?: string
   reference?: DirectorReferenceSummary
   styleRecipe?: SampleStyleRecipe
+  /** Persisted V2-only understanding used by the planner; never a V1 state. */
+  sampleUnderstanding?: V2SampleUnderstandingResult
 }
 
 export interface DirectorMaterialContext {
@@ -173,12 +209,36 @@ export interface DirectorTimelineContext extends DirectorTimelineSnapshot {
   sceneCount?: number
 }
 
+/** Read-only factual projection of the persisted V2 revision for later chat. */
+export interface DirectorTimelineFacts {
+  revision: number
+  scenes: Array<{ id: string; title?: string; description?: string; visualRole?: string; durationSec: number }>
+  visibleText: Array<{
+    id: string
+    sceneId?: string
+    type: string
+    text: string
+    yPct: number
+    maxLines?: number
+    animation?: string
+  }>
+  transitions: Array<{ type: string; durationSec: number }>
+  audioClipCount: number
+  notes: string[]
+}
+
 export interface DirectorContext {
   sampleVideo?: DirectorSampleVideoContext
   materials: DirectorMaterialContext[]
   userIntent: DirectorUserIntent
   currentTimeline?: DirectorTimelineContext
+  /** Server-derived facts for grounded discussion of the current V2 revision. */
+  timelineFacts?: DirectorTimelineFacts
   directorState?: DirectorSessionState
   conversationSummary?: string
   slots: DirectorContextSlots
+  /** Explicit UI values are passed separately from model-inferred intent. */
+  explicitUiControls?: DirectorExplicitUiControls
+  /** Server-resolved, V2-only configuration used by planning and trace. */
+  effectiveCreativeConfig?: DirectorEffectiveCreativeConfig
 }

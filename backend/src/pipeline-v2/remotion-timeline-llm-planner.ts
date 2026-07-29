@@ -28,7 +28,7 @@ import {
 const MAX_V2_PLANNER_IMAGE_INPUTS = 12
 const TimelineJsonSchema = {
   type: 'object',
-  required: ['schema_version', 'task_id', 'canvas', 'scenes', 'assets', 'transitions', 'overlays', 'audio', 'material_jobs', 'render_policy'],
+  required: ['schema_version', 'task_id', 'canvas', 'scenes', 'assets', 'transitions', 'caption_tracks', 'overlays', 'audio', 'material_jobs', 'render_policy'],
   properties: {
     schema_version: { type: 'string', const: REMOTION_TIMELINE_SPEC_SCHEMA_VERSION },
     task_id: { type: 'string' },
@@ -59,7 +59,13 @@ const TimelineJsonSchema = {
     overlays: {
       type: 'array', items: {
         type: 'object', required: ['id', 'type', 'start_sec', 'end_sec', 'x_pct', 'y_pct'],
-        properties: { id: { type: 'string' }, type: { type: 'string', enum: ['caption', 'title', 'label', 'shape', 'image_badge', 'light_sweep'] }, start_sec: { type: 'number' }, end_sec: { type: 'number' }, scene_id: { type: 'string' }, text: { type: 'string' }, asset_id: { type: 'string' }, x_pct: { type: 'number' }, y_pct: { type: 'number' }, width_pct: { type: 'number' }, height_pct: { type: 'number' }, color: { type: 'string' }, background: { type: 'string' }, opacity: { type: 'number' }, animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] } },
+        properties: { id: { type: 'string' }, type: { type: 'string', enum: ['caption', 'title', 'label', 'shape', 'image_badge', 'light_sweep'] }, start_sec: { type: 'number' }, end_sec: { type: 'number' }, scene_id: { type: 'string' }, track_id: { type: 'string' }, text: { type: 'string' }, asset_id: { type: 'string' }, x_pct: { type: 'number' }, y_pct: { type: 'number' }, width_pct: { type: 'number' }, height_pct: { type: 'number' }, max_lines: { type: 'integer', minimum: 1, maximum: 8 }, z_index: { type: 'integer' }, color: { type: 'string' }, background: { type: 'string' }, opacity: { type: 'number' }, animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] }, enter_animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] }, exit_animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] } },
+      },
+    },
+    caption_tracks: {
+      type: 'array', items: {
+        type: 'object', required: ['id', 'x_pct', 'y_pct'],
+        properties: { id: { type: 'string' }, x_pct: { type: 'number' }, y_pct: { type: 'number' }, width_pct: { type: 'number' }, max_lines: { type: 'integer', minimum: 1, maximum: 8 }, z_index: { type: 'integer' }, enter_animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] }, exit_animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] }, overlap_policy: { type: 'string', enum: ['forbid', 'allow_crossfade'] } },
       },
     },
     audio: {
@@ -254,7 +260,12 @@ export function buildV2TimelinePlannerPrompt(
     '  - text_to_video: no sample and no visual material are available; plan AI video scenes for realistic visuals when the provider can support them, and keep Remotion captions/cards as fallback.',
     '- planning_context contains stable draft/version facts only. user_prompt has priority when there is any conflict.',
     '- revision_context, when present, is the authoritative persisted V2 draft being revised. It is not a chat recap.',
-    '- For a revision, preserve scenes, assets, transitions, overlays, and user notes that the user did not ask to change. Make a broader rewrite only when the user explicitly requests one.',
+    '- For a revision, preserve scenes, assets, transitions, caption_tracks, overlays, and user notes that the user did not ask to change. Make a broader rewrite only when the user explicitly requests one.',
+    '- Interpret the user request semantically: distinguish audience-facing copy from constraints about copy, layout, repetition, timing, effects, audio strategy, or forbidden content.',
+    '- Never turn an instruction, layout constraint, filename ban, technical note, or planning explanation into visible overlay text unless the user explicitly asks to display that exact wording.',
+    '- caption_tracks defines reusable defaults for caption overlays. Each caption overlay may reference track_id and can override a track default. When the user asks for multiple lines of narration in one shot, create multiple timed caption overlays on one track rather than merging planning notes into one caption.',
+    '- When the user asks for original subtitles from themes or keywords, create audience-facing copy yourself; do not repeat the instruction text. If the user asks for a line limit or placement, express it with caption track defaults and overlay geometry/max_lines while preserving or creating appropriate copy.',
+    '- A narrow revision such as audio strategy, transition, subtitle layout, or one selected scene must not replace unrelated subject matter, visual intent, confirmed captions, or sample-use boundaries.',
     '- The selected revision item identifies the user\'s current focus, not an instruction to ignore the rest of the timeline.',
     '- render_policy.allow_custom_component must be false.',
     '- Avoid unnecessary generated video jobs, but do not hide user images just to keep the plan short.',
@@ -293,6 +304,7 @@ export function buildV2TimelinePlannerPrompt(
         task_id: input.taskId,
         creation_mode: creationMode,
         user_prompt: input.prompt,
+        conversation_summary: input.conversationSummary ?? null,
         planning_context: input.planningContext ?? null,
         revision_context: input.revisionContext ?? null,
         main_video_asset_id: example.assets.find((asset) => asset.id === 'main_video_asset')?.id ?? null,

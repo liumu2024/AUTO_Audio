@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 
 import {
+  buildDirectorModelPrompt,
   buildDirectorContextFallback,
+  directorDecisionConsistencyIssue,
   finalizeModelDecision,
   parseDirectorModelDecision,
 } from '../src/modules/director-agent/llm-intent-router.ts'
@@ -14,6 +16,22 @@ const context: DirectorContext = {
   userIntent: { goal: 'generate_timeline' },
   slots: createDefaultDirectorSlots(),
 }
+
+const authorizationBoundaryPrompt = buildDirectorModelPrompt({
+  prompt: '这版会如何同时呈现卖点，而不做成参数堆砌？',
+  context,
+  runtime: runtime({ hasV2Timeline: true, v2SceneCount: 3 }),
+})
+assert.match(authorizationBoundaryPrompt, /仅描述期望.*都是讨论/)
+assert.match(authorizationBoundaryPrompt, /不能假装已修改/)
+assert.match(authorizationBoundaryPrompt, /可选建议不是澄清/)
+
+const contradictoryRevision = parseDirectorModelDecision(JSON.stringify({
+  intent: 'revise_timeline', confidence: 0.9, contentDomain: 'general', slotsPatch: {},
+  missingSlots: [], requiresConfirmation: false, executionEffect: 'none', nextAction: 'ACKNOWLEDGE',
+  assistantMessage: '我会更新当前字幕布局。', publicThoughts: [], conversationIntent: 'revise', nextStep: 'plan_revise', statePatch: {}, requirements: [],
+}))
+assert.match(directorDecisionConsistencyIssue(contradictoryRevision) ?? '', /claims a timeline create\/revise/)
 
 function runtime(overrides: Partial<DirectorConversationRuntime> = {}): DirectorConversationRuntime {
   return {
@@ -127,6 +145,24 @@ const revision = finalizeModelDecision({
 })
 assert.equal(revision.executionEffect, 'draft_change')
 assert.equal(revision.nextAction, 'REVISE_TIMELINE')
+
+const explicitUiAspectRatioWins = finalizeModelDecision({
+  llmResult: decision({
+    intent: 'generate_timeline',
+    nextAction: 'GENERATE_TIMELINE',
+    executionEffect: 'draft_change',
+    authorizationEvidence: '请生成方案。',
+    slotsPatch: { aspectRatio: '9:16' },
+  }),
+  context: {
+    ...context,
+    slots: { ...context.slots, aspectRatio: '16:9' },
+    explicitUiControls: { aspectRatio: '16:9' },
+  },
+  runtime: runtime(),
+})
+assert.equal(explicitUiAspectRatioWins.modelInferredSlots?.aspectRatio, '9:16')
+assert.equal(explicitUiAspectRatioWins.slotsPatch.aspectRatio, '16:9')
 
 const createWithoutQuotedEvidence = finalizeModelDecision({
   llmResult: decision({

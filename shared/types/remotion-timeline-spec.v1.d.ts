@@ -59,22 +59,42 @@ export interface RemotionTimelineTransition {
 }
 export type RemotionTimelineOverlayType = 'caption' | 'title' | 'label' | 'shape' | 'image_badge' | 'light_sweep';
 export type RemotionTimelineOverlayAnimation = 'none' | 'fade' | 'slide_up_fade' | 'pop' | 'pulse' | 'sweep';
+/** Defaults shared by caption overlays in the same V2 subtitle track. */
+export interface RemotionTimelineCaptionTrack {
+    id: string;
+    x_pct: number;
+    y_pct: number;
+    width_pct?: number;
+    max_lines?: number;
+    z_index?: number;
+    enter_animation?: RemotionTimelineOverlayAnimation;
+    exit_animation?: RemotionTimelineOverlayAnimation;
+    /** Captions on this track may overlap only when the author explicitly opts in. */
+    overlap_policy?: 'forbid' | 'allow_crossfade';
+}
 export interface RemotionTimelineOverlay {
     id: string;
     type: RemotionTimelineOverlayType;
     start_sec: number;
     end_sec: number;
     scene_id?: string;
+    /** Caption overlays may inherit placement and animation defaults from this track. */
+    track_id?: string;
     text?: string;
     asset_id?: string;
     x_pct: number;
     y_pct: number;
     width_pct?: number;
     height_pct?: number;
+    /** Maximum visible text lines for caption-like overlays. */
+    max_lines?: number;
+    z_index?: number;
     color?: string;
     background?: string;
     opacity?: number;
     animation?: RemotionTimelineOverlayAnimation;
+    enter_animation?: RemotionTimelineOverlayAnimation;
+    exit_animation?: RemotionTimelineOverlayAnimation;
 }
 export interface RemotionTimelineMaterialJob {
     id: string;
@@ -107,6 +127,8 @@ export interface RemotionTimelineSpecV1 {
     assets: RemotionTimelineAsset[];
     scenes: RemotionTimelineScene[];
     transitions: RemotionTimelineTransition[];
+    /** Configuration only. Visible caption text remains in overlays. */
+    caption_tracks?: RemotionTimelineCaptionTrack[];
     overlays: RemotionTimelineOverlay[];
     material_jobs: RemotionTimelineMaterialJob[];
     audio?: RemotionTimelineAudioClip[];

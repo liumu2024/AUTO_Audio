@@ -191,6 +191,37 @@ export function validateRemotionTimelineSpec(value) {
     const overlays = Array.isArray(spec.overlays) ? spec.overlays : [];
     if (!Array.isArray(spec.overlays))
         addIssue(issues, 'error', 'overlays', 'overlays must be an array.');
+    const captionTracks = spec.caption_tracks == null ? [] : Array.isArray(spec.caption_tracks) ? spec.caption_tracks : [];
+    if (spec.caption_tracks != null && !Array.isArray(spec.caption_tracks)) {
+        addIssue(issues, 'error', 'caption_tracks', 'caption_tracks must be an array when provided.');
+    }
+    const captionTrackIds = new Set();
+    captionTracks.forEach((track, index) => {
+        const path = `caption_tracks[${index}]`;
+        validateUniqueId({ issues, ids: captionTrackIds, path, id: track.id, label: 'caption track' });
+        if (!finiteNumber(track.x_pct))
+            addIssue(issues, 'error', `${path}.x_pct`, 'x_pct must be a finite number.');
+        if (!finiteNumber(track.y_pct))
+            addIssue(issues, 'error', `${path}.y_pct`, 'y_pct must be a finite number.');
+        if (track.max_lines != null &&
+            (!Number.isInteger(track.max_lines) || track.max_lines < 1 || track.max_lines > 8)) {
+            addIssue(issues, 'error', `${path}.max_lines`, 'max_lines must be an integer between 1 and 8.');
+        }
+        if (track.z_index != null && !Number.isInteger(track.z_index)) {
+            addIssue(issues, 'error', `${path}.z_index`, 'z_index must be an integer when provided.');
+        }
+        for (const [name, animation] of [
+            ['enter_animation', track.enter_animation],
+            ['exit_animation', track.exit_animation],
+        ]) {
+            if (animation && !['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'].includes(animation)) {
+                addIssue(issues, 'error', `${path}.${name}`, 'unsupported caption track animation.');
+            }
+        }
+        if (track.overlap_policy && !['forbid', 'allow_crossfade'].includes(track.overlap_policy)) {
+            addIssue(issues, 'error', `${path}.overlap_policy`, 'unsupported caption track overlap policy.');
+        }
+    });
     const overlayIds = new Set();
     overlays.forEach((overlay, index) => {
         const path = `overlays[${index}]`;
@@ -208,6 +239,18 @@ export function validateRemotionTimelineSpec(value) {
         if (overlay.scene_id && !sceneIds.has(overlay.scene_id)) {
             addIssue(issues, 'error', `${path}.scene_id`, 'scene_id must reference an existing scene.');
         }
+        if (overlay.scene_id && sceneIds.has(overlay.scene_id) && finiteNumber(overlay.start_sec) && finiteNumber(overlay.end_sec)) {
+            const scene = scenes.find((item) => item.id === overlay.scene_id);
+            if (scene && (overlay.start_sec < scene.start_sec - 0.05 || overlay.end_sec > scene.start_sec + scene.duration_sec + 0.05)) {
+                addIssue(issues, 'error', path, 'scene overlay must stay within its referenced scene time range.');
+            }
+        }
+        if (overlay.track_id && overlay.type !== 'caption') {
+            addIssue(issues, 'error', `${path}.track_id`, 'track_id is only supported by caption overlays.');
+        }
+        if (overlay.type === 'caption' && overlay.track_id && !captionTrackIds.has(overlay.track_id)) {
+            addIssue(issues, 'error', `${path}.track_id`, 'track_id must reference an existing caption track.');
+        }
         if (['caption', 'title', 'label'].includes(overlay.type) && !overlay.text?.trim()) {
             addIssue(issues, 'error', `${path}.text`, `${overlay.type} overlays require text.`);
         }
@@ -221,13 +264,47 @@ export function validateRemotionTimelineSpec(value) {
             addIssue(issues, 'error', `${path}.x_pct`, 'x_pct must be a finite number.');
         if (!finiteNumber(overlay.y_pct))
             addIssue(issues, 'error', `${path}.y_pct`, 'y_pct must be a finite number.');
+        if (overlay.max_lines != null &&
+            (!Number.isInteger(overlay.max_lines) || overlay.max_lines < 1 || overlay.max_lines > 8)) {
+            addIssue(issues, 'error', `${path}.max_lines`, 'max_lines must be an integer between 1 and 8.');
+        }
         if (overlay.opacity != null && (!finiteNumber(overlay.opacity) || overlay.opacity < 0 || overlay.opacity > 1)) {
             addIssue(issues, 'error', `${path}.opacity`, 'opacity must be between 0 and 1.');
         }
         if (overlay.animation && !['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'].includes(overlay.animation)) {
             addIssue(issues, 'error', `${path}.animation`, 'unsupported overlay animation.');
         }
+        for (const [name, animation] of [
+            ['enter_animation', overlay.enter_animation],
+            ['exit_animation', overlay.exit_animation],
+        ]) {
+            if (animation && !['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'].includes(animation)) {
+                addIssue(issues, 'error', `${path}.${name}`, 'unsupported overlay animation.');
+            }
+        }
+        if (overlay.z_index != null && !Number.isInteger(overlay.z_index)) {
+            addIssue(issues, 'error', `${path}.z_index`, 'z_index must be an integer when provided.');
+        }
     });
+    for (const track of captionTracks) {
+        const segments = overlays
+            .filter((overlay) => overlay.type === 'caption' && overlay.track_id === track.id)
+            .slice()
+            .sort((a, b) => a.start_sec - b.start_sec);
+        for (let index = 0; index < segments.length - 1; index += 1) {
+            const current = segments[index];
+            const next = segments[index + 1];
+            const overlap = current.end_sec - next.start_sec;
+            if (overlap <= 0.01)
+                continue;
+            if (track.overlap_policy !== 'allow_crossfade') {
+                addIssue(issues, 'error', `overlays[${overlays.indexOf(next)}]`, `caption track ${track.id} does not allow overlapping segments.`);
+            }
+            else if (overlap > 0.5) {
+                addIssue(issues, 'error', `overlays[${overlays.indexOf(next)}]`, `caption track ${track.id} crossfade overlap must not exceed 0.5 seconds.`);
+            }
+        }
+    }
     const audio = spec.audio == null ? [] : Array.isArray(spec.audio) ? spec.audio : [];
     if (spec.audio != null && !Array.isArray(spec.audio)) {
         addIssue(issues, 'error', 'audio', 'audio must be an array when provided.');

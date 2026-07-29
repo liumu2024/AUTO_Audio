@@ -32,6 +32,10 @@ import { createV2TraceWriter } from './trace.js'
 import type { V2PlannerInput } from './v2-input.js'
 import type { V2TimelineVisualInputReport } from './remotion-timeline-llm-planner.js'
 import { applyV2TimelineRevisionPreservation } from './timeline-revision-context.js'
+import {
+  reviewV2TimelineRevisionOutcome,
+  V2TimelineRevisionOutcomeError,
+} from './timeline-revision-outcome-review.js'
 
 export interface V2TimelinePreviewResult {
   taskId: string
@@ -81,10 +85,10 @@ function traceablePlannerInput(input: V2PlannerInput & { imageSrc?: string }) {
 
 function semanticCaptionPolicy(plannerSource: string, attachedImages: number): string {
   if (plannerSource === 'override') return 'render_existing_revision_without_replanning'
-  if (plannerSource === 'llm' && attachedImages > 0) {
+  if (plannerSource.startsWith('llm') && attachedImages > 0) {
     return 'planner_may_create_captions_from_attached_image_inputs'
   }
-  if (plannerSource === 'llm') {
+  if (plannerSource.startsWith('llm')) {
     return 'planner_must_not_claim_image_understanding_without_accessible_image_inputs'
   }
   return 'fallback_preserves_only_explicit_user_caption_requirements'
@@ -114,7 +118,8 @@ async function resolveTimelineSpec(input: {
   if (input.plannerInput.plannerMode === 'llm') {
     try {
       const { runV2TimelineLlmPlanner } = await import('./remotion-timeline-llm-planner.js')
-      const llmPlanner = await runV2TimelineLlmPlanner(plannerInputFrom(input.plannerInput))
+      let llmPlanner = await runV2TimelineLlmPlanner(plannerInputFrom(input.plannerInput))
+      let correctionApplied = false
       await input.trace.writeText('02-planning', 'llm-timeline-planner-prompt.md', llmPlanner.promptText)
       await input.trace.writeJson('02-planning', 'llm-timeline-planner-model-response.audit.json', llmPlanner.initialResponseAudit)
       await input.trace.writeJson('02-planning', 'llm-timeline-planner-json-candidate.audit.json', llmPlanner.rawResponse)
@@ -130,12 +135,52 @@ async function resolveTimelineSpec(input: {
         await input.trace.writeJson('02-planning', 'llm-timeline-planner-json-repair-result.audit.json',
           llmPlanner.jsonRepair.responseAudit ?? { error: llmPlanner.jsonRepair.error ?? null })
       }
+      {
+        let outcomeReview = await reviewV2TimelineRevisionOutcome({
+          prompt: input.plannerInput.prompt,
+          baseSpec: input.plannerInput.revisionBaseSpec,
+          candidateSpec: llmPlanner.spec,
+          confirmedContext: input.plannerInput.conversationSummary,
+        })
+        await input.trace.writeJson('02-planning', 'timeline-outcome-review.json', outcomeReview)
+        if (!outcomeReview.pass) {
+          correctionApplied = true
+          const correctionPrompt = [
+            llmPlanner.promptText,
+            '',
+            'The candidate revision did not satisfy the independent V2 outcome review.',
+            input.plannerInput.revisionBaseSpec
+              ? 'Return a corrected full timeline JSON. Preserve all confirmed content that the user did not ask to change.'
+              : 'Return a corrected full timeline JSON that fulfils the user request.',
+            `Review violations: ${JSON.stringify(outcomeReview.violations)}`,
+            `Required repair: ${outcomeReview.repairInstruction ?? 'Correct the listed semantic violations without broadening the revision scope.'}`,
+          ].join('\n')
+          await input.trace.writeText('02-planning', 'timeline-outcome-correction-request.md', correctionPrompt)
+          llmPlanner = await runV2TimelineLlmPlanner(
+            plannerInputFrom(input.plannerInput),
+            { promptText: correctionPrompt },
+          )
+          await input.trace.writeJson('02-planning', 'timeline-outcome-correction-model-response.audit.json', llmPlanner.initialResponseAudit)
+          await input.trace.writeJson('02-planning', 'timeline-outcome-correction-json-candidate.audit.json', llmPlanner.rawResponse)
+          outcomeReview = await reviewV2TimelineRevisionOutcome({
+            prompt: input.plannerInput.prompt,
+            baseSpec: input.plannerInput.revisionBaseSpec,
+            candidateSpec: llmPlanner.spec,
+            confirmedContext: input.plannerInput.conversationSummary,
+          })
+          await input.trace.writeJson('02-planning', 'timeline-outcome-correction-review.json', outcomeReview)
+          if (!outcomeReview.pass) {
+            throw new V2TimelineRevisionOutcomeError(outcomeReview)
+          }
+        }
+      }
       return {
         spec: llmPlanner.spec,
-        plannerSource: 'llm',
+        plannerSource: correctionApplied ? 'llm_revision_corrected' : 'llm',
         visualInputReport: llmPlanner.visualInputReport,
       }
     } catch (error) {
+      if (error instanceof V2TimelineRevisionOutcomeError) throw error
       const message = error instanceof Error ? error.message : String(error)
       const protocol = error && typeof error === 'object' && 'diagnostic' in error
         ? (error as { diagnostic?: Record<string, unknown> }).diagnostic
@@ -232,13 +277,15 @@ export async function previewV2RemotionTimeline(
     `- 任务 ID：${input.taskId}`,
     `- 规划来源：${resolved.plannerSource}`,
     `- 镜头数量：${review.metrics.scene_count}`,
-    `- Remotion 镜头：${review.metrics.remotion_scene_count}`,
-    `- AI 视频镜头：${review.metrics.ai_video_scene_count}`,
+    `- 已解析 AI 视频镜头：${review.metrics.ai_video_scene_count}`,
+    `- 计划 AI 视频镜头：${review.metrics.planned_ai_video_scene_count}`,
+    `- 当前 Remotion 兜底镜头（待生成或失败）：${review.metrics.remotion_preview_fallback_scene_count}`,
+    `- 纯 Remotion 程序化镜头：${review.metrics.remotion_scene_count}`,
     `- 转场数量：${review.metrics.transition_count}`,
     `- 视觉素材覆盖：${review.metrics.used_visual_asset_count}/${review.metrics.visual_asset_count}`,
     `- 风险等级：${review.risk_level}`,
     '',
-    '本步骤只规划并审查 Remotion-first 时间线，不生成素材，也不渲染成片。',
+    '本步骤只规划并审查 V2 时间线：待生成的 AI 视频会保留预览兜底，尚不生成素材，也不渲染成片。',
   ])
   return {
     taskId: input.taskId,

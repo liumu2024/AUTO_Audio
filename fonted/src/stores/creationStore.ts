@@ -21,8 +21,10 @@ interface CreationState {
   pendingAttachmentIds: string[]
   showSampleInInputTray: boolean
   aspectRatio: DirectorAspectRatio
+  aspectRatioExplicit: boolean
   durationSec?: number
   styleIntensity: 'light' | 'medium' | 'strong'
+  styleIntensityExplicit: boolean
   isAnalyzing: boolean
   /** 样例视频是否已完成结构拆解（有 pipeline 结果） */
   isSampleParsed: boolean
@@ -57,8 +59,10 @@ export const useCreationStore = create<CreationState>((set, get) => ({
   pendingAttachmentIds: [],
   showSampleInInputTray: false,
   aspectRatio: '9:16',
+  aspectRatioExplicit: false,
   durationSec: undefined,
   styleIntensity: 'medium',
+  styleIntensityExplicit: false,
   isAnalyzing: false,
   isSampleParsed: false,
 
@@ -101,9 +105,9 @@ export const useCreationStore = create<CreationState>((set, get) => ({
       pendingAttachmentIds: s.pendingAttachmentIds.filter((item) => item !== id),
     })),
   clearInputTray: () => set({ pendingAttachmentIds: [], showSampleInInputTray: false }),
-  setAspectRatio: (aspectRatio) => set({ aspectRatio }),
+  setAspectRatio: (aspectRatio) => set({ aspectRatio, aspectRatioExplicit: true }),
   setDurationSec: (durationSec) => set({ durationSec }),
-  setStyleIntensity: (styleIntensity) => set({ styleIntensity }),
+  setStyleIntensity: (styleIntensity) => set({ styleIntensity, styleIntensityExplicit: true }),
   setAnalyzing: (isAnalyzing) => set({ isAnalyzing }),
   setSampleParsed: (isSampleParsed) => set({ isSampleParsed }),
   clearSample: () =>

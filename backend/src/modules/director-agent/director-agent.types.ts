@@ -3,6 +3,7 @@ import type { DirectorSessionState } from '../../../../shared/types/director-sta
 import type {
   DirectorContext,
   DirectorContextSlots,
+  DirectorEffectiveCreativeConfig,
 } from '../../../../shared/types/director-context.js'
 import type { DirectorConversationRuntime } from '../../../../shared/lib/director-understanding.js'
 import type { DirectorSurfaceMode } from './surface-router.js'
@@ -43,10 +44,38 @@ export type DirectorAgentStreamEvent =
       slots: DirectorContextSlots
       missingSlots: string[]
     }
+  | { type: 'constraint_resolution'; config: DirectorEffectiveCreativeConfig }
   | {
       type: 'action_plan'
       action: DirectorAction
     }
+  | {
+      type: 'skill_selected'
+      skillId: string
+      purpose: string
+    }
+  | {
+      type: 'tool_proposed'
+      callId: string
+      toolId: string
+      requestedMode: 'preview' | 'execute'
+    }
+  | {
+      type: 'tool_started'
+      callId: string
+      toolId: string
+    }
+  | {
+      type: 'tool_result'
+      callId: string
+      toolId: string
+      ok: boolean
+      summary: string
+      result?: Record<string, unknown>
+      draft?: { draftId: string; revision: number; spec: import('../../../../shared/types/remotion-timeline-spec.v1.js').RemotionTimelineSpecV1; traceDir?: string }
+    }
+  | { type: 'assistant_reply'; message: string }
+  | { type: 'workspace_snapshot'; workspaceSessionId: string; state: DirectorWorkspaceState }
   | {
       type: 'state_update'
       state: DirectorSessionState

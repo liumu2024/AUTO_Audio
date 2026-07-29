@@ -19,6 +19,7 @@ export interface V2TimelineSceneReviewItem {
   asset_id?: string
   asset_label_zh?: string
   motion_zh?: string
+  visual_state_zh: string
   overlay_texts_zh?: string[]
   material_usage_zh?: string
 }
@@ -30,8 +31,14 @@ export interface V2TimelinePlanningReview {
   metrics: {
     scene_count: number
     user_video_scene_count: number
+    /** 已经解析为 ai_video 节点、可由渲染器直接引用的镜头。 */
     ai_video_scene_count: number
+    /** 没有生成任务的纯 Remotion 程序化镜头。 */
     remotion_scene_count: number
+    /** 计划生成视频的镜头数；preview 阶段可能尚未有 ai_video 节点。 */
+    planned_ai_video_scene_count: number
+    /** 计划 AI 视频、但当前仍以 Remotion 卡片作为待生成或失败兜底的镜头数。 */
+    remotion_preview_fallback_scene_count: number
     transition_count: number
     overlay_count: number
     material_job_count: number
@@ -52,8 +59,8 @@ function ownerForScene(
   scene: RemotionTimelineScene,
   generationJob?: RemotionTimelineMaterialJob,
 ): string {
-  if (generationJob) return '视频生成模型（待生成）'
   if (scene.type === 'ai_video') return '视频生成模型'
+  if (generationJob?.status === 'planned') return '视频生成模型（待生成）'
   if (scene.type === 'user_video') return '用户素材'
   return 'Remotion'
 }
@@ -62,12 +69,14 @@ function sourceForScene(
   scene: RemotionTimelineScene,
   generationJob?: RemotionTimelineMaterialJob,
 ): string {
+  if (scene.type === 'ai_video') return scene.asset_id ? `生成素材 ${scene.asset_id}` : '待解析 AI 视频素材'
   if (generationJob) {
-    return generationJob.output_asset_id
+    return generationJob.status === 'planned' && generationJob.output_asset_id
       ? `计划生成素材 ${generationJob.output_asset_id}`
-      : '计划调用视频生成模型'
+      : generationJob.status === 'planned'
+        ? '计划调用视频生成模型'
+        : '视频生成未解析为可用素材'
   }
-  if (scene.type === 'ai_video') return scene.asset_id ? `生成素材 ${scene.asset_id}` : '待生成素材'
   if (scene.type === 'user_video') return scene.asset_id ? `用户素材 ${scene.asset_id}` : '用户素材'
   if (scene.type === 'image_motion') return scene.asset_id ? `图片素材 ${scene.asset_id}` : '图片动效'
   return '程序化图文场景'
@@ -88,7 +97,8 @@ function motionLabel(
   scene: RemotionTimelineScene,
   generationJob?: RemotionTimelineMaterialJob,
 ): string {
-  if (generationJob) return '由视频生成模型生成真实画面运动，Remotion 负责字幕、转场和最终编排。'
+  if (scene.type === 'ai_video') return '由视频生成模型负责真实画面运动，Remotion 负责时间线承接。'
+  if (generationJob?.status === 'planned') return '待视频生成模型生成真实画面运动；Remotion 当前只负责预览兜底、字幕和转场。'
   if (scene.type === 'user_video') return '沿用视频素材原始运动，并由 Remotion 负责裁切适配。'
   if (scene.type === 'image_motion') {
     const labels: Record<string, string> = {
@@ -100,8 +110,20 @@ function motionLabel(
     }
     return labels[scene.motion ?? 'none'] ?? scene.motion ?? '图片动效'
   }
-  if (scene.type === 'ai_video') return '由视频生成模型负责真实画面运动，Remotion 负责时间线承接。'
   return 'Remotion 程序化图文动效。'
+}
+
+function visualStateLabel(
+  scene: RemotionTimelineScene,
+  generationJob?: RemotionTimelineMaterialJob,
+): string {
+  if (generationJob?.status === 'planned' && scene.type !== 'ai_video') {
+    return '待生成 AI 视频；当前预览使用 Remotion 兜底卡片。'
+  }
+  if (scene.type === 'ai_video') return '已解析 AI 视频素材，可直接进入渲染。'
+  if (generationJob) return '视频生成未解析为可用素材；当前使用 Remotion 兜底卡片。'
+  if (scene.type === 'user_video') return '使用用户视频素材。'
+  return '纯 Remotion 程序化画面。'
 }
 
 function riskLevel(input: {
@@ -178,6 +200,7 @@ export function buildV2TimelinePlanningReview(input: {
         asset_label_zh:
           scene.creative_intent?.material_label ?? asset?.label ?? asset?.id,
         motion_zh: motionLabel(scene, generationJob),
+        visual_state_zh: visualStateLabel(scene, generationJob),
         overlay_texts_zh: sceneOverlays
           .filter((overlay) => overlay.text)
           .map((overlay) => overlay.text!)
@@ -192,8 +215,16 @@ export function buildV2TimelinePlanningReview(input: {
       }
     })
 
+  const plannedAiVideoSceneIds = new Set(generateVideoJobs.map((job) => job.scene_id))
+  const resolvedAiVideoSceneCount = input.spec.scenes.filter((scene) => scene.type === 'ai_video').length
+  const remotionPreviewFallbackSceneCount = input.spec.scenes.filter(
+    (scene) => scene.type !== 'ai_video' && plannedAiVideoSceneIds.has(scene.id),
+  ).length
   const remotionSceneCount = input.spec.scenes.filter(
-    (scene) => scene.type !== 'user_video' && scene.type !== 'ai_video',
+    (scene) =>
+      scene.type !== 'user_video' &&
+      scene.type !== 'ai_video' &&
+      !plannedAiVideoSceneIds.has(scene.id),
   ).length
   const unusedVisualAssets = visualAssets.filter((asset) => !usedVisualAssetIds.has(asset.id))
   if (unusedVisualAssets.length) {
@@ -213,12 +244,14 @@ export function buildV2TimelinePlanningReview(input: {
   return {
     schema_version: 'v2_timeline_planning_review.v1',
     risk_level: level,
-    summary_zh: `这版方案包含 ${input.spec.scenes.length} 个镜头，主画面使用了 ${mainSceneVisualAssetIds.size}/${visualAssets.length} 个视觉素材；${generateVideoJobs.length} 个镜头计划调用视频生成模型。Remotion 只负责时间线、转场、字幕和图片动效，真实画面内容来自用户素材或视频生成模型。`,
+    summary_zh: `这版方案包含 ${input.spec.scenes.length} 个镜头，主画面使用了 ${mainSceneVisualAssetIds.size}/${visualAssets.length} 个视觉素材；${plannedAiVideoSceneIds.size} 个镜头计划调用视频生成模型，其中 ${remotionPreviewFallbackSceneCount} 个在当前预览阶段暂由 Remotion 兜底卡片承载。生成任务成功解析后，这些镜头会切换为 AI 视频；纯 Remotion 画面只统计没有视频生成任务的镜头。`,
     metrics: {
       scene_count: input.spec.scenes.length,
       user_video_scene_count: input.spec.scenes.filter((scene) => scene.type === 'user_video').length,
-      ai_video_scene_count: input.spec.scenes.filter((scene) => scene.type === 'ai_video').length,
+      ai_video_scene_count: resolvedAiVideoSceneCount,
       remotion_scene_count: remotionSceneCount,
+      planned_ai_video_scene_count: plannedAiVideoSceneIds.size,
+      remotion_preview_fallback_scene_count: remotionPreviewFallbackSceneCount,
       transition_count: input.spec.transitions.length,
       overlay_count: input.spec.overlays.length,
       material_job_count: input.spec.material_jobs.length,
@@ -235,7 +268,7 @@ export function buildV2TimelinePlanningReview(input: {
     next_actions_zh: [
       '先确认分镜结构、素材来源和转场是否符合预期。',
       '确认后再进入素材生成和 Remotion 完整时间线渲染。',
-      '如果某个镜头需要真实复杂画面，应将该镜头标记为 ai_video，而不是让 Remotion 硬模拟。',
+      '预览中的 Remotion 兜底卡片不代表最终视觉策略；视频生成任务成功后会解析为 ai_video 镜头。',
     ],
   }
 }
@@ -246,7 +279,7 @@ export function renderV2TimelinePlanningReviewMarkdown(review: V2TimelinePlannin
       (scene, index) =>
         `${index + 1}. ${scene.id}：${scene.owner_zh}，${scene.role_zh}，${scene.start_sec}-${Number(
           (scene.start_sec + scene.duration_sec).toFixed(3),
-        )}s，来源：${scene.source_zh}${scene.transition_after ? `，后接转场：${scene.transition_after}` : ''}`,
+        )}s，来源：${scene.source_zh}，状态：${scene.visual_state_zh}${scene.transition_after ? `，后接转场：${scene.transition_after}` : ''}`,
     )
     .join('\n')
   const warnings = review.warnings_zh.length
@@ -268,8 +301,10 @@ export function renderV2TimelinePlanningReviewMarkdown(review: V2TimelinePlannin
     '',
     `- 镜头数：${review.metrics.scene_count}`,
     `- 用户视频镜头：${review.metrics.user_video_scene_count}`,
-    `- AI 视频镜头：${review.metrics.ai_video_scene_count}`,
-    `- Remotion 程序化镜头：${review.metrics.remotion_scene_count}`,
+    `- 已解析 AI 视频镜头：${review.metrics.ai_video_scene_count}`,
+    `- 计划 AI 视频镜头：${review.metrics.planned_ai_video_scene_count}`,
+    `- 当前 Remotion 兜底镜头（待生成或失败）：${review.metrics.remotion_preview_fallback_scene_count}`,
+    `- 纯 Remotion 程序化镜头：${review.metrics.remotion_scene_count}`,
     `- 转场数：${review.metrics.transition_count}`,
     `- overlay 数：${review.metrics.overlay_count}`,
     `- 计划视频生成任务：${review.metrics.planned_generate_video_count}`,

@@ -1,6 +1,8 @@
 import { z } from 'zod'
 
 import { env } from '../../config/env.js'
+import { listV2AgentSkillCards } from '../../pipeline-v2/agent-skills/registry.js'
+import { listV2AgentToolCards } from '../../pipeline-v2/agent-tools/registry.js'
 import {
   deriveRuntimeSlotStatus,
 } from '../../../../shared/lib/director-understanding.js'
@@ -51,7 +53,7 @@ const WorkspaceIntentSchema = z.enum(['chat', 'create', 'revise', 'execute', 'cl
 const V2CreationModeSchema = z.enum(['sample_replicate', 'material_brief', 'text_to_video'])
 const DirectorDecisionJsonSchema = {
   type: 'object',
-  required: ['intent', 'confidence', 'contentDomain', 'slotsPatch', 'nextAction', 'assistantMessage'],
+  required: ['intent', 'confidence', 'contentDomain', 'slotsPatch', 'nextAction', 'assistantMessage', 'skillRequests', 'toolRequests'],
   properties: {
     intent: { type: 'string', enum: IntentSchema.options },
     confidence: { type: 'number', minimum: 0, maximum: 1 },
@@ -69,6 +71,8 @@ const DirectorDecisionJsonSchema = {
     statePatch: { type: 'object' },
     nextStep: { type: 'string' },
     requirements: { type: 'array', items: { type: 'string' } },
+    skillRequests: { type: 'array', items: { type: 'object', required: ['skillId', 'purpose'], properties: { skillId: { type: 'string' }, purpose: { type: 'string' } } } },
+    toolRequests: { type: 'array', items: { type: 'object', required: ['callId', 'toolId', 'skillId', 'arguments', 'requestedMode'], properties: { callId: { type: 'string' }, toolId: { type: 'string' }, skillId: { type: 'string' }, arguments: { type: 'object' }, requestedMode: { type: 'string', enum: ['preview', 'execute'] }, authorizationEvidence: { type: 'string' } } } },
   },
 } as const
 const WorkspaceStatePatchSchema = z.object({
@@ -129,6 +133,12 @@ const LlmIntentResultSchema = z.object({
   statePatch: WorkspaceStatePatchSchema,
   nextStep: z.enum(['discuss', 'plan_create', 'plan_revise', 'execute', 'await_input']).optional(),
   requirements: z.array(z.string()).default([]),
+  skillRequests: z.array(z.object({ skillId: z.string().trim().min(1), purpose: z.string().trim().min(1) })).default([]),
+  toolRequests: z.array(z.object({
+    callId: z.string().trim().min(1), toolId: z.string().trim().min(1), skillId: z.string().trim().min(1),
+    arguments: z.record(z.string(), z.unknown()).default({}), requestedMode: z.enum(['preview', 'execute']),
+    authorizationEvidence: z.preprocess(optionalNonBlankString, z.string().trim().min(1).optional()),
+  })).default([]),
 })
 
 type LlmIntentResult = z.infer<typeof LlmIntentResultSchema>
@@ -232,6 +242,9 @@ export function compactDirectorContextForPrompt(input: {
       imageToVideoRequiresPublicImageUrl: true,
     },
     slots: input.context.slots,
+    explicitUiControls: input.context.explicitUiControls,
+    effectiveCreativeConfig: input.context.effectiveCreativeConfig,
+    timelineFacts: input.context.timelineFacts,
     sampleVideo: input.context.sampleVideo
       ? {
           id: input.context.sampleVideo.id,
@@ -265,7 +278,7 @@ export function compactDirectorContextForPrompt(input: {
   }
 }
 
-function buildPrompt(input: {
+export function buildDirectorModelPrompt(input: {
   prompt: string
   context: DirectorContext
   runtime: DirectorConversationRuntime
@@ -292,10 +305,12 @@ function buildPrompt(input: {
 - 用户问“讲讲分析结果/你看到了什么”：nextAction 用 ACKNOWLEDGE，根据 sample style recipe 或当前计划摘要解释。
 - 用户问“怎么做某种风格”：nextAction 用 ACKNOWLEDGE，给创作流程建议。
 - 用户说“生成成片/按这个做”：有样例时走 sample_replicate；有图片或视频素材时走 material_brief；只有文字时走 text_to_video。三种情况都可用 GENERATE_TIMELINE，除非生成能力未配置。
-- RENDER 是昂贵的交付动作：只有用户明确要求“渲染 / 导出 / 输出 MP4 / 出片”时才用 RENDER。用户在描述对节奏、画面、镜头、转场、字幕、声音或素材的期望时，即使没有说“修改”，也应使用 REVISE_TIMELINE；不能因已有时间线就直接渲染。
+- RENDER 是昂贵的交付动作：只有用户明确要求“渲染 / 导出 / 输出 MP4 / 出片”时才用 RENDER。修订同样需要用户表达“把当前方案改成这样 / 采纳这个建议 / 调整并保存”等改变现有方案的意图。仅描述期望、询问“这版会如何呈现 / 是否合适 / 有什么建议 / 为什么这样安排”、评价、比较或提出假设时，都是讨论：executionEffect 必须为 none，nextAction 必须为 ACKNOWLEDGE；可以解释可采用的改法，但不能假装已修改。不要用单个词判断，须按整句话和上下文判断用户是在问、在讨论，还是在要求把建议落入当前方案。
+- 用户以直接祈使方式为当前方案指定一个目标状态（例如要求统一、替换、保留、移除、采用、调整某部分）时，即使没有逐字说“修改”，也是修订授权；不要把明确的方案约束误降级为聊天。输出中 intent、conversationIntent、nextStep、nextAction 与 executionEffect 必须表达同一个选择，不能一边说会更新方案、一边把 executionEffect 写成 none。
 - 用户说“重新生成方案”：这是重排 V2 时间线方案，nextAction 用 GENERATE_TIMELINE，不要直接渲染。
 - 用户说“重新渲染”：这是使用当前 V2 时间线方案出新 MP4，nextAction 用 RENDER。
 - 用户说“按提示修改后渲染/先修改再渲染”：优先从提示中抽取 slotsPatch，然后 nextAction 用 RENDER。
+- explicitUiControls 是用户在界面中明确选定的硬约束。若它与本轮文字推断冲突，保留 UI 值作为最终采用值；自然回复应说明冲突并请用户在 UI 中确认是否切换，不能悄悄覆盖。
 
 V2 branch rules:
 - V2 supports three generation branches: sample_replicate when a sample video is available, material_brief when only user text/materials are available, and text_to_video when the user only provides text.
@@ -305,6 +320,7 @@ V2 branch rules:
 
 Conversation freedom rules:
 - 如果用户是在聊天、咨询方案、解释结果、问你能做什么、讨论项目设计，不要因为缺样例或缺素材而要求上传；先自然回答问题，再给一个可选下一步。
+- clarify 只用于缺失的信息确实阻塞当前目标时；提出“还可以继续细化/也可以补充素材”的可选建议不是澄清，不得写 pendingQuestion，conversationIntent 应为 chat。
 - 只有用户明确要执行“解析样例 / 生成方案 / 渲染导出 / 修改时间线方案”时，才检查该动作对应的条件；不要把样例或素材当成所有生成路径的前置条件。
 - 不要根据孤立关键词决定是否执行；要理解整句话是在提问、讨论、提出假设，还是在授权执行。
 - assistantMessage 不要复述内部状态机、slot、nextAction 或置信度；这些只放在 debug/publicThoughts。
@@ -348,6 +364,18 @@ Revision / state machine rules:
 }
 
 当前上下文：
+Tool / Skill policy:
+- skillRequests and toolRequests are server proposals, never proof that a tool ran. For chat or advice, return empty arrays.
+- An explicitly authorized creation may request timeline.plan in preview mode. A narrow subtitle edit may request timeline.patch only with {"scope":"subtitle"}. A delivery request needs timeline.render in execute mode and explicit authorization.
+- Use only the cards below. Never request planned, disabled, arbitrary, or internal pipeline tools. Select skills for the current phase only.
+
+Available Skill cards:
+${JSON.stringify(listV2AgentSkillCards())}
+
+Available Tool cards:
+${JSON.stringify(listV2AgentToolCards())}
+
+Current context:
 ${JSON.stringify(compactDirectorContextForPrompt(input), null, 2)}
 
 只输出 JSON，不要 Markdown，不要解释。`
@@ -504,6 +532,27 @@ function workspaceIntentFor(candidate: LlmIntentResult): z.infer<typeof Workspac
   return candidate.intent === 'clarify' ? 'clarify' : 'chat'
 }
 
+/**
+ * The model owns the semantic decision. This only detects internally
+ * contradictory structured fields before an external action can run.
+ */
+export function directorDecisionConsistencyIssue(candidate: LlmIntentResult): string | undefined {
+  const claimsPlanChange =
+    candidate.conversationIntent === 'create' ||
+    candidate.conversationIntent === 'revise' ||
+    candidate.nextStep === 'plan_create' ||
+    candidate.nextStep === 'plan_revise' ||
+    candidate.nextAction === 'GENERATE_TIMELINE' ||
+    candidate.nextAction === 'REVISE_TIMELINE'
+  if (claimsPlanChange && candidate.executionEffect !== 'draft_change') {
+    return 'The decision claims a timeline create/revise action but executionEffect is not draft_change.'
+  }
+  if (candidate.executionEffect === 'draft_change' && !['GENERATE_TIMELINE', 'REVISE_TIMELINE'].includes(candidate.nextAction)) {
+    return 'draft_change requires a timeline create/revise nextAction.'
+  }
+  return undefined
+}
+
 function continuityWasRejected(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return /previous_response_id|previous response/i.test(message)
@@ -536,6 +585,8 @@ function toDirectorIntentResult(candidate: LlmIntentResult): DirectorIntentResul
     executionEffect: candidate.executionEffect,
     authorizationEvidence: candidate.authorizationEvidence,
     assistantMessage: candidate.assistantMessage,
+    skillRequests: candidate.skillRequests,
+    toolRequests: candidate.toolRequests,
   }
 }
 
@@ -570,14 +621,15 @@ export function finalizeModelDecision(input: {
     ...llmResult.slotsPatch,
     ...runtimeSlots,
     contentDomain: llmResult.contentDomain,
-    aspectRatio: llmResult.slotsPatch.aspectRatio ?? context.slots.aspectRatio,
-    durationSec: llmResult.slotsPatch.durationSec ?? context.slots.durationSec,
-    styleIntensity: llmResult.slotsPatch.styleIntensity ?? context.slots.styleIntensity,
+    aspectRatio: context.explicitUiControls?.aspectRatio ?? llmResult.slotsPatch.aspectRatio ?? context.slots.aspectRatio,
+    durationSec: context.explicitUiControls?.durationSec ?? llmResult.slotsPatch.durationSec ?? context.slots.durationSec,
+    styleIntensity: context.explicitUiControls?.styleIntensity ?? llmResult.slotsPatch.styleIntensity ?? context.slots.styleIntensity,
   }
 
   if (effect === 'none') {
     return {
       ...llmResult,
+      modelInferredSlots: llmResult.slotsPatch,
       slotsPatch,
       nextAction: 'ACKNOWLEDGE',
       missingSlots: [],
@@ -590,6 +642,7 @@ export function finalizeModelDecision(input: {
   if (!actionMatchesExecutionEffect(effect, llmResult.nextAction)) {
     return {
       ...llmResult,
+      modelInferredSlots: llmResult.slotsPatch,
       slotsPatch,
       intent: 'clarify',
       nextAction: 'ASK_USER',
@@ -609,6 +662,7 @@ export function finalizeModelDecision(input: {
   if (effect === 'delivery' && !llmResult.authorizationEvidence?.trim()) {
     return {
       ...llmResult,
+      modelInferredSlots: llmResult.slotsPatch,
       slotsPatch,
       intent: 'clarify',
       nextAction: 'ASK_USER',
@@ -623,6 +677,7 @@ export function finalizeModelDecision(input: {
   if (!runtime.backendEnabled) {
     return {
       ...llmResult,
+      modelInferredSlots: llmResult.slotsPatch,
       slotsPatch,
       nextAction: 'NEED_BACKEND',
       missingSlots: ['backend'],
@@ -638,6 +693,7 @@ export function finalizeModelDecision(input: {
   ) {
     return {
       ...llmResult,
+      modelInferredSlots: llmResult.slotsPatch,
       slotsPatch,
       nextAction: 'NEED_SAMPLE',
       missingSlots: ['sampleVideoStatus'],
@@ -649,6 +705,7 @@ export function finalizeModelDecision(input: {
   if (effect === 'delivery' && !hasCurrentV2Timeline(runtime)) {
     return {
       ...llmResult,
+      modelInferredSlots: llmResult.slotsPatch,
       slotsPatch,
       nextAction: 'ASK_USER',
       missingSlots: ['timeline'],
@@ -658,7 +715,7 @@ export function finalizeModelDecision(input: {
     }
   }
 
-  return { ...llmResult, slotsPatch }
+  return { ...llmResult, modelInferredSlots: llmResult.slotsPatch, slotsPatch }
 }
 
 function fallbackContextFacts(input: {
@@ -778,6 +835,18 @@ function directorJsonRepairPrompt(input: { invalidText: string; error: string })
   ].join('\n')
 }
 
+function directorConsistencyRepairPrompt(input: { originalText: string; issue: string }) {
+  return [
+    'Repair only a contradictory V2 director decision JSON.',
+    'Keep the user-facing meaning and do not invent an operation.',
+    'The fields intent, conversationIntent, nextStep, nextAction, and executionEffect must describe one coherent choice.',
+    'For a discussion choose chat/discuss/ACKNOWLEDGE/none. For a timeline create or revise choose the matching plan action/draft_change. Return JSON only using the original response schema.',
+    `Consistency issue: ${input.issue}`,
+    'Original final answer:',
+    input.originalText,
+  ].join('\n')
+}
+
 export async function routeDirectorIntentWithLlm(input: {
   prompt: string
   context: DirectorContext
@@ -793,7 +862,7 @@ export async function routeDirectorIntentWithLlm(input: {
 
   try {
     const response = await callResponsesApi({
-      promptText: buildPrompt(input),
+      promptText: buildDirectorModelPrompt(input),
       previousResponseId: input.previousResponseId,
     })
     const raw = response.raw
@@ -845,6 +914,39 @@ export async function routeDirectorIntentWithLlm(input: {
         structuredOutput: response.structuredOutput,
         jsonRepair: { request: repairPrompt, responseAudit: repairAudit, protocolError: { kind: 'json_syntax', message: repairMessage } },
       }
+      }
+    }
+    const consistencyIssue = directorDecisionConsistencyIssue(parsed)
+    if (consistencyIssue) {
+      const repairPrompt = directorConsistencyRepairPrompt({ originalText: text, issue: consistencyIssue })
+      let repairAudit: unknown
+      try {
+        const repairedResponse = await callResponsesApi({ promptText: repairPrompt, allowStructuredOutput: false })
+        const repairedText = extractText(repairedResponse.raw)
+        repairAudit = responseAudit(repairedResponse.raw, repairedText)
+        const repaired = parseDirectorModelDecision(repairedText)
+        const repairedIssue = directorDecisionConsistencyIssue(repaired)
+        if (repairedIssue) throw new Error(repairedIssue)
+        const guarded = finalizeModelDecision({
+          llmResult: toDirectorIntentResult(repaired), context: input.context, runtime: input.runtime,
+        })
+        return {
+          source: 'llm', modelCalled: true, result: guarded,
+          publicThoughts: repaired.publicThoughts.slice(0, 4), responseId: responseIdFrom(raw),
+          modelOutputText: text, modelResponseAudit: audit,
+          conversationIntent: workspaceIntentFor(repaired), statePatch: repaired.statePatch as DirectorWorkspacePatch,
+          requirements: repaired.requirements, proposedV2CreationMode: repaired.v2CreationMode,
+          structuredOutput: response.structuredOutput,
+          jsonRepair: { request: repairPrompt, responseAudit: repairAudit, protocolError: { kind: 'field_validation', message: consistencyIssue } },
+        }
+      } catch (repairError) {
+        return {
+          ...buildDirectorContextFallback({ ...input, reason: 'director decision fields were contradictory' }),
+          modelCalled: true, responseId: responseIdFrom(raw), modelOutputText: text, modelResponseAudit: audit,
+          protocolError: { kind: 'field_validation', message: repairError instanceof Error ? repairError.message : String(repairError) },
+          structuredOutput: response.structuredOutput,
+          jsonRepair: { request: repairPrompt, responseAudit: repairAudit, protocolError: { kind: 'field_validation', message: consistencyIssue } },
+        }
       }
     }
     const guarded = finalizeModelDecision({

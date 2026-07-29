@@ -1,6 +1,11 @@
 import { directorActionFromIntentResult } from '../../../../shared/lib/director-action-engine.js'
 import { randomUUID } from 'node:crypto'
 import { createV2TraceWriter } from '../../pipeline-v2/trace.js'
+import { buildV2TimelineFactDigest } from '../../pipeline-v2/timeline-revision-outcome-review.js'
+import { createV2TimelineDraftRepository } from '../../pipeline-v2/timeline-draft-repository.js'
+import { dispatchV2AgentTool, toolResultTimelineFacts } from '../../pipeline-v2/agent-tools/dispatcher.js'
+import { bindToolAuthorizationEvidence } from '../../pipeline-v2/agent-tools/authorization.js'
+import { resolveV2SkillRequests } from '../../pipeline-v2/agent-skills/registry.js'
 import { routeDirectorIntentWithLlm } from './llm-intent-router.js'
 import {
   appendDirectorWorkspaceTurn,
@@ -16,8 +21,45 @@ import type {
   DirectorAgentChatRequest,
   DirectorAgentStreamEvent,
 } from './director-agent.types.js'
+import type {
+  DirectorContextSlots,
+  DirectorEffectiveCreativeConfig,
+} from '../../../../shared/types/director-context.js'
 
 const workspaceSessions = createDirectorWorkspaceSessionRepository()
+const timelineDrafts = createV2TimelineDraftRepository()
+
+function directorTimelineFacts(input: {
+  revision: number
+  spec: Parameters<typeof buildV2TimelineFactDigest>[0]
+}) {
+  const digest = buildV2TimelineFactDigest(input.spec)
+  return {
+    revision: input.revision,
+    scenes: digest.scenes.map((scene) => ({
+      id: scene.id,
+      title: scene.title,
+      description: scene.description,
+      visualRole: scene.visual_role,
+      durationSec: scene.duration_sec,
+    })),
+    visibleText: digest.visible_text.map((text) => ({
+      id: text.id,
+      sceneId: text.scene_id,
+      type: text.type,
+      text: text.text,
+      yPct: text.position.y_pct,
+      maxLines: text.position.max_lines,
+      animation: text.animation,
+    })),
+    transitions: digest.transitions.map((transition) => ({
+      type: transition.type,
+      durationSec: transition.duration_sec,
+    })),
+    audioClipCount: digest.audio.length,
+    notes: digest.notes,
+  }
+}
 
 export async function getDirectorWorkspaceSession(input: {
   workspaceSessionId: string
@@ -37,8 +79,18 @@ export async function recordDirectorWorkspaceOutcome(input: {
 }) {
   const current = await workspaceSessions.get(input.workspaceSessionId, input.userId)
   if (!current) return null
+  const draftId = input.currentTimeline?.draftId
+  const revision = input.currentTimeline?.currentRevision
+  const persistedRevision = draftId && revision
+    ? await timelineDrafts.getRevision(draftId, revision, input.userId)
+    : null
+  const timelineFacts = persistedRevision
+    ? directorTimelineFacts({ revision: persistedRevision.revision, spec: persistedRevision.spec })
+    : undefined
   let state = applyDirectorWorkspacePatch(current.state, {
-    context: input.currentTimeline ? { currentTimeline: input.currentTimeline } : undefined,
+    context: input.currentTimeline
+      ? { currentTimeline: input.currentTimeline, timelineFacts }
+      : undefined,
     draftId: input.currentTimeline?.draftId,
     baseRevision: input.currentTimeline?.currentRevision,
     selectedItemId:
@@ -75,6 +127,7 @@ export async function recordDirectorWorkspaceOutcome(input: {
     draft_id: saved.state.draftId ?? null,
     revision: saved.state.baseRevision ?? null,
   })
+  if (timelineFacts) await trace.writeJson('00-director-turn', 'persisted-v2-timeline-facts.json', timelineFacts)
   return { state: saved.state, traceDir: trace.rootDir }
 }
 
@@ -116,6 +169,7 @@ function workspaceId(value: string | undefined): string {
 
 function runtimeObservationPatch(input: DirectorAgentChatRequest) {
   const slots = input.context.slots
+  const explicitUiControls = input.context.explicitUiControls
   return {
     context: {
       sampleVideo: input.context.sampleVideo,
@@ -125,12 +179,56 @@ function runtimeObservationPatch(input: DirectorAgentChatRequest) {
       slots: {
         sampleVideoStatus: slots.sampleVideoStatus,
         materialStatus: slots.materialStatus,
+        ...(explicitUiControls?.aspectRatio ? { aspectRatio: explicitUiControls.aspectRatio } : {}),
+        ...(explicitUiControls?.durationSec !== undefined ? { durationSec: explicitUiControls.durationSec } : {}),
+        ...(explicitUiControls?.styleIntensity ? { styleIntensity: explicitUiControls.styleIntensity } : {}),
       },
+      explicitUiControls,
     },
     draftId: input.context.currentTimeline?.draftId,
     baseRevision: input.context.currentTimeline?.currentRevision,
     selectedItemId:
       input.context.currentTimeline?.selectedClipId ?? input.context.currentTimeline?.selectedSceneId,
+  }
+}
+
+function resolveEffectiveCreativeConfig(input: {
+  uiControls?: DirectorAgentChatRequest['context']['explicitUiControls']
+  previous?: DirectorAgentChatRequest['context']['effectiveCreativeConfig']
+  actionSlots: DirectorContextSlots
+  modelSlots?: Partial<DirectorContextSlots>
+}): DirectorEffectiveCreativeConfig {
+  const ui = input.uiControls
+  const model = input.modelSlots ?? {}
+  const conflicts: DirectorEffectiveCreativeConfig['conflicts'] = []
+  const addConflict = (
+    field: 'aspectRatio' | 'durationSec' | 'styleIntensity',
+    uiValue: string | number | undefined,
+    modelValue: string | number | undefined,
+    effectiveValue: string | number | undefined,
+  ) => {
+    if (uiValue !== undefined && modelValue !== undefined && uiValue !== modelValue && effectiveValue !== undefined) {
+      conflicts.push({ field, uiValue, modelValue, effectiveValue })
+    }
+  }
+
+  const aspectRatio = ui?.aspectRatio ?? input.actionSlots.aspectRatio
+  const durationSec = ui?.durationSec ?? input.actionSlots.durationSec
+  const styleIntensity = ui?.styleIntensity ?? input.actionSlots.styleIntensity
+  addConflict('aspectRatio', ui?.aspectRatio, model.aspectRatio, aspectRatio)
+  addConflict('durationSec', ui?.durationSec, model.durationSec, durationSec)
+  addConflict('styleIntensity', ui?.styleIntensity, model.styleIntensity, styleIntensity)
+
+  return {
+    aspectRatio,
+    durationSec,
+    styleIntensity,
+    sources: {
+      aspectRatio: ui?.aspectRatio ? 'ui' : model.aspectRatio ? 'model' : input.previous?.sources.aspectRatio ?? 'default',
+      durationSec: ui?.durationSec !== undefined ? 'ui' : model.durationSec !== undefined ? 'model' : input.previous?.sources.durationSec ?? 'default',
+      styleIntensity: ui?.styleIntensity ? 'ui' : model.styleIntensity ? 'model' : input.previous?.sources.styleIntensity ?? 'default',
+    },
+    conflicts,
   }
 }
 
@@ -152,6 +250,7 @@ function stateDiff(before: DirectorWorkspaceState, after: DirectorWorkspaceState
   }
   if (JSON.stringify(before.context.slots) !== JSON.stringify(after.context.slots)) changed.push('context.slots')
   if (JSON.stringify(before.context.userIntent) !== JSON.stringify(after.context.userIntent)) changed.push('context.userIntent')
+  if (JSON.stringify(before.context.timelineFacts) !== JSON.stringify(after.context.timelineFacts)) changed.push('context.timelineFacts')
   return changed
 }
 
@@ -183,6 +282,7 @@ export async function* streamDirectorAgentChat(
   await trace.writeJson('00-director-turn', 'turn-input.json', {
     input_reached: true,
     workspace_session_id: id,
+    prompt: input.prompt,
     context: compactDirectorWorkspaceContext(workspaceState),
     runtime: input.runtime,
   })
@@ -266,16 +366,36 @@ export async function* streamDirectorAgentChat(
     await wait(20)
   }
 
-  const action = directorActionFromIntentResult({
+  const unresovedAction = directorActionFromIntentResult({
     prompt: input.prompt,
     context: workspaceState.context,
     runtime: input.runtime,
     result: routed.result,
   })
+  const effectiveCreativeConfig = resolveEffectiveCreativeConfig({
+    uiControls: input.context.explicitUiControls,
+    previous: workspaceState.context.effectiveCreativeConfig,
+    actionSlots: unresovedAction.slots,
+    modelSlots: routed.result.modelInferredSlots,
+  })
+  const action = {
+    ...unresovedAction,
+    slots: {
+      ...unresovedAction.slots,
+      aspectRatio: effectiveCreativeConfig.aspectRatio,
+      durationSec: effectiveCreativeConfig.durationSec,
+      styleIntensity: effectiveCreativeConfig.styleIntensity,
+    },
+  }
+  const requestedTools = bindToolAuthorizationEvidence({
+    prompt: input.prompt,
+    decisionAuthorizationEvidence: routed.result.authorizationEvidence,
+    requests: routed.result.toolRequests ?? [],
+  })
   const shouldExecute =
     routed.result.executionEffect !== undefined &&
     routed.result.executionEffect !== 'none' &&
-    action.type !== 'ASK_USER'
+    requestedTools.length > 0
 
   workspaceState = applyDirectorWorkspacePatch(workspaceState, {
     ...routed.statePatch,
@@ -286,7 +406,11 @@ export async function* streamDirectorAgentChat(
         goal:
           action.intent.goal,
         rawText: input.prompt || workspaceState.context.userIntent.rawText,
+        aspectRatio: effectiveCreativeConfig.aspectRatio,
+        durationSec: effectiveCreativeConfig.durationSec,
+        styleIntensity: effectiveCreativeConfig.styleIntensity,
       },
+      effectiveCreativeConfig,
     },
     // A previous model failure must never become a durable gate for new input.
     pendingQuestion:
@@ -296,25 +420,116 @@ export async function* streamDirectorAgentChat(
     responseId: routed.responseId,
     responseContinuityDisabled: routed.responseContinuityRejected || undefined,
   })
+  await trace.writeJson('00-director-turn', 'effective-creative-config.json', {
+    explicit_ui_controls: input.context.explicitUiControls ?? {},
+    model_inferred_slots: routed.result.modelInferredSlots ?? {},
+    effective_config: effectiveCreativeConfig,
+  })
   workspaceState = appendDirectorWorkspaceTurn(workspaceState, {
     role: 'user',
     content: input.prompt,
     at: new Date().toISOString(),
   })
+  const selectedSkills = resolveV2SkillRequests(routed.result.skillRequests)
+  for (const selected of selectedSkills.accepted) {
+    yield { type: 'skill_selected', skillId: selected.skillId, purpose: selected.purpose }
+  }
+  const toolResults = []
+  if (shouldExecute) {
+    for (const request of requestedTools) {
+      yield { type: 'tool_proposed', callId: request.callId, toolId: request.toolId, requestedMode: request.requestedMode }
+      yield { type: 'tool_started', callId: request.callId, toolId: request.toolId }
+      const result = await dispatchV2AgentTool({
+        request,
+        prompt: input.prompt,
+        userId,
+        context: workspaceState.context,
+        workspace: workspaceState,
+      })
+      toolResults.push(result)
+      await trace.writeJson('00-director-turn', `tool-${request.callId}.json`, {
+        request: { call_id: request.callId, tool_id: request.toolId, skill_id: request.skillId, requested_mode: request.requestedMode, arguments: request.arguments },
+        result: { ok: result.ok, summary: result.summary, trace_dir: result.draft?.traceDir ?? result.output?.traceDir ?? null, recovery: result.recovery ?? null },
+      })
+      const facts = toolResultTimelineFacts(result)
+      if (result.sampleUnderstanding && workspaceState.context.sampleVideo) {
+        const understanding = result.sampleUnderstanding as {
+          summary_zh?: string; atmosphere_zh?: string; editing_zh?: string; rhythm_zh?: string; reusable_style_zh?: string; segments?: unknown[]; warnings_zh?: string[]
+        }
+        workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+          context: {
+            sampleVideo: {
+              ...workspaceState.context.sampleVideo,
+              sampleUnderstanding: result.sampleUnderstanding as import('../../../../shared/types/v2-sample-understanding.js').V2SampleUnderstandingResult,
+              reference: {
+                source: 'sample_video', summary: understanding.summary_zh ?? 'V2 sample understanding completed.',
+                atmosphere: understanding.atmosphere_zh, editing: understanding.editing_zh, rhythm: understanding.rhythm_zh,
+                reusableStyle: understanding.reusable_style_zh, segmentCount: understanding.segments?.length ?? 0, warnings: understanding.warnings_zh,
+              },
+            },
+          },
+        })
+      }
+      if (result.draft && facts) {
+        workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+          draftId: result.draft.id,
+          baseRevision: result.draft.revision,
+          context: {
+            currentTimeline: {
+              kind: 'v2_timeline', status: 'saved', draftId: result.draft.id,
+              currentRevision: result.draft.revision, savedRevision: result.draft.revision,
+              selectedClipId: workspaceState.selectedItemId,
+              lastChangeSummary: result.summary,
+              sceneCount: result.draft.spec.scenes.length,
+            },
+            timelineFacts: facts,
+          },
+        })
+      }
+      workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+        recentToolCallIds: [...(workspaceState.recentToolCallIds ?? []), request.callId].slice(-48),
+        latestExecution: { action: request.toolId, outcome: result.ok ? result.summary : `failed: ${result.summary}`, traceDir: result.draft?.traceDir },
+        recentFailure: result.ok ? null : { reason: result.summary, recovery: result.recovery },
+      })
+      yield {
+        type: 'tool_result',
+        callId: result.callId,
+        toolId: result.toolId,
+        ok: result.ok,
+        summary: result.summary,
+        result: result.output,
+        draft: result.draft
+          ? {
+              draftId: result.draft.id,
+              revision: result.draft.revision,
+              spec: result.draft.spec,
+              traceDir: result.draft.traceDir,
+            }
+          : undefined,
+      }
+      if (!result.ok) break
+    }
+  }
+  const failedTool = toolResults.find((result) => !result.ok)
+  const assistantMessage = failedTool
+    ? `本轮没有完成所请求的操作：${failedTool.summary}${failedTool.recovery ? ` ${failedTool.recovery}` : ''}`
+    : routed.result.assistantMessage
   workspaceState = appendDirectorWorkspaceTurn(workspaceState, {
     role: 'assistant',
-    content: routed.result.assistantMessage,
+    content: assistantMessage,
     at: new Date().toISOString(),
     intent: intentForWorkspace({ actionType: action.type, modelIntent: routed.conversationIntent }),
-    outcome: shouldExecute ? `planned:${action.type}` : 'discussion',
+    outcome: shouldExecute
+      ? `${failedTool ? 'failed' : 'completed'}:${requestedTools.map((tool) => tool.toolId).join(',')}`
+      : 'discussion',
   })
   workspaceState = compactDirectorWorkspaceTurns(workspaceState)
   const saved = await workspaceSessions.save({ id, userId, state: workspaceState })
   await trace.writeJson('00-director-turn', 'turn-result.json', {
     router_called: true,
     core_model_called: routed.modelCalled,
-    planner_called: false,
-    tool_called: false,
+    planner_called: toolResults.some((result) => result.plannerInvoked),
+    tool_called: toolResults.length > 0,
     source: routed.source,
     intent: intentForWorkspace({ actionType: action.type, modelIntent: routed.conversationIntent }),
     action: action.type,
@@ -322,9 +537,14 @@ export async function* streamDirectorAgentChat(
     response_id: saved.state.responseId ?? null,
     response_continuity_disabled: Boolean(saved.state.responseContinuityDisabled),
     state_changed: stateDiff(before, saved.state),
+    effective_creative_config: effectiveCreativeConfig,
     fallback_reason: routed.fallbackReason ?? null,
     proposed_v2_creation_mode: routed.proposedV2CreationMode ?? null,
     effective_v2_creation_mode: effectiveV2CreationMode(saved.state.context),
+    skill_requests: routed.result.skillRequests ?? [],
+    selected_skills: selectedSkills,
+    tool_requests: requestedTools,
+    tool_results: toolResults.map((result) => ({ call_id: result.callId, tool_id: result.toolId, ok: result.ok, summary: result.summary })),
   })
   await trace.writeSummary([
     '# V2 Director turn',
@@ -334,6 +554,8 @@ export async function* streamDirectorAgentChat(
     `- action: ${action.type}`,
   ])
 
+  yield { type: 'assistant_reply', message: assistantMessage }
+  yield { type: 'workspace_snapshot', workspaceSessionId: id, state: saved.state }
   yield {
     type: 'workspace_session',
     workspaceSessionId: id,
@@ -360,7 +582,12 @@ export async function* streamDirectorAgentChat(
   }
   await wait(15)
 
-  if (shouldExecute) {
+  yield { type: 'constraint_resolution', config: effectiveCreativeConfig }
+  await wait(15)
+
+  // Formal V2 execution ran through the server dispatcher above. Do not emit
+  // a client-executable action plan for the same proposal.
+  if (false && shouldExecute) {
     yield {
       type: 'thought',
       title: '执行建议',
@@ -377,7 +604,7 @@ export async function* streamDirectorAgentChat(
     if (input.context.directorState) {
       yield {
         type: 'state_update',
-        state: input.context.directorState,
+        state: input.context.directorState!,
       }
       await wait(5)
     }
@@ -391,6 +618,6 @@ export async function* streamDirectorAgentChat(
 
   yield {
     type: 'done',
-    message: routed.result.assistantMessage,
+    message: assistantMessage,
   }
 }

@@ -16,6 +16,7 @@ export interface V2TimelineRevisionContext {
       'creative_intent' | 'title' | 'subtitle' | 'body' | 'note'
     >>
     transitions: RemotionTimelineSpecV1['transitions']
+    caption_tracks?: RemotionTimelineSpecV1['caption_tracks']
     overlays: RemotionTimelineSpecV1['overlays']
     material_jobs: Array<Pick<
       RemotionTimelineSpecV1['material_jobs'][number],
@@ -81,6 +82,7 @@ export function buildV2TimelineRevisionContext(input: {
         note: scene.note,
       })),
       transitions: spec.transitions.map((transition) => ({ ...transition })),
+      caption_tracks: spec.caption_tracks?.map((track) => ({ ...track })),
       overlays: spec.overlays.map((overlay) => ({ ...overlay })),
       material_jobs: spec.material_jobs.map((job) => ({
         id: job.id,

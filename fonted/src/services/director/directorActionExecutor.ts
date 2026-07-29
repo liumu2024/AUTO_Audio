@@ -32,6 +32,7 @@ function v2TimelineInput(
     aspectRatio: ctx.aspectRatio,
     durationSec: ctx.durationSec,
     materials: ctx.materials,
+    conversationSummary: ctx.conversationSummary,
     plannerMode: 'llm' as const,
     planningContext: {
       kind: options.planningKind ?? (current.draftId ? 'revision' : 'initial'),
@@ -121,6 +122,9 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
         action: 'GENERATE_TIMELINE',
         message:
           `我先排出了一版时间线方案：${preview.review.summary_zh} 你可以先看右侧分镜和时间线，觉得节奏或素材分配不对就直接告诉我改；trace 在 ${preview.traceDir}。`,
+        ...(ctx.assistantMessage
+          ? { message: `${ctx.assistantMessage}\n\n已保存并校验当前方案：${preview.review.summary_zh}。此步骤尚未渲染。` }
+          : {}),
         userFacingOnly: true,
         toolResult: okToolResult(preview.review, preview.review.warnings_zh),
       }
@@ -148,8 +152,11 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
           phase: 'completed',
           action: 'REVISE_TIMELINE',
           message: `我已经按你的修改重新排了一版方案。现在先不自动渲染，你可以再看一眼右侧时间线；trace 在 ${preview.traceDir}。`,
-          userFacingOnly: true,
-          toolResult: okToolResult(preview.review, preview.review.warnings_zh),
+        ...(ctx.assistantMessage
+          ? { message: `${ctx.assistantMessage}\n\n服务端已保存并校验该修订：${preview.review.summary_zh}。本轮未触发渲染。` }
+          : {}),
+        userFacingOnly: true,
+        toolResult: okToolResult(preview.review, preview.review.warnings_zh),
         }
       }
 

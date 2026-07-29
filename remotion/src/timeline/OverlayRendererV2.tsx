@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react'
 
 import type {
   RemotionTimelineAsset,
+  RemotionTimelineCaptionTrack,
   RemotionTimelineOverlay,
 } from '../../../shared/types/remotion-timeline-spec.v1'
 
@@ -28,9 +29,9 @@ function progressForOverlay(overlay: RemotionTimelineOverlay, timeSec: number) {
   return Math.min(inProgress, outProgress)
 }
 
-function transformFor(overlay: RemotionTimelineOverlay, progress: number, frame: number) {
+function transformFor(animation: RemotionTimelineOverlay['animation'], progress: number, frame: number) {
   const base = 'translate(-50%, -50%)'
-  switch (overlay.animation) {
+  switch (animation) {
     case 'slide_up_fade':
       return `${base} translateY(${(1 - progress) * 54}px)`
     case 'pop':
@@ -45,6 +46,9 @@ function transformFor(overlay: RemotionTimelineOverlay, progress: number, frame:
 }
 
 function containerStyle(overlay: RemotionTimelineOverlay, progress: number, frame: number): CSSProperties {
+  const phaseAnimation = progress < 0.5
+    ? overlay.enter_animation ?? overlay.animation
+    : overlay.exit_animation ?? overlay.animation
   return {
     height: overlay.height_pct ? `${overlay.height_pct}%` : undefined,
     left: `${overlay.x_pct}%`,
@@ -52,8 +56,9 @@ function containerStyle(overlay: RemotionTimelineOverlay, progress: number, fram
     pointerEvents: 'none',
     position: 'absolute',
     top: `${overlay.y_pct}%`,
-    transform: transformFor(overlay, progress, frame),
+    transform: transformFor(phaseAnimation, progress, frame),
     width: overlay.width_pct ? `${overlay.width_pct}%` : undefined,
+    zIndex: overlay.z_index,
   }
 }
 
@@ -69,6 +74,14 @@ function textStyle(overlay: RemotionTimelineOverlay): CSSProperties {
     fontSize: overlay.type === 'title' ? 68 : overlay.type === 'label' ? 38 : 32,
     fontWeight: overlay.type === 'title' ? 950 : 800,
     lineHeight: 1.08,
+    ...(overlay.max_lines
+      ? {
+          display: '-webkit-box',
+          WebkitBoxOrient: 'vertical' as const,
+          WebkitLineClamp: overlay.max_lines,
+          overflow: 'hidden',
+        }
+      : {}),
     overflowWrap: 'anywhere',
     padding: overlay.type === 'caption' ? '16px 22px' : overlay.background ? '12px 18px' : 0,
     textAlign: 'center',
@@ -93,35 +106,43 @@ function LightSweep() {
 function OverlayItem({
   overlay,
   assets,
+  captionTracks,
 }: {
   overlay: RemotionTimelineOverlay
   assets: RemotionTimelineAsset[]
+  captionTracks: RemotionTimelineCaptionTrack[]
 }) {
   const frame = useCurrentFrame()
   const { fps } = useVideoConfig()
   const timeSec = frame / fps
-  if (timeSec < overlay.start_sec || timeSec > overlay.end_sec) return null
-  const progress = progressForOverlay(overlay, timeSec)
-  const asset = assetById(assets, overlay.asset_id)
+  const track = overlay.type === 'caption' && overlay.track_id
+    ? captionTracks.find((candidate) => candidate.id === overlay.track_id)
+    : undefined
+  const resolvedOverlay: RemotionTimelineOverlay = track
+    ? { ...track, ...overlay, enter_animation: overlay.enter_animation ?? track.enter_animation, exit_animation: overlay.exit_animation ?? track.exit_animation }
+    : overlay
+  if (timeSec < resolvedOverlay.start_sec || timeSec > resolvedOverlay.end_sec) return null
+  const progress = progressForOverlay(resolvedOverlay, timeSec)
+  const asset = assetById(assets, resolvedOverlay.asset_id)
 
   return (
-    <div style={containerStyle(overlay, progress, frame)}>
-      {overlay.type === 'light_sweep' ? <LightSweep /> : null}
-      {overlay.type === 'shape' ? (
+    <div style={containerStyle(resolvedOverlay, progress, frame)}>
+      {resolvedOverlay.type === 'light_sweep' ? <LightSweep /> : null}
+      {resolvedOverlay.type === 'shape' ? (
         <div
           style={{
-            background: overlay.background ?? 'rgba(255,255,255,0.28)',
+            background: resolvedOverlay.background ?? 'rgba(255,255,255,0.28)',
             borderRadius: 12,
             height: '100%',
             width: '100%',
           }}
         />
       ) : null}
-      {overlay.type === 'image_badge' && asset ? (
+      {resolvedOverlay.type === 'image_badge' && asset ? (
         <Img src={mediaSrc(asset.src)} style={{ height: '100%', objectFit: 'contain', width: '100%' }} />
       ) : null}
-      {overlay.type === 'caption' || overlay.type === 'title' || overlay.type === 'label' ? (
-        <div style={textStyle(overlay)}>{overlay.text}</div>
+      {resolvedOverlay.type === 'caption' || resolvedOverlay.type === 'title' || resolvedOverlay.type === 'label' ? (
+        <div style={textStyle(resolvedOverlay)}>{resolvedOverlay.text}</div>
       ) : null}
     </div>
   )
@@ -130,14 +151,16 @@ function OverlayItem({
 export function OverlayRendererV2({
   overlays,
   assets,
+  captionTracks = [],
 }: {
   overlays: RemotionTimelineOverlay[]
   assets: RemotionTimelineAsset[]
+  captionTracks?: RemotionTimelineCaptionTrack[]
 }) {
   return (
     <AbsoluteFill style={{ overflow: 'hidden' }}>
       {overlays.map((overlay) => (
-        <OverlayItem key={overlay.id} overlay={overlay} assets={assets} />
+        <OverlayItem key={overlay.id} overlay={overlay} assets={assets} captionTracks={captionTracks} />
       ))}
     </AbsoluteFill>
   )

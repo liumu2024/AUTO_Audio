@@ -38,6 +38,8 @@ export interface ResolveDirectorActionInput {
 
 export interface DirectorActionExecutionContext {
   prompt: string
+  /** Natural-language acknowledgement produced by the core director model. */
+  assistantMessage?: string
   sampleVideoUrl: string
   sampleVideoName?: string
   aspectRatio: DirectorContextSlots['aspectRatio']
@@ -245,7 +247,8 @@ export async function executeDirectorAction(input: {
   executor: DirectorActionExecutor
   context: DirectorActionExecutionContext
 }): Promise<DirectorActionOutcome> {
-  const { action, executor, context } = input
+  const { action, executor } = input
+  const context = { ...input.context, assistantMessage: action.message }
 
   switch (action.type) {
     case 'ANALYZE_SAMPLE':

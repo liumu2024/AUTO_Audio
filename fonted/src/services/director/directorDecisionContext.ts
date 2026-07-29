@@ -24,6 +24,7 @@ export function buildDirectorContextFromUI(input: {
   aspectRatio: DirectorContextSlots['aspectRatio']
   durationSec?: number
   styleIntensity: DirectorContextSlots['styleIntensity']
+  explicitUiControls?: DirectorContext['explicitUiControls']
   isSampleParsed: boolean
   existing?: DirectorContext
 }): DirectorContext {
@@ -67,6 +68,7 @@ export function buildDirectorContextFromUI(input: {
     currentTimeline: input.existing?.currentTimeline,
     directorState: input.existing?.directorState,
     conversationSummary: input.existing?.conversationSummary,
+    explicitUiControls: input.explicitUiControls,
     slots: mergeDirectorSlots(baseSlots, runtimeSlots),
   }
 }
