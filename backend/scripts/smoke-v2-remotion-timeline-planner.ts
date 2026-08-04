@@ -13,7 +13,10 @@ import {
   buildV2TimelinePlanningReview,
   renderV2TimelinePlanningReviewMarkdown,
 } from '../src/pipeline-v2/remotion-timeline-review.js'
-import { repairV2LlmGeneratedMaterialPrompts } from '../src/pipeline-v2/remotion-timeline-llm-planner.js'
+import {
+  buildV2TimelinePlannerPrompt,
+  repairV2LlmGeneratedMaterialPrompts,
+} from '../src/pipeline-v2/remotion-timeline-llm-planner.js'
 import {
   applyV2TimelineRevisionPreservation,
   buildV2TimelineRevisionContext,
@@ -34,6 +37,20 @@ const spec = buildDeterministicRemotionTimelineSpec({
   durationSec: 6,
   canvas: { width: 720, height: 1280, fps: 24 },
 })
+
+const activeRequirementPrompt = buildV2TimelinePlannerPrompt({
+  taskId: 'active_requirement_context',
+  prompt: '按当前有效要求规划',
+  planningContext: {
+    kind: 'revision',
+    activeRequirements: ['画面使用中性低饱和色调'],
+    recalledCreativeMemories: ['品牌表达可靠但不冰冷'],
+  },
+})
+assert.match(activeRequirementPrompt, /画面使用中性低饱和色调/)
+assert.match(activeRequirementPrompt, /activeRequirements is authoritative/)
+assert.match(activeRequirementPrompt, /品牌表达可靠但不冰冷/)
+assert.match(activeRequirementPrompt, /current request and activeRequirements take priority/)
 
 const validation = validateRemotionTimelineSpec(spec)
 assert.equal(validation.ok, true, JSON.stringify(validation.issues, null, 2))
@@ -136,6 +153,19 @@ assert.ok(
   'Recoverable missing generation prompts must be derived from their linked scene intent.',
 )
 assert.equal(validateRemotionTimelineSpec(missingPromptRepair.spec).ok, true)
+const staleExecutionStatusRepair = repairV2LlmGeneratedMaterialPrompts({
+  ...missingPromptSpec,
+  material_jobs: missingPromptSpec.material_jobs.map((job) =>
+    job.type === 'generate_video' ? { ...job, status: 'fulfilled' as const } : job),
+})
+assert.ok(
+  staleExecutionStatusRepair.spec.material_jobs
+    .filter((job) => job.type === 'generate_video')
+    .every((job) => job.status === 'planned'),
+  'The planner must not declare unresolved generation work fulfilled.',
+)
+assert.ok(staleExecutionStatusRepair.repairs.some((repair) => repair.field === 'status'))
+assert.equal(validateRemotionTimelineSpec(staleExecutionStatusRepair.spec).ok, true)
 
 const stagedAiVideoReview = buildV2TimelinePlanningReview({
   spec: missingPromptRepair.spec,

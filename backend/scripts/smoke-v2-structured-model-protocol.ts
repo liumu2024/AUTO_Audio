@@ -88,7 +88,59 @@ try {
   assert.equal(failureDiagnostic.fallback_reason, 'unrepairable_structured_output')
 
   const { createDefaultDirectorSlots } = await import('../../shared/lib/director-understanding.js')
-  const { routeDirectorIntentWithLlm } = await import('../src/modules/director-agent/llm-intent-router.js')
+  const { parseDirectorModelDecision, routeDirectorIntentWithLlm } = await import('../src/modules/director-agent/llm-intent-router.js')
+  const protocolBase = {
+    replyDraft: '收到。', intent: 'chat', creativeConfigDelta: {}, stateActions: [],
+    skillRequests: [], toolRequests: [], missingInformation: [],
+  }
+  assert.equal(parseDirectorModelDecision(JSON.stringify(protocolBase)).stateActions.length, 0)
+  assert.deepEqual(parseDirectorModelDecision(JSON.stringify(protocolBase)).memoryActions, [])
+  assert.equal(parseDirectorModelDecision(JSON.stringify({
+    ...protocolBase,
+    memoryActions: [{
+      ref: 'remember_tone', operation: 'add', scopeType: 'user',
+      statement: '品牌表达保持可靠但不冰冷', status: 'active', origin: 'explicit',
+      sourceTurnIds: ['turn_current'], sourceExcerpt: '以后品牌表达都保持可靠但不冰冷。',
+    }],
+  })).memoryActions[0]?.operation, 'add')
+  assert.throws(() => parseDirectorModelDecision(JSON.stringify({
+    ...protocolBase,
+    memoryActions: [{
+      ref: 'invalid_memory', operation: 'add', scopeType: 'user',
+      statement: '无来源的偏好', status: 'active', origin: 'inferred', sourceTurnIds: [],
+    }],
+  })))
+  assert.equal(parseDirectorModelDecision(JSON.stringify({
+    ...protocolBase,
+    stateActions: [{
+      ref: 'requirements', kind: 'requirements.update',
+      operations: [{ operation: 'add', statement: '目标受众为独居青年' }],
+    }],
+  })).stateActions[0]?.kind, 'requirements.update')
+  assert.throws(() => parseDirectorModelDecision(JSON.stringify({
+    ...protocolBase, stateActions: [{ ref: 'requirements', kind: 'requirements.update', operations: [] }],
+  })))
+  assert.throws(() => parseDirectorModelDecision(JSON.stringify({
+    ...protocolBase, unexpected: true,
+  })))
+  assert.throws(() => parseDirectorModelDecision(JSON.stringify({
+    ...protocolBase,
+    toolRequests: [{
+      ref: 'forbidden_chat_tool', toolId: 'timeline.plan', skillId: 'v2-timeline-authoring',
+      arguments: {}, requestedMode: 'preview', dependsOn: [],
+    }],
+  })))
+  assert.throws(() => parseDirectorModelDecision(JSON.stringify({
+    ...protocolBase,
+    stateActions: [{
+      ref: 'requirements', kind: 'requirements.update',
+      operations: Array.from({ length: 21 }, (_, index) => ({ operation: 'add', statement: `要求 ${index}` })),
+    }],
+  })))
+  assert.throws(() => parseDirectorModelDecision(JSON.stringify({
+    ...protocolBase,
+    stateActions: [{ ref: 'requirements', kind: 'requirements.update', operations: [{ operation: 'revoke', targetId: 'req_1' }] }],
+  })))
   const directorContext = { materials: [], userIntent: {}, slots: createDefaultDirectorSlots() }
   const directorRuntime = {
     backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasV2Timeline: false,
@@ -103,9 +155,8 @@ try {
       output_text: directorCall === 1
         ? '{"intent":'
         : JSON.stringify({
-            intent: 'clarify', confidence: 0.8, contentDomain: 'general', slotsPatch: {},
-            missingSlots: [], requiresConfirmation: false, executionEffect: 'none',
-            nextAction: 'ACKNOWLEDGE', assistantMessage: '这是修复后的自然回复。', publicThoughts: [], statePatch: {}, requirements: [],
+            replyDraft: '这是修复后的自然回复。', intent: 'chat', creativeConfigDelta: {},
+            stateActions: [], skillRequests: [], toolRequests: [], missingInformation: [],
           }),
     }), { status: 200 })
   }

@@ -98,32 +98,6 @@ export function inferContentDomain(text) {
 export function isLandscapeLikeDomain(domain) {
     return domain === 'landscape_montage' || domain === 'music_video';
 }
-function goalFromConversationIntent(intent) {
-    if (intent === 'render')
-        return 'render';
-    if (intent === 'generate_timeline')
-        return 'generate_timeline';
-    if (intent === 'revise_timeline')
-        return 'revise_timeline';
-    if (intent === 'analyze_materials')
-        return 'analyze_materials';
-    return 'analyze_sample';
-}
-export function directorIntentToUserIntent(result, current, prompt) {
-    const hasTaskGoal = result.intent === 'analyze_sample' || result.intent === 'analyze_materials' || result.intent === 'generate_timeline' || result.intent === 'revise_timeline' || result.intent === 'render';
-    return {
-        ...current,
-        ...(hasTaskGoal ? { goal: goalFromConversationIntent(result.intent) } : {}),
-        aspectRatio: result.slotsPatch.aspectRatio ?? current.aspectRatio,
-        durationSec: result.slotsPatch.durationSec ?? current.durationSec,
-        styleIntensity: result.slotsPatch.styleIntensity ?? current.styleIntensity,
-        requestedStyle: prompt.trim() || current.requestedStyle,
-        rawText: prompt.trim() || current.rawText,
-        constraints: result.slotsPatch.subtitlePolicy === 'none'
-            ? [...(current.constraints ?? []), 'no_subtitle']
-            : current.constraints,
-    };
-}
 export function summarizeDirectorReference(understanding) {
     return {
         source: 'sample_video',

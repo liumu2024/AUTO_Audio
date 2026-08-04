@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { V2AgentToolRequest } from '../agent-tools/dispatcher.js'
+import type { V2AgentToolProposal, V2AgentToolRequest } from '../agent-tools/dispatcher.js'
 import { validateV2AgentToolRequest } from '../agent-tools/registry.js'
 import { manifest as timelineAuthoringManifest } from './v2-timeline-authoring/manifest.js'
 import { manifest as sampleReferenceManifest } from './sample-reference-analysis/manifest.js'
@@ -44,14 +44,47 @@ export interface V2AgentExecutionStage {
   primarySkill: LoadedV2AgentSkill & { purpose: string }
   references: LoadedV2AgentSkill[]
   toolRequest: V2AgentToolRequest
+  modeResolution: {
+    requestedMode: V2AgentToolRequest['requestedMode']
+    effectiveMode: V2AgentToolRequest['requestedMode']
+    normalized: boolean
+  }
 }
 
 export interface V2AgentExecutionPlan {
+  toolRequests: V2AgentToolRequest[]
   selectedSkills: Array<{ skillId: string; purpose: string }>
   loadedSkills: LoadedV2AgentSkill[]
   rejectedSkills: Array<{ skillId: string; reason: string }>
   rejectedTools: Array<{ callId: string; toolId: string; reason: string }>
   stages: V2AgentExecutionStage[]
+}
+
+function canonicalToolCallId(input: {
+  workspaceSessionId: string
+  turnRequestId: string
+  ordinal: number
+}): string {
+  const digest = createHash('sha256')
+    .update(`${input.workspaceSessionId}\u0000${input.turnRequestId}\u0000${input.ordinal}`)
+    .digest('hex')
+    .slice(0, 24)
+  return `v2call_${digest}`
+}
+
+function canonicalizeToolProposals(input: {
+  proposals: V2AgentToolProposal[] | undefined
+  workspaceSessionId: string
+  turnRequestId: string
+}): V2AgentToolRequest[] {
+  return (input.proposals ?? []).map((proposal, ordinal) => ({
+    ...proposal,
+    callId: canonicalToolCallId({
+      workspaceSessionId: input.workspaceSessionId,
+      turnRequestId: input.turnRequestId,
+      ordinal,
+    }),
+  }))
 }
 
 const directory = path.dirname(fileURLToPath(import.meta.url))
@@ -196,10 +229,26 @@ function dependencyClosure(skillId: string, result = new Set<string>()): Set<str
  * loaded as read-only references and never become independent Tool authority.
  */
 export async function resolveV2AgentExecutionPlan(input: {
+  intent: 'chat' | 'create' | 'revise' | 'execute' | 'clarify'
   skillRequests: Array<{ skillId: string; purpose: string }> | undefined
-  toolRequests: V2AgentToolRequest[] | undefined
+  toolRequests: V2AgentToolProposal[] | undefined
+  callIdContext: {
+    workspaceSessionId: string
+    turnRequestId: string
+  }
+  stateActionRefs?: string[]
 }): Promise<V2AgentExecutionPlan> {
-  const resolved = resolveV2SkillRequests(input.skillRequests)
+  const toolRequests = canonicalizeToolProposals({
+    proposals: input.toolRequests,
+    ...input.callIdContext,
+  })
+  const explicitSkillIds = new Set((input.skillRequests ?? []).map((request) => request.skillId))
+  const resolved = resolveV2SkillRequests([
+    ...(input.skillRequests ?? []),
+    ...toolRequests
+      .filter((request) => !explicitSkillIds.has(request.skillId))
+      .map((request) => ({ skillId: request.skillId, purpose: `Primary Skill for ${request.toolId}` })),
+  ])
   const loaded = new Map<string, LoadedV2AgentSkill>()
   const selectedSkills: Array<{ skillId: string; purpose: string }> = []
   const rejectedSkills = [...resolved.rejected]
@@ -220,7 +269,18 @@ export async function resolveV2AgentExecutionPlan(input: {
   const selectedIds = new Set(selectedSkills.map((item) => item.skillId))
   const rejectedTools: V2AgentExecutionPlan['rejectedTools'] = []
   const stages: V2AgentExecutionStage[] = []
-  for (const request of input.toolRequests ?? []) {
+  const knownRefs = new Set(input.stateActionRefs ?? [])
+  for (const request of toolRequests) {
+    if (knownRefs.has(request.ref)) {
+      rejectedTools.push({ callId: request.callId, toolId: request.toolId, reason: `duplicate action ref: ${request.ref}` })
+      continue
+    }
+    const missingDependency = request.dependsOn.find((ref) => !knownRefs.has(ref))
+    knownRefs.add(request.ref)
+    if (missingDependency) {
+      rejectedTools.push({ callId: request.callId, toolId: request.toolId, reason: `unknown or forward dependency: ${missingDependency}` })
+      continue
+    }
     const requestedSkill = findV2AgentSkill(request.skillId)
     if (!requestedSkill?.allowedTools.includes(request.toolId)) {
       rejectedTools.push({
@@ -233,6 +293,14 @@ export async function resolveV2AgentExecutionPlan(input: {
     const checked = validateV2AgentToolRequest(request, { selectedSkillIds: selectedIds })
     if (!checked.ok) {
       rejectedTools.push({ callId: request.callId, toolId: request.toolId, reason: checked.reason })
+      continue
+    }
+    if (input.intent === 'chat' || input.intent === 'clarify') {
+      rejectedTools.push({ callId: request.callId, toolId: request.toolId, reason: `${input.intent} intent does not authorize Tool execution` })
+      continue
+    }
+    if (input.intent !== 'execute' && checked.tool.effect === 'delivery') {
+      rejectedTools.push({ callId: request.callId, toolId: request.toolId, reason: 'delivery Tool requires execute intent' })
       continue
     }
     const selected = selectedSkills.find((item) => item.skillId === request.skillId)
@@ -248,11 +316,21 @@ export async function resolveV2AgentExecutionPlan(input: {
     stages.push({
       primarySkill: { ...primary, purpose: selected.purpose },
       references,
-      toolRequest: { ...request, arguments: checked.arguments },
+      toolRequest: {
+        ...request,
+        arguments: checked.arguments,
+        requestedMode: checked.effectiveMode,
+      },
+      modeResolution: {
+        requestedMode: request.requestedMode,
+        effectiveMode: checked.effectiveMode,
+        normalized: checked.modeNormalized,
+      },
     })
   }
 
   return {
+    toolRequests,
     selectedSkills,
     loadedSkills: [...loaded.values()],
     rejectedSkills,

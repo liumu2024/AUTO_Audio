@@ -9,6 +9,8 @@ import {
   resolveV2AgentExecutionPlan,
 } from '../src/pipeline-v2/agent-skills/registry.js'
 import {
+  bindV2AgentToolArguments,
+  evaluateV2AgentToolReadiness,
   findV2AgentTool,
   listV2AgentToolCards,
   validateV2AgentToolRequest,
@@ -23,6 +25,8 @@ assert.equal(findV2AgentTool('sample.analyze')?.requiresExplicitAuthorization, f
 assert.equal(findV2AgentTool('timeline.plan')?.requiresExplicitAuthorization, false)
 assert.equal(findV2AgentTool('timeline.patch')?.requiresExplicitAuthorization, false)
 assert.equal(findV2AgentTool('timeline.render')?.requiresExplicitAuthorization, true)
+assert.equal(listV2AgentToolCards().find((tool) => tool.id === 'timeline.patch')?.effectiveMode, 'preview')
+assert.equal(listV2AgentToolCards().find((tool) => tool.id === 'timeline.render')?.effectiveMode, 'execute')
 assert.ok(listV2AgentSkillCards().some((skill) => skill.id === 'subtitle-track-authoring'))
 for (const tool of listV2AgentToolCards()) {
   for (const skillId of tool.skills) {
@@ -33,24 +37,107 @@ for (const tool of listV2AgentToolCards()) {
   }
 }
 assert.equal(validateV2AgentToolRequest({ callId: 'subtitle_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'subtitle' }, requestedMode: 'preview' }).ok, true)
+const normalizedDraftMode = validateV2AgentToolRequest({
+  callId: 'subtitle_history_001',
+  toolId: 'timeline.patch',
+  skillId: 'subtitle-track-authoring',
+  arguments: { scope: 'subtitle', instruction: 'Add more audience-facing captions.' },
+  requestedMode: 'execute',
+})
+assert.equal(normalizedDraftMode.ok, true)
+assert.equal(normalizedDraftMode.ok ? normalizedDraftMode.effectiveMode : undefined, 'preview')
+assert.equal(normalizedDraftMode.ok ? normalizedDraftMode.modeNormalized : undefined, true)
 assert.equal(validateV2AgentToolRequest({ callId: 'subtitle_002', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'audio' }, requestedMode: 'preview' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'unknown_001', toolId: 'audio.mix', skillId: 'subtitle-track-authoring', arguments: {}, requestedMode: 'execute' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'plan_bad_001', toolId: 'timeline.plan', skillId: 'v2-timeline-authoring', arguments: { unknown: true }, requestedMode: 'preview' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'render_bad_001', toolId: 'timeline.render', skillId: 'v2-render-delivery', arguments: {}, requestedMode: 'preview' }).ok, false)
+assert.equal(validateV2AgentToolRequest({ callId: 'sample_bad_001', toolId: 'sample.analyze', skillId: 'sample-reference-analysis', arguments: { sampleId: 'foreign' }, requestedMode: 'preview' }).ok, false)
+assert.equal(validateV2AgentToolRequest({ callId: 'render_bad_002', toolId: 'timeline.render', skillId: 'v2-render-delivery', arguments: { draftId: 'foreign', revision: 99 }, requestedMode: 'execute' }).ok, false)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_bad_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'subtitle', targetIds: ['caption_1'] }, requestedMode: 'preview' }).ok, false)
 assert.ok(listV2AgentToolCards().find((tool) => tool.id === 'timeline.patch')?.inputSchema)
 
+const callIdContext = {
+  workspaceSessionId: 'workspace_registry_smoke',
+  turnRequestId: 'turn_registry_smoke',
+}
+const shortModelCallIdPlan = await resolveV2AgentExecutionPlan({
+  intent: 'create',
+  callIdContext,
+  skillRequests: [{ skillId: 'v2-timeline-authoring', purpose: 'Create a V2 draft.' }],
+  toolRequests: [{
+    ref: 'gen_1',
+    toolId: 'timeline.plan',
+    skillId: 'v2-timeline-authoring',
+    arguments: {},
+    requestedMode: 'preview',
+    dependsOn: [],
+  }],
+})
+assert.equal(shortModelCallIdPlan.stages.length, 1)
+assert.match(shortModelCallIdPlan.stages[0]!.toolRequest.callId, /^v2call_[a-f0-9]{24}$/)
+assert.equal(shortModelCallIdPlan.stages[0]!.toolRequest.ref, 'gen_1')
+const repeatedAliasPlan = await resolveV2AgentExecutionPlan({
+  intent: 'create',
+  callIdContext,
+  skillRequests: [{ skillId: 'v2-timeline-authoring', purpose: 'Inspect then create.' }],
+  toolRequests: [
+    { ref: 'gen_1', toolId: 'material.inspect', skillId: 'v2-timeline-authoring', arguments: {}, requestedMode: 'preview', dependsOn: [] },
+    { ref: 'gen_1', toolId: 'timeline.plan', skillId: 'v2-timeline-authoring', arguments: {}, requestedMode: 'preview', dependsOn: [] },
+  ],
+})
+assert.equal(repeatedAliasPlan.stages.length, 1)
+assert.match(repeatedAliasPlan.rejectedTools[0]?.reason ?? '', /duplicate action ref/)
+const missingAliasPlan = await resolveV2AgentExecutionPlan({
+  intent: 'execute',
+  callIdContext: { ...callIdContext, turnRequestId: 'turn_missing_alias' },
+  skillRequests: [{ skillId: 'v2-timeline-authoring', purpose: 'Inspect materials.' }],
+  toolRequests: [{
+    ref: 'inspect_materials',
+    toolId: 'material.inspect',
+    skillId: 'v2-timeline-authoring',
+    arguments: {},
+    requestedMode: 'preview',
+    dependsOn: [],
+  }],
+})
+assert.equal(missingAliasPlan.stages.length, 1)
+const replayedMissingAliasPlan = await resolveV2AgentExecutionPlan({
+  intent: 'execute',
+  callIdContext: { ...callIdContext, turnRequestId: 'turn_missing_alias' },
+  skillRequests: [{ skillId: 'v2-timeline-authoring', purpose: 'Inspect materials.' }],
+  toolRequests: [{
+    ref: 'inspect_materials',
+    toolId: 'material.inspect',
+    skillId: 'v2-timeline-authoring',
+    arguments: {},
+    requestedMode: 'preview',
+    dependsOn: [],
+  }],
+})
+assert.equal(
+  replayedMissingAliasPlan.stages[0]!.toolRequest.callId,
+  missingAliasPlan.stages[0]!.toolRequest.callId,
+)
+
 const executionPlan = await resolveV2AgentExecutionPlan({
+  intent: 'revise',
+  callIdContext: { ...callIdContext, turnRequestId: 'turn_subtitle_smoke' },
   skillRequests: [{ skillId: 'subtitle-track-authoring', purpose: '只修订当前字幕轨' }],
   toolRequests: [{
-    callId: 'subtitle_003',
+    ref: 'subtitle_003',
     toolId: 'timeline.patch',
     skillId: 'subtitle-track-authoring',
     arguments: { scope: 'subtitle', instruction: '把字幕改为两段顺序出现' },
-    requestedMode: 'preview',
+    requestedMode: 'execute',
+    dependsOn: [],
   }],
 })
 assert.equal(executionPlan.stages.length, 1)
 assert.equal(executionPlan.stages[0]?.primarySkill.id, 'subtitle-track-authoring')
+assert.equal(executionPlan.stages[0]?.toolRequest.requestedMode, 'preview')
+assert.equal(executionPlan.stages[0]?.modeResolution.requestedMode, 'execute')
+assert.equal(executionPlan.stages[0]?.modeResolution.effectiveMode, 'preview')
+assert.equal(executionPlan.stages[0]?.modeResolution.normalized, true)
 assert.ok(executionPlan.stages[0]?.primarySkill.content.includes('Audience-facing captions'))
 assert.deepEqual(
   executionPlan.stages[0]?.references.map((item) => item.id),
@@ -60,26 +147,32 @@ assert.ok(executionPlan.stages[0]?.references[0]?.hash)
 assert.equal(executionPlan.rejectedTools.length, 0)
 
 const mismatchedPlan = await resolveV2AgentExecutionPlan({
+  intent: 'revise',
+  callIdContext: { ...callIdContext, turnRequestId: 'turn_mismatch_smoke' },
   skillRequests: [{ skillId: 'v2-timeline-authoring', purpose: '创建方案' }],
   toolRequests: [{
-    callId: 'subtitle_004',
+    ref: 'subtitle_004',
     toolId: 'timeline.patch',
     skillId: 'subtitle-track-authoring',
     arguments: { scope: 'subtitle', instruction: '修改字幕' },
     requestedMode: 'preview',
+    dependsOn: [],
   }],
 })
-assert.equal(mismatchedPlan.stages.length, 0)
-assert.match(mismatchedPlan.rejectedTools[0]?.reason ?? '', /not selected/i)
+assert.equal(mismatchedPlan.stages.length, 1)
+assert.equal(mismatchedPlan.stages[0]?.primarySkill.id, 'subtitle-track-authoring')
 
 const duplicatePlan = await resolveV2AgentExecutionPlan({
+  intent: 'execute',
+  callIdContext: { ...callIdContext, turnRequestId: 'turn_duplicate_smoke' },
   skillRequests: [{ skillId: 'v2-timeline-authoring', purpose: '检查素材' }],
   toolRequests: [{
-    callId: 'inspect_duplicate_001',
+    ref: 'inspect_duplicate_001',
     toolId: 'material.inspect',
     skillId: 'v2-timeline-authoring',
     arguments: {},
     requestedMode: 'preview',
+    dependsOn: [],
   }],
 })
 const duplicateContext = {
@@ -92,13 +185,29 @@ const duplicateResult = await dispatchV2AgentTool({
   prompt: '检查当前素材',
   userId: 1,
   context: duplicateContext,
+  runtime: {
+    backendEnabled: true, sampleUrl: '', isSampleParsed: false,
+    hasVisualMaterial: false, materialCount: 0,
+  },
   workspace: {
     ...createDirectorWorkspaceState({ context: duplicateContext }),
-    recentToolCallIds: ['inspect_duplicate_001'],
+    recentToolCallIds: [duplicatePlan.stages[0]!.toolRequest.callId],
   },
 })
 assert.equal(duplicateResult.ok, false)
 assert.match(duplicateResult.summary, /重复/)
+
+assert.equal(evaluateV2AgentToolReadiness({
+  toolId: 'timeline.render', context: duplicateContext,
+  runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: false, materialCount: 0 },
+}).status, 'blocked')
+assert.deepEqual(bindV2AgentToolArguments({
+  modelArguments: {}, context: duplicateContext,
+  workspace: { ...createDirectorWorkspaceState({ context: duplicateContext }), draftId: 'draft_server', baseRevision: 3 },
+  userId: 7,
+}).system, {
+  userId: 7, sampleId: undefined, materialIds: [], draftId: 'draft_server', revision: 3, selectedTimelineItemId: undefined,
+})
 
 const plannerPrompt = buildV2TimelinePlannerPrompt({
   taskId: 'skill_prompt_smoke',
@@ -116,7 +225,7 @@ const plannerPrompt = buildV2TimelinePlannerPrompt({
 })
 assert.match(plannerPrompt, /Audience-facing captions/)
 assert.match(plannerPrompt, /official\.remotion-captions/)
-assert.match(plannerPrompt, /subtitle_003/)
+assert.match(plannerPrompt, new RegExp(executionPlan.stages[0]!.toolRequest.callId))
 
 const base: RemotionTimelineSpecV1 = {
   schema_version: 'remotion_timeline_spec.v1', task_id: 'subtitle_track_smoke',

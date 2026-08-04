@@ -1,6 +1,7 @@
 import type { V2SampleUnderstandingResult } from '../../../shared/types/v2-sample-understanding.js'
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import type { V2TimelineRevisionContext } from './timeline-revision-context.js'
+import type { V2TimelineRevisionScope } from './timeline-revision-scope.js'
 
 export interface V2PlannerMaterialInput {
   id: string
@@ -15,6 +16,9 @@ export interface V2PlannerMaterialInput {
  * persist in a trace and cannot rewrite the user's current creative request. */
 export interface V2PlanningContext {
   kind: 'initial' | 'revision'
+  activeRequirements: string[]
+  /** Relevant active long-term knowledge recalled for this turn; it is not persisted as V2 state. */
+  recalledCreativeMemories?: string[]
   draftId?: string
   baseRevision?: number
   selectedClipId?: string
@@ -54,6 +58,8 @@ export interface V2PlannerInput {
   revisionContext?: V2TimelineRevisionContext
   /** Server-only full base spec used for preservation/audit; never sent to the model. */
   revisionBaseSpec?: RemotionTimelineSpecV1
+  /** Tool-authorized field scope applied before review and persistence. */
+  revisionScope?: V2TimelineRevisionScope
   /** Server-resolved instructions and normalized arguments for this Agent stage. */
   agentSkillContext?: V2AgentSkillContext
   agentToolContext?: V2AgentToolContext

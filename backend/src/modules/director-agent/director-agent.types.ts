@@ -13,6 +13,8 @@ export interface DirectorAgentChatRequest {
   prompt: string
   context: DirectorContext
   runtime: DirectorConversationRuntime
+  /** Stable for one user submission and reused only for transport retries. */
+  turnRequestId?: string
   /** Stable browser workspace id; the server creates a V2 session when absent. */
   workspaceSessionId?: string
   /** Injected by the controller from the authenticated/request user boundary. */
@@ -67,6 +69,8 @@ export type DirectorAgentStreamEvent =
       callId: string
       toolId: string
       requestedMode: 'preview' | 'execute'
+      effectiveMode: 'preview' | 'execute'
+      modeNormalized: boolean
     }
   | {
       type: 'tool_started'
@@ -74,7 +78,20 @@ export type DirectorAgentStreamEvent =
       toolId: string
     }
   | {
+      type: 'tool_progress'
+      callId: string
+      toolId: string
+      phase: string
+      progress: number
+      message: string
+      elapsedMs?: number
+      jobId?: string
+      sceneId?: string
+    }
+  | {
       type: 'tool_result'
+      actionRef: string
+      status: 'succeeded' | 'failed' | 'skipped'
       callId: string
       toolId: string
       ok: boolean

@@ -13,6 +13,7 @@ const NAV_ITEMS: {
   { view: 'dashboard', icon: '🏠', label: '工作台' },
   { view: 'editor', icon: '🎬', label: '创作' },
   { view: 'assets', icon: '📁', label: '素材库' },
+  { view: 'preferences', icon: '🧠', label: '创作偏好' },
 ]
 
 export function AppShellNav() {

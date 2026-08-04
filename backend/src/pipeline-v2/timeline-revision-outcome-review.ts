@@ -51,6 +51,12 @@ export interface V2TimelineRevisionOutcomeReview {
   }
 }
 
+export interface V2TimelineRevisionCommitDecision {
+  ok: boolean
+  scope: 'global' | 'subtitle'
+  violation?: { kind: 'missing_requested_change'; message: string }
+}
+
 /** A semantic revision failure must retain the persisted V2 revision, not fall back to a new plan. */
 export class V2TimelineRevisionOutcomeError extends Error {
   constructor(readonly review: V2TimelineRevisionOutcomeReview) {
@@ -123,7 +129,10 @@ function changedIds<T extends { id: string }>(base: T[], candidate: T[]) {
   }
 }
 
-function revisionDiff(base: V2TimelineFactDigest, candidate: V2TimelineFactDigest) {
+export function buildV2TimelineRevisionDiff(
+  base: V2TimelineFactDigest,
+  candidate: V2TimelineFactDigest,
+) {
   return {
     scenes: changedIds(base.scenes, candidate.scenes),
     visible_text: changedIds(base.visible_text, candidate.visible_text),
@@ -136,8 +145,54 @@ function revisionDiff(base: V2TimelineFactDigest, candidate: V2TimelineFactDiges
   }
 }
 
+function hasAudienceFacingRevision(diff: ReturnType<typeof buildV2TimelineRevisionDiff>) {
+  const groups = [diff.scenes, diff.visible_text, diff.transitions]
+  return groups.some((group) =>
+    group.added.length > 0 || group.removed.length > 0 || group.changed.length > 0,
+  ) || diff.audio_changed
+}
+
 function emptyTimelineFactDigest(): V2TimelineFactDigest {
   return { scenes: [], visible_text: [], transitions: [], audio: [], notes: [] }
+}
+
+/**
+ * Final persistence gate. It runs after scope filtering, so a planner cannot
+ * claim success when its proposed change is removed by the tool boundary.
+ */
+export function evaluateV2TimelineRevisionCommit(input: {
+  baseSpec: RemotionTimelineSpecV1
+  candidateSpec: RemotionTimelineSpecV1
+  scope: 'global' | 'subtitle'
+}): V2TimelineRevisionCommitDecision {
+  const comparable = (spec: RemotionTimelineSpecV1) => input.scope === 'subtitle'
+    ? {
+        caption_tracks: spec.caption_tracks ?? [],
+        overlays: spec.overlays.filter((overlay) => overlay.type === 'caption'),
+      }
+    : {
+        canvas: spec.canvas,
+        assets: spec.assets,
+        scenes: spec.scenes,
+        transitions: spec.transitions,
+        overlays: spec.overlays,
+        material_jobs: spec.material_jobs,
+        audio: spec.audio ?? [],
+        render_policy: spec.render_policy,
+      }
+  if (JSON.stringify(comparable(input.baseSpec)) !== JSON.stringify(comparable(input.candidateSpec))) {
+    return { ok: true, scope: input.scope }
+  }
+  return {
+    ok: false,
+    scope: input.scope,
+    violation: {
+      kind: 'missing_requested_change',
+      message: input.scope === 'subtitle'
+        ? '候选方案没有产生任何可保存的字幕轨或字幕片段变化。'
+        : '候选方案没有产生任何可保存的 V2 时间线变化。',
+    },
+  }
 }
 
 const ReviewSchema = {
@@ -192,7 +247,7 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
     `Confirmed V2 conversation facts: ${input.confirmedContext ?? 'None supplied; rely on the persisted base timeline.'}`,
     `Base timeline facts: ${input.hasBase ? JSON.stringify(input.baseDigest) : 'No prior timeline; judge whether the initial plan fulfils the request.'}`,
     `Candidate timeline facts: ${JSON.stringify(input.candidateDigest)}`,
-    `Observed diff: ${JSON.stringify(revisionDiff(input.baseDigest, input.candidateDigest))}`,
+    `Observed diff: ${JSON.stringify(buildV2TimelineRevisionDiff(input.baseDigest, input.candidateDigest))}`,
   ].join('\n')
 }
 
@@ -265,6 +320,22 @@ export async function reviewV2TimelineRevisionOutcome(input: {
 }): Promise<V2TimelineRevisionOutcomeReview> {
   const baseDigest = input.baseSpec ? buildV2TimelineFactDigest(input.baseSpec) : emptyTimelineFactDigest()
   const candidateDigest = buildV2TimelineFactDigest(input.candidateSpec)
+  if (
+    input.baseSpec &&
+    !hasAudienceFacingRevision(buildV2TimelineRevisionDiff(baseDigest, candidateDigest))
+  ) {
+    return {
+      pass: false,
+      baseDigest,
+      candidateDigest,
+      violations: [{
+        kind: 'missing_requested_change',
+        message: '候选方案没有产生可交付画面、字幕、转场或音频变化。',
+      }],
+      repairInstruction: '根据本轮要求生成实际方案差异；不要只修改内部说明或声称已经完成。',
+      audit: { source: input.assess ? 'injected' : 'llm' },
+    }
+  }
   if (input.assess) {
     const verdict = await input.assess({ prompt: input.prompt, baseDigest, candidateDigest })
     return { ...verdict, baseDigest, candidateDigest, audit: { source: 'injected' } }

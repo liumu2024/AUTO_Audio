@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type AppShellView = 'dashboard' | 'editor' | 'assets'
+export type AppShellView = 'dashboard' | 'editor' | 'assets' | 'preferences'
 
 interface AppShellState {
   activeView: AppShellView

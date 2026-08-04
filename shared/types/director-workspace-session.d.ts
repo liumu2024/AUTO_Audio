@@ -7,8 +7,16 @@ export interface DirectorWorkspaceTurn {
     intent?: 'chat' | 'create' | 'revise' | 'execute' | 'clarify';
     outcome?: string;
 }
+export interface ConfirmedRequirement {
+    id: string;
+    statement: string;
+    status: 'active' | 'superseded' | 'revoked';
+    sourceTurnId: string;
+    supersededBy?: string;
+}
 export interface DirectorWorkspaceState {
     context: DirectorContext;
+    confirmedRequirements: ConfirmedRequirement[];
     draftId?: string;
     baseRevision?: number;
     selectedItemId?: string;

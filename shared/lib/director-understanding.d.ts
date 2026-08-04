@@ -1,4 +1,4 @@
-import type { DirectorContentDomain, DirectorContextSlots, DirectorIntentResult, DirectorMaterialSummary, DirectorReferenceSummary, DirectorUserIntent } from '../types/director-context.js';
+import type { DirectorContentDomain, DirectorContextSlots, DirectorMaterialSummary, DirectorReferenceSummary } from '../types/director-context.js';
 import type { V2SampleUnderstandingResult } from '../types/v2-sample-understanding.js';
 export interface DirectorConversationRuntime {
     backendEnabled: boolean;
@@ -24,7 +24,6 @@ export declare function mergeDirectorSlots(base: DirectorContextSlots, patch: Pa
 export declare function deriveRuntimeSlotStatus(runtime: DirectorConversationRuntime): Pick<DirectorContextSlots, 'sampleVideoStatus' | 'materialStatus'>;
 export declare function inferContentDomain(text: string): DirectorContentDomain;
 export declare function isLandscapeLikeDomain(domain: DirectorContentDomain): boolean;
-export declare function directorIntentToUserIntent(result: DirectorIntentResult, current: DirectorUserIntent, prompt: string): DirectorUserIntent;
 export declare function summarizeDirectorReference(understanding: V2SampleUnderstandingResult): DirectorReferenceSummary;
 export interface DirectorMaterialSummaryInput {
     id: string;

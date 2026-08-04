@@ -73,11 +73,13 @@ export interface DirectorIntentResult {
     }>;
     /** Provider-neutral tool proposals. They never execute on the client. */
     toolRequests?: Array<{
-        callId: string;
+        /** Model-local action reference; the server owns execution ids. */
+        ref: string;
         toolId: string;
         skillId: string;
         arguments: Record<string, unknown>;
         requestedMode: 'preview' | 'execute';
+        dependsOn: string[];
     }>;
 }
 export interface SampleStyleRecipe {
@@ -129,9 +131,6 @@ export interface DirectorUserIntent {
     durationSec?: number;
     fps?: number;
     styleIntensity?: 'light' | 'medium' | 'strong';
-    requestedStyle?: string;
-    constraints?: string[];
-    rawText?: string;
 }
 export interface DirectorSampleVideoContext {
     id: string;

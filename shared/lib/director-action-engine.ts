@@ -1,8 +1,4 @@
-import {
-  directorIntentToUserIntent,
-  mergeDirectorSlots,
-  type DirectorConversationRuntime,
-} from './director-understanding.js'
+import { mergeDirectorSlots, type DirectorConversationRuntime } from './director-understanding.js'
 import type {
   DirectorAction,
   DirectorActionOutcome,
@@ -210,11 +206,20 @@ export function directorActionFromIntentResult(input: ResolveDirectorActionInput
 }): DirectorAction {
   const { result } = input
   const slots = mergeDirectorSlots(input.context.slots, result.slotsPatch)
-  const intent = directorIntentToUserIntent(
-    result,
-    input.context.userIntent,
-    input.prompt,
-  )
+  const taskGoal = result.intent === 'analyze_sample'
+    || result.intent === 'analyze_materials'
+    || result.intent === 'generate_timeline'
+    || result.intent === 'revise_timeline'
+    || result.intent === 'render'
+    ? result.intent
+    : undefined
+  const intent = {
+    ...input.context.userIntent,
+    ...(taskGoal ? { goal: taskGoal } : {}),
+    aspectRatio: result.slotsPatch.aspectRatio ?? input.context.userIntent.aspectRatio,
+    durationSec: result.slotsPatch.durationSec ?? input.context.userIntent.durationSec,
+    styleIntensity: result.slotsPatch.styleIntensity ?? input.context.userIntent.styleIntensity,
+  }
 
   let type = mapNextActionToDirectorActionType(result)
   const payload: DirectorActionPayload = {

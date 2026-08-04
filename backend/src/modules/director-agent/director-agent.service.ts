@@ -6,20 +6,25 @@ import { createV2TimelineDraftRepository } from '../../pipeline-v2/timeline-draf
 import {
   dispatchV2AgentTool,
   toolResultTimelineFacts,
+  type V2AgentToolProgress,
   type V2AgentToolResult,
 } from '../../pipeline-v2/agent-tools/dispatcher.js'
 import { resolveV2AgentExecutionPlan } from '../../pipeline-v2/agent-skills/registry.js'
 import { deliveryAuthorizationFromDirectorDecision } from '../../pipeline-v2/agent-tools/authorization.js'
+import { routeDirectorIntentWithLlm } from './llm-intent-router.js'
 import {
-  respondToDirectorToolResultsWithLlm,
-  routeDirectorIntentWithLlm,
-} from './llm-intent-router.js'
+  applyCreativeMemoryActions,
+  searchCreativeMemories,
+  type CreativeMemoryActionReceipt,
+} from '../creative-memory/creative-memory.service.js'
 import {
   appendDirectorWorkspaceTurn,
+  applyDirectorRequirementChange,
   applyDirectorWorkspacePatch,
   compactDirectorWorkspaceContext,
   compactDirectorWorkspaceTurns,
   createDirectorWorkspaceState,
+  type RequirementChanges,
   type DirectorWorkspaceState,
 } from './director-workspace-session.js'
 import { createDirectorWorkspaceSessionRepository } from './director-workspace-session-repository.js'
@@ -125,6 +130,8 @@ export async function recordDirectorWorkspaceOutcome(input: {
   })
   const trace = createV2TraceWriter({
     taskId: `${input.workspaceSessionId}__outcome_${Date.now()}`,
+    sessionId: input.workspaceSessionId,
+    operationId: `outcome_${Date.now()}`,
   })
   await trace.writeJson('00-director-turn', 'execution-outcome.json', {
     action: input.action,
@@ -135,6 +142,15 @@ export async function recordDirectorWorkspaceOutcome(input: {
     revision: saved.state.baseRevision ?? null,
   })
   if (timelineFacts) await trace.writeJson('00-director-turn', 'persisted-v2-timeline-facts.json', timelineFacts)
+  await trace.appendSessionEvent({
+    type: 'execution_outcome',
+    action: input.action,
+    ok: input.ok,
+    outcome: input.outcome,
+    draft_id: saved.state.draftId ?? null,
+    revision: saved.state.baseRevision ?? null,
+    artifact_dir: trace.rootDir,
+  })
   return { state: saved.state, traceDir: trace.rootDir }
 }
 
@@ -152,19 +168,6 @@ function sampleLabel(input: DirectorAgentChatRequest) {
   if (input.runtime.isSampleParsed) return '样例视频已完成结构和风格解析'
   if (input.runtime.sampleUrl) return '样例视频已上传，尚未解析'
   return '尚未上传样例视频'
-}
-
-function actionLabel(type: string) {
-  const labels: Record<string, string> = {
-    ANALYZE_SAMPLE: '解析样例视频',
-    ANALYZE_MATERIALS: '分析创作素材',
-    GENERATE_TIMELINE: '生成 V2 时间线方案',
-    REVISE_TIMELINE: '修改当前时间线方案',
-    RENDER_VIDEO: '提交 V2 渲染',
-    ASK_USER: '回复并等待用户补充',
-    REQUEST_PLUGIN: '记录缺失 Remotion 能力',
-  }
-  return labels[type] ?? type
 }
 
 function workspaceId(value: string | undefined): string {
@@ -269,7 +272,94 @@ function stateDiff(before: DirectorWorkspaceState, after: DirectorWorkspaceState
   if (JSON.stringify(before.context.slots) !== JSON.stringify(after.context.slots)) changed.push('context.slots')
   if (JSON.stringify(before.context.userIntent) !== JSON.stringify(after.context.userIntent)) changed.push('context.userIntent')
   if (JSON.stringify(before.context.timelineFacts) !== JSON.stringify(after.context.timelineFacts)) changed.push('context.timelineFacts')
+  if (JSON.stringify(before.confirmedRequirements) !== JSON.stringify(after.confirmedRequirements)) changed.push('confirmedRequirements')
   return changed
+}
+
+const requirementPersistenceClaim = /(?:我|本轮|现已|已经).{0,12}(?:记录|保存|更新|撤销|作废).{0,20}(?:要求|偏好|约束)|已(?:为你)?(?:记录|保存)(?:了)?(?:本轮|该|这|您的|你的)?(?:要求|偏好|约束)|已将.{0,20}(?:要求|偏好|约束).{0,8}(?:更新|撤销|作废)|\b(?:I|this turn|now).{0,12}(?:recorded|saved|updated|revoked).{0,20}(?:requirement|preference|constraint)s?\b/i
+
+function hasUnsupportedRequirementPersistenceClaim(message: string) {
+  const withoutNegatedActions = message
+    .replace(/(?:不|不会|不要|未|没有|无需).{0,4}(?:记录|保存|更新|撤销|作废)/gu, '')
+    .replace(/\b(?:do not|don't|will not|won't|did not|not)\s+(?:record|save|update|revoke)\b/giu, '')
+  return requirementPersistenceClaim.test(withoutNegatedActions)
+}
+
+function requirementConfirmation(changes: RequirementChanges) {
+  const messages = [
+    ...changes.added.map((item) => `已记录：${item.statement}`),
+    ...changes.replaced.map((item) => `已更新：${item.previous.statement} → ${item.current.statement}`),
+    ...changes.revoked.map((item) => `已撤销：${item.statement}`),
+  ]
+  if (messages.length === 0 && changes.unchanged.length > 0) {
+    messages.push('相关要求已在当前有效要求中，无需重复记录')
+  }
+  return messages.join('。')
+}
+
+function toolOutcomeConfirmation(
+  results: V2AgentToolResult[],
+  receipts: DirectorActionReceipt[],
+  requests: Array<{ callId: string; arguments: Record<string, unknown> }>,
+) {
+  return results.map((result) => {
+    const status = receipts.find((receipt) => receipt.callId === result.callId)?.status
+    const instruction = requests.find((request) => request.callId === result.callId)?.arguments.instruction
+    const target = typeof instruction === 'string' && instruction.trim()
+      ? `“${instruction.trim()}”`
+      : undefined
+    if (status === 'skipped') return `已跳过 ${result.toolId}：${result.summary}`
+    if (result.ok) return target ? `${result.summary} 已按本轮指令处理：${target}` : result.summary
+    return `未完成 ${target ?? result.toolId}：${result.summary}${result.recovery ? `；恢复建议：${result.recovery}` : ''}`
+  }).join('；')
+}
+
+function traceRequirementChanges(changes: RequirementChanges) {
+  return {
+    added: changes.added.map((item) => ({ id: item.id, statement: item.statement, status: item.status })),
+    replaced: changes.replaced.map((item) => ({
+      target_id: item.previous.id,
+      previous_statement: item.previous.statement,
+      previous_status: 'superseded',
+      id: item.current.id,
+      statement: item.current.statement,
+      status: item.current.status,
+    })),
+    revoked: changes.revoked.map((item) => ({ id: item.id, statement: item.statement, status: item.status })),
+    unchanged: changes.unchanged.map((item) => ({ id: item.id, statement: item.statement, status: item.status })),
+    rejected: changes.rejected,
+  }
+}
+
+interface DirectorActionReceipt {
+  ref: string
+  kind: 'requirements.update' | 'memory.update' | 'tool.call'
+  status: 'succeeded' | 'failed' | 'skipped'
+  reason?: string
+  callId?: string
+  toolId?: string
+  dependsOn: string[]
+}
+
+function creativeMemoryConfirmation(
+  receipts: CreativeMemoryActionReceipt[],
+  actions: Array<{ ref: string; status?: 'active' | 'candidate' }>,
+) {
+  if (!receipts.length) return ''
+  const active = receipts.filter((receipt) =>
+    receipt.status === 'succeeded'
+    && actions.find((action) => action.ref === receipt.ref)?.status !== 'candidate',
+  ).length
+  const candidates = receipts.filter((receipt) =>
+    receipt.status === 'succeeded'
+    && actions.find((action) => action.ref === receipt.ref)?.status === 'candidate',
+  ).length
+  const failed = receipts.filter((receipt) => receipt.status === 'failed')
+  return [
+    active ? `已沉淀 ${active} 条创作偏好，可在“创作偏好”中查看或撤销` : '',
+    candidates ? `另有 ${candidates} 条仅作为待观察候选，不会直接影响创作` : '',
+    failed.length ? `${failed.length} 条偏好未保存：${failed.map((item) => item.reason).filter(Boolean).join('；')}` : '',
+  ].filter(Boolean).join('；')
 }
 
 function effectiveV2CreationMode(context: DirectorAgentChatRequest['context']) {
@@ -282,8 +372,13 @@ function effectiveV2CreationMode(context: DirectorAgentChatRequest['context']) {
 
 export async function* streamDirectorAgentChat(
   input: DirectorAgentChatRequest,
+  dependencies: {
+    dispatchTool?: typeof dispatchV2AgentTool
+    saveWorkspace?: typeof workspaceSessions.save
+  } = {},
 ): AsyncGenerator<DirectorAgentStreamEvent> {
   const id = workspaceId(input.workspaceSessionId)
+  const turnRequestId = input.turnRequestId?.trim().slice(0, 200) || randomUUID()
   const userId = input.userId ?? 1
   const persisted = await workspaceSessions.get(id, userId)
   const before = persisted?.state ?? createDirectorWorkspaceState({ context: input.context })
@@ -292,14 +387,24 @@ export async function* streamDirectorAgentChat(
     : before
   workspaceState = applyDirectorWorkspacePatch(workspaceState, {
     context: {
-      userIntent: { rawText: input.prompt || workspaceState.context.userIntent.rawText },
       conversationSummary: JSON.stringify(compactDirectorWorkspaceContext(workspaceState)),
     },
   })
-  const trace = createV2TraceWriter({ taskId: `${id}__turn_${Date.now()}` })
+  const turnOperationId = `turn_${turnRequestId}`
+  const trace = createV2TraceWriter({
+    taskId: `${id}__${turnOperationId}`,
+    sessionId: id,
+    operationId: turnOperationId,
+  })
+  await trace.appendSessionEvent({
+    type: 'turn_started',
+    prompt: input.prompt,
+    artifact_dir: trace.rootDir,
+  })
   await trace.writeJson('00-director-turn', 'turn-input.json', {
     input_reached: true,
     workspace_session_id: id,
+    turn_request_id: turnRequestId,
     prompt: input.prompt,
     context: compactDirectorWorkspaceContext(workspaceState),
     runtime: input.runtime,
@@ -342,9 +447,31 @@ export async function* streamDirectorAgentChat(
   }
   await wait(20)
 
+  let creativeMemoryRetrieval = { active: [], candidate: [], audit: [] } as Awaited<ReturnType<typeof searchCreativeMemories>>
+  let creativeMemoryRetrievalError: string | undefined
+  try {
+    creativeMemoryRetrieval = await searchCreativeMemories({
+      userId,
+      draftId: workspaceState.draftId,
+      query: input.prompt,
+    })
+  } catch (error) {
+    creativeMemoryRetrievalError = error instanceof Error ? error.message : String(error)
+  }
+  await trace.writeJson('00-director-turn', 'creative-memory-retrieval.json', {
+    query: input.prompt,
+    draft_id: workspaceState.draftId ?? null,
+    active: creativeMemoryRetrieval.active,
+    candidate: creativeMemoryRetrieval.candidate,
+    audit: creativeMemoryRetrieval.audit,
+    error: creativeMemoryRetrievalError ?? null,
+  })
   const routed = await routeDirectorIntentWithLlm({
     ...input,
+    currentTurnId: turnOperationId,
     context: workspaceState.context,
+    confirmedRequirements: workspaceState.confirmedRequirements,
+    retrievedCreativeMemories: creativeMemoryRetrieval,
     previousResponseId:
       workspaceState.responseContinuityDisabled ? undefined : workspaceState.responseId,
   })
@@ -356,12 +483,7 @@ export async function* streamDirectorAgentChat(
     protocol_error: routed.protocolError ?? null,
     fallback_reason: routed.fallbackReason ?? null,
     structured_output: routed.structuredOutput ?? null,
-    proposed_v2_creation_mode: routed.proposedV2CreationMode ?? null,
     effective_v2_creation_mode: effectiveV2CreationMode(workspaceState.context),
-    v2_creation_mode_mismatch:
-      routed.proposedV2CreationMode
-        ? routed.proposedV2CreationMode !== effectiveV2CreationMode(workspaceState.context)
-        : false,
   })
   if (routed.jsonRepair) {
     await trace.writeText('00-director-turn', 'model-json-repair-request.md', routed.jsonRepair.request)
@@ -384,6 +506,43 @@ export async function* streamDirectorAgentChat(
     await wait(20)
   }
 
+  const stateAction = routed.stateActions[0]
+  const requirementResult = applyDirectorRequirementChange(
+    workspaceState,
+    stateAction
+      ? { type: 'apply', operations: stateAction.operations }
+      : { type: 'none' },
+    turnOperationId,
+  )
+  workspaceState = requirementResult.state
+  const actionReceipts: DirectorActionReceipt[] = stateAction
+    ? [{
+        ref: stateAction.ref,
+        kind: 'requirements.update',
+        status: requirementResult.ok ? 'succeeded' : 'failed',
+        reason: requirementResult.ok ? undefined : requirementResult.error,
+        dependsOn: [],
+      }]
+    : []
+  const memoryActionReceipts = await applyCreativeMemoryActions({
+    userId,
+    workspaceSessionId: id,
+    currentTurnId: turnOperationId,
+    currentDraftId: workspaceState.draftId,
+    recalledMemoryIds: new Set([
+      ...creativeMemoryRetrieval.active.map((item) => item.memory.id),
+      ...creativeMemoryRetrieval.candidate.map((item) => item.memory.id),
+    ]),
+    actions: routed.memoryActions,
+  })
+  actionReceipts.push(...memoryActionReceipts.map((receipt) => ({
+    ref: receipt.ref,
+    kind: 'memory.update' as const,
+    status: receipt.status,
+    reason: receipt.reason,
+    dependsOn: [],
+  })))
+
   const unresovedAction = directorActionFromIntentResult({
     prompt: input.prompt,
     context: workspaceState.context,
@@ -405,21 +564,14 @@ export async function* streamDirectorAgentChat(
       styleIntensity: effectiveCreativeConfig.styleIntensity,
     },
   }
-  const requestedTools = routed.result.toolRequests ?? []
-  const shouldExecute =
-    routed.result.executionEffect !== undefined &&
-    routed.result.executionEffect !== 'none' &&
-    requestedTools.length > 0
+  const modelToolProposals = routed.result.toolRequests ?? []
+  const shouldExecute = modelToolProposals.length > 0
 
   workspaceState = applyDirectorWorkspacePatch(workspaceState, {
-    ...routed.statePatch,
     context: {
-      ...((routed.statePatch?.context as Record<string, unknown> | undefined) ?? {}),
       slots: action.slots,
       userIntent: {
-        goal:
-          action.intent.goal,
-        rawText: input.prompt || workspaceState.context.userIntent.rawText,
+        goal: action.intent.goal,
         aspectRatio: effectiveCreativeConfig.aspectRatio,
         durationSec: effectiveCreativeConfig.durationSec,
         styleIntensity: effectiveCreativeConfig.styleIntensity,
@@ -429,7 +581,7 @@ export async function* streamDirectorAgentChat(
     // A previous model failure must never become a durable gate for new input.
     pendingQuestion:
       routed.conversationIntent === 'clarify'
-        ? routed.requirements?.join('；') || routed.result.assistantMessage
+        ? routed.missingInformation.join('；') || routed.result.assistantMessage
         : null,
     responseId: routed.responseId,
     responseContinuityDisabled: routed.responseContinuityRejected || undefined,
@@ -445,11 +597,19 @@ export async function* streamDirectorAgentChat(
     at: new Date().toISOString(),
   })
   const executionPlan = await resolveV2AgentExecutionPlan({
+    intent: routed.conversationIntent ?? 'chat',
     skillRequests: routed.result.skillRequests,
-    toolRequests: requestedTools,
+    toolRequests: modelToolProposals,
+    stateActionRefs: routed.stateActions.map((item) => item.ref),
+    callIdContext: {
+      workspaceSessionId: id,
+      turnRequestId,
+    },
   })
+  const requestedTools = executionPlan.toolRequests
   await trace.writeJson('00-director-turn', 'skill-tool-execution-plan.json', {
     requested_skills: routed.result.skillRequests ?? [],
+    model_tool_proposals: modelToolProposals,
     selected_skills: executionPlan.selectedSkills,
     rejected_skills: executionPlan.rejectedSkills,
     rejected_tools: executionPlan.rejectedTools,
@@ -458,6 +618,8 @@ export async function* streamDirectorAgentChat(
     })),
     stages: executionPlan.stages.map((stage) => ({
       call_id: stage.toolRequest.callId,
+      ref: stage.toolRequest.ref,
+      depends_on: stage.toolRequest.dependsOn,
       tool_id: stage.toolRequest.toolId,
       primary_skill_id: stage.primarySkill.id,
       dependency_skill_ids: stage.references.map((reference) => reference.id),
@@ -497,17 +659,34 @@ export async function* streamDirectorAgentChat(
   let dispatchedToolCount = 0
   const deliveryAuthorization = deliveryAuthorizationFromDirectorDecision({
     prompt: input.prompt,
-    executionEffect: routed.result.executionEffect ?? 'none',
-    nextAction: routed.result.nextAction,
-    conversationIntent: routed.conversationIntent,
+    intent: routed.conversationIntent,
+    requestsDelivery: modelToolProposals.some((proposal) => proposal.toolId === 'timeline.render'),
   })
   if (shouldExecute) {
     for (const request of requestedTools) {
-      yield { type: 'tool_proposed', callId: request.callId, toolId: request.toolId, requestedMode: request.requestedMode }
       const rejected = executionPlan.rejectedTools.find((item) => item.callId === request.callId)
       const stage = executionPlan.stages.find((item) => item.toolRequest.callId === request.callId)
+      const failedDependency = request.dependsOn
+        .map((ref) => actionReceipts.find((receipt) => receipt.ref === ref))
+        .find((receipt) => receipt?.status !== 'succeeded')
+      yield {
+        type: 'tool_proposed',
+        callId: request.callId,
+        toolId: request.toolId,
+        requestedMode: request.requestedMode,
+        effectiveMode: stage?.modeResolution.effectiveMode ?? request.requestedMode,
+        modeNormalized: stage?.modeResolution.normalized ?? false,
+      }
       let result: V2AgentToolResult
-      if (rejected || !stage) {
+      let didDispatch = false
+      if (failedDependency) {
+        result = {
+          callId: request.callId,
+          toolId: request.toolId,
+          ok: false,
+          summary: `因依赖动作 ${failedDependency.ref} 未成功，本动作已跳过。`,
+        }
+      } else if (rejected || !stage) {
         result = {
           callId: request.callId,
           toolId: request.toolId,
@@ -516,17 +695,59 @@ export async function* streamDirectorAgentChat(
           recovery: '请让导演模型重新选择一致且可用的 Skill 与 Tool。',
         }
       } else {
+        didDispatch = true
         dispatchedToolCount += 1
         yield { type: 'tool_started', callId: request.callId, toolId: request.toolId }
         try {
-          result = await dispatchV2AgentTool({
+          const progressQueue: V2AgentToolProgress[] = []
+          let wakeProgress: (() => void) | undefined
+          let dispatchSettled = false
+          let dispatchResult: V2AgentToolResult | undefined
+          let dispatchError: unknown
+          void (dependencies.dispatchTool ?? dispatchV2AgentTool)({
             stage,
             prompt: input.prompt,
             userId,
             context: workspaceState.context,
+            runtime: input.runtime,
             workspace: workspaceState,
             authorization: deliveryAuthorization,
+            traceSessionId: id,
+            recalledCreativeMemories: creativeMemoryRetrieval.active.map(
+              (item) => item.memory.statement,
+            ),
+            onProgress: (event) => {
+              progressQueue.push(event)
+              wakeProgress?.()
+            },
+          }).then((value) => {
+            dispatchResult = value
+          }).catch((error: unknown) => {
+            dispatchError = error
+          }).finally(() => {
+            dispatchSettled = true
+            wakeProgress?.()
           })
+          while (!dispatchSettled || progressQueue.length > 0) {
+            const progress = progressQueue.shift()
+            if (progress) {
+              yield {
+                type: 'tool_progress',
+                callId: request.callId,
+                toolId: request.toolId,
+                ...progress,
+              }
+              continue
+            }
+            await new Promise<void>((resolve) => {
+              if (dispatchSettled || progressQueue.length > 0) resolve()
+              else wakeProgress = resolve
+            })
+            wakeProgress = undefined
+          }
+          if (dispatchError) throw dispatchError
+          if (!dispatchResult) throw new Error('V2 Tool completed without a result.')
+          result = dispatchResult
         } catch (error) {
           result = {
             callId: request.callId,
@@ -538,9 +759,34 @@ export async function* streamDirectorAgentChat(
         }
       }
       toolResults.push(result)
+      const receiptStatus = failedDependency
+        ? 'skipped'
+        : result.ok
+          ? 'succeeded'
+          : 'failed'
+      actionReceipts.push({
+        ref: request.ref,
+        kind: 'tool.call',
+        status: receiptStatus,
+        reason: result.ok ? undefined : result.summary,
+        callId: request.callId,
+        toolId: request.toolId,
+        dependsOn: request.dependsOn,
+      })
       await trace.writeJson('00-director-turn', `tool-${request.callId}.json`, {
-        request: { call_id: request.callId, tool_id: request.toolId, skill_id: request.skillId, requested_mode: request.requestedMode, arguments: request.arguments },
+        request: {
+          call_id: request.callId,
+          ref: request.ref,
+          depends_on: request.dependsOn,
+          tool_id: request.toolId,
+          skill_id: request.skillId,
+          requested_mode: request.requestedMode,
+          effective_mode: stage?.modeResolution.effectiveMode ?? request.requestedMode,
+          mode_normalized: stage?.modeResolution.normalized ?? false,
+          arguments: request.arguments,
+        },
         result: {
+          status: receiptStatus,
           ok: result.ok,
           summary: result.summary,
           output: result.output ?? null,
@@ -585,12 +831,16 @@ export async function* streamDirectorAgentChat(
         })
       }
       workspaceState = applyDirectorWorkspacePatch(workspaceState, {
-        recentToolCallIds: [...(workspaceState.recentToolCallIds ?? []), request.callId].slice(-48),
+        recentToolCallIds: didDispatch
+          ? [...(workspaceState.recentToolCallIds ?? []), request.callId].slice(-48)
+          : workspaceState.recentToolCallIds,
         latestExecution: { action: request.toolId, outcome: result.ok ? result.summary : `failed: ${result.summary}`, traceDir: result.draft?.traceDir },
         recentFailure: result.ok ? null : { reason: result.summary, recovery: result.recovery },
       })
       yield {
         type: 'tool_result',
+        actionRef: request.ref,
+        status: receiptStatus,
         callId: result.callId,
         toolId: result.toolId,
         ok: result.ok,
@@ -605,80 +855,64 @@ export async function* streamDirectorAgentChat(
             }
           : undefined,
       }
-      if (!result.ok) break
-    }
-  } else if (
-    routed.result.executionEffect !== undefined &&
-    routed.result.executionEffect !== 'none' &&
-    requestedTools.length === 0
-  ) {
-    toolResults.push({
-      callId: `missing_tool_${Date.now()}`,
-      toolId: 'agent.execution-plan',
-      ok: false,
-      summary: '导演模型声明了执行动作，但没有给出可调度的 V2 Tool。',
-      recovery: '保留本轮需求，由导演模型重新输出完整 Skill/Tool 提案。',
-    })
-  }
-  const failedTool = toolResults.find((result) => !result.ok)
-  const feedback = toolResults.length
-    ? await respondToDirectorToolResultsWithLlm({
-        prompt: input.prompt,
-        previousResponseId: routed.responseId,
-        initialAssistantMessage: routed.result.assistantMessage,
-        workspaceFacts: compactDirectorWorkspaceContext(workspaceState),
-        selectedSkills: executionPlan.selectedSkills.flatMap((selected) => {
-          const loaded = executionPlan.loadedSkills.find((skill) => skill.id === selected.skillId)
-          return loaded ? [{ id: loaded.id, version: loaded.version, hash: loaded.hash }] : []
-        }),
-        toolResults: toolResults.map((result) => ({
-          callId: result.callId,
-          toolId: result.toolId,
-          ok: result.ok,
-          summary: result.summary,
-          output: result.output,
-          recovery: result.recovery,
-        })),
-      })
-    : undefined
-  if (feedback) {
-    await trace.writeJson('00-director-turn', 'tool-result-model-response.audit.json', {
-      model_called: feedback.modelCalled,
-      response: feedback.responseAudit ?? null,
-      fallback_reason: feedback.fallbackReason ?? null,
-      json_repair: feedback.jsonRepair ?? null,
-      final_message: feedback.assistantMessage,
-    })
-    if (feedback.responseId) {
-      workspaceState = applyDirectorWorkspacePatch(workspaceState, {
-        responseId: feedback.responseId,
-      })
-    }
-    if (feedback.responseContinuityRejected) {
-      workspaceState = applyDirectorWorkspacePatch(workspaceState, {
-        responseContinuityDisabled: true,
-      })
-    }
-    for (const thought of feedback.publicThoughts) {
-      yield { type: 'thought', title: '执行结果', content: thought }
     }
   }
-  const assistantMessage = feedback?.assistantMessage ?? routed.result.assistantMessage
+  const shouldReportToolOutcome = dispatchedToolCount > 0
+    || (toolResults.length > 0 && routed.conversationIntent !== 'chat' && routed.conversationIntent !== 'clarify')
+  const modelAssistantMessage = shouldReportToolOutcome
+    ? toolOutcomeConfirmation(toolResults, actionReceipts, requestedTools)
+    : routed.result.assistantMessage
+  const requirementMessage = !stateAction
+    ? ''
+    : requirementResult.ok
+      ? requirementConfirmation(requirementResult.changes)
+      : '本轮要求变更未通过校验，因此没有保存这些要求。'
+  const memoryMessage = creativeMemoryConfirmation(memoryActionReceipts, routed.memoryActions)
+  const baseAssistantMessage = stateAction
+    ? toolResults.length > 0
+      ? [requirementMessage, modelAssistantMessage]
+          .filter(Boolean)
+          .map((message) => message.replace(/[。！!？?]+$/u, ''))
+          .join('。')
+      : requirementMessage
+    : toolResults.length === 0
+      && memoryActionReceipts.every((receipt) => receipt.status !== 'succeeded')
+      && hasUnsupportedRequirementPersistenceClaim(modelAssistantMessage)
+      ? '本轮没有产生可验证的要求变更，因此未将其标记为已保存。'
+      : modelAssistantMessage
+  const assistantMessage = memoryMessage
+    ? [memoryMessage, baseAssistantMessage]
+        .filter(Boolean)
+        .map((message) => message.replace(/[。！!；;]+$/u, ''))
+        .join('。')
+    : baseAssistantMessage
+  const failedReceiptCount = actionReceipts.filter((receipt) => receipt.status !== 'succeeded').length
+  const succeededReceiptCount = actionReceipts.filter((receipt) => receipt.status === 'succeeded').length
   workspaceState = appendDirectorWorkspaceTurn(workspaceState, {
     role: 'assistant',
     content: assistantMessage,
     at: new Date().toISOString(),
     intent: intentForWorkspace({ actionType: action.type, modelIntent: routed.conversationIntent }),
-    outcome: toolResults.length > 0
-      ? `${failedTool ? 'failed' : 'completed'}:${toolResults.map((tool) => tool.toolId).join(',')}`
+    outcome: actionReceipts.length > 0
+      ? `${failedReceiptCount ? succeededReceiptCount ? 'partial' : 'failed' : 'completed'}:${actionReceipts.map((receipt) => receipt.ref).join(',')}`
       : 'discussion',
   })
   workspaceState = compactDirectorWorkspaceTurns(workspaceState)
-  const saved = await workspaceSessions.save({ id, userId, state: workspaceState })
+  let saved
+  try {
+    saved = await (dependencies.saveWorkspace ?? workspaceSessions.save)({ id, userId, state: workspaceState })
+  } catch (error) {
+    const safeMessage = '工作区保存失败，本轮要求和状态均不能确认为已保存，请稍后重试。'
+    await trace.writeJson('00-director-turn', 'workspace-save-failure.json', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    yield { type: 'assistant_reply', message: safeMessage }
+    yield { type: 'done', message: safeMessage }
+    return
+  }
   await trace.writeJson('00-director-turn', 'turn-result.json', {
     router_called: true,
     core_model_called: routed.modelCalled,
-    result_model_called: feedback?.modelCalled ?? false,
     planner_called: toolResults.some((result) => result.plannerInvoked),
     tool_called: dispatchedToolCount > 0,
     tool_call_count: dispatchedToolCount,
@@ -689,21 +923,51 @@ export async function* streamDirectorAgentChat(
     response_id: saved.state.responseId ?? null,
     response_continuity_disabled: Boolean(saved.state.responseContinuityDisabled),
     state_changed: stateDiff(before, saved.state),
+    effective_config_changed:
+      JSON.stringify(before.context.effectiveCreativeConfig) !==
+      JSON.stringify(saved.state.context.effectiveCreativeConfig),
+    requirement_changes: traceRequirementChanges(requirementResult.changes),
+    creative_memory_retrieval: {
+      active: creativeMemoryRetrieval.active,
+      candidate: creativeMemoryRetrieval.candidate,
+      audit: creativeMemoryRetrieval.audit,
+      error: creativeMemoryRetrievalError ?? null,
+    },
+    creative_memory_requests: routed.memoryActions,
+    creative_memory_changes: memoryActionReceipts,
+    action_receipts: actionReceipts,
     effective_creative_config: effectiveCreativeConfig,
     fallback_reason: routed.fallbackReason ?? null,
-    proposed_v2_creation_mode: routed.proposedV2CreationMode ?? null,
     effective_v2_creation_mode: effectiveV2CreationMode(saved.state.context),
     skill_requests: routed.result.skillRequests ?? [],
     selected_skills: executionPlan.selectedSkills,
     loaded_skills: executionPlan.loadedSkills.map(({ id, version, source, hash }) => ({ id, version, source, hash })),
     rejected_skills: executionPlan.rejectedSkills,
     rejected_tools: executionPlan.rejectedTools,
-    tool_requests_ignored:
-      requestedTools.length > 0 && routed.result.executionEffect === 'none'
-        ? 'execution_effect_none'
-        : null,
     tool_requests: requestedTools,
-    tool_results: toolResults.map((result) => ({ call_id: result.callId, tool_id: result.toolId, ok: result.ok, summary: result.summary })),
+    tool_results: toolResults.map((result) => {
+      const receipt = actionReceipts.find((item) => item.callId === result.callId)
+      return { call_id: result.callId, ref: receipt?.ref, status: receipt?.status, tool_id: result.toolId, ok: result.ok, summary: result.summary }
+    }),
+  })
+  await trace.appendSessionEvent({
+    type: 'turn_completed',
+    prompt: input.prompt,
+    assistant_message: assistantMessage,
+    intent: intentForWorkspace({ actionType: action.type, modelIntent: routed.conversationIntent }),
+    model_source: routed.source,
+    response_id: saved.state.responseId ?? null,
+    action_receipts: actionReceipts,
+    skill_requests: routed.result.skillRequests ?? [],
+    tool_results: toolResults.map((result) => ({
+      call_id: result.callId,
+      tool_id: result.toolId,
+      ok: result.ok,
+      summary: result.summary,
+    })),
+    draft_id: saved.state.draftId ?? null,
+    revision: saved.state.baseRevision ?? null,
+    artifact_dir: trace.rootDir,
   })
   await trace.writeSummary([
     '# V2 Director turn',
@@ -743,37 +1007,6 @@ export async function* streamDirectorAgentChat(
 
   yield { type: 'constraint_resolution', config: effectiveCreativeConfig }
   await wait(15)
-
-  // Formal V2 execution ran through the server dispatcher above. Do not emit
-  // a client-executable action plan for the same proposal.
-  if (false && shouldExecute) {
-    yield {
-      type: 'thought',
-      title: '执行建议',
-      content: `${actionLabel(action.type)}。${action.message}`,
-    }
-    await wait(15)
-
-    yield {
-      type: 'action_plan',
-      action,
-    }
-    await wait(5)
-
-    if (input.context.directorState) {
-      yield {
-        type: 'state_update',
-        state: input.context.directorState!,
-      }
-      await wait(5)
-    }
-
-    yield {
-      type: 'done',
-      action,
-    }
-    return
-  }
 
   yield {
     type: 'done',

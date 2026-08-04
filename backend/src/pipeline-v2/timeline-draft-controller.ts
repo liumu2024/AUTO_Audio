@@ -47,11 +47,50 @@ function draftDto(draft: V2TimelineDraftRecord) {
   }
 }
 
+function oneLine(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  if (!normalized) return undefined
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 1)}…`
+    : normalized
+}
+
+function aspectRatioForSpec(spec: RemotionTimelineSpecV1): '9:16' | '16:9' | '1:1' | '4:3' {
+  const actual = spec.canvas.width / spec.canvas.height
+  const supported = [
+    { value: '9:16' as const, ratio: 9 / 16 },
+    { value: '16:9' as const, ratio: 16 / 9 },
+    { value: '1:1' as const, ratio: 1 },
+    { value: '4:3' as const, ratio: 4 / 3 },
+  ]
+  return supported.reduce((closest, candidate) =>
+    Math.abs(candidate.ratio - actual) < Math.abs(closest.ratio - actual)
+      ? candidate
+      : closest,
+  ).value
+}
+
 function draftHistoryDto(draft: V2TimelineDraftHistoryRecord) {
+  const firstScene = draft.spec.scenes
+    .slice()
+    .sort((a, b) => a.start_sec - b.start_sec)[0]
   return {
     draftId: draft.id,
     revision: draft.revision,
     creationMode: draft.creationMode,
+    title:
+      oneLine(firstScene?.title, 56) ??
+      oneLine(firstScene?.creative_intent?.title, 56) ??
+      oneLine(draft.plannerInput.prompt, 56),
+    summary:
+      oneLine(firstScene?.creative_intent?.description, 140) ??
+      oneLine(firstScene?.body, 140) ??
+      oneLine(draft.plannerInput.prompt, 140),
+    aspectRatio: aspectRatioForSpec(draft.spec),
+    durationSec: draft.spec.canvas.duration_sec,
+    sceneCount: draft.spec.scenes.length,
+    visibleTextCount: draft.spec.overlays.filter((overlay) => Boolean(overlay.text?.trim())).length,
     plannerSource: draft.plannerSource,
     traceDir: draft.traceDir,
     createdAt: draft.createdAt.toISOString(),
@@ -119,6 +158,7 @@ export async function postV2TimelineDraftPreview(req: Request, res: Response): P
       ...plannerInput,
       planningContext: {
         kind: 'revision',
+        activeRequirements: plannerInput.planningContext?.activeRequirements ?? [],
         draftId,
         baseRevision,
         selectedClipId: plannerInput.planningContext?.selectedClipId,

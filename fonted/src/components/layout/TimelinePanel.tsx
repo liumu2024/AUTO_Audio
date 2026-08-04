@@ -21,15 +21,16 @@ export function TimelinePanel() {
   const mode = useEditorStore((s) => s.timelineMode)
   const setMode = useEditorStore((s) => s.setTimelineMode)
   const hasV2Sample = useV2TimelineStore((s) => Boolean(s.sampleSession))
+  const hasV2Timeline = useV2TimelineStore((s) => Boolean(s.spec?.scenes.length))
   const hasSampleAnalysis = hasV2Sample
   const tabs = TABS.filter((tab) => tab.id !== 'sample' || hasSampleAnalysis)
   const current = tabs.find((tab) => tab.id === mode) ?? TABS[1]!
 
   useEffect(() => {
-    if (!hasSampleAnalysis && mode === 'sample') {
+    if (!hasSampleAnalysis && hasV2Timeline && mode === 'sample') {
       setMode('generation')
     }
-  }, [hasSampleAnalysis, mode, setMode])
+  }, [hasSampleAnalysis, hasV2Timeline, mode, setMode])
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden border-t border-zinc-800 bg-zinc-950">

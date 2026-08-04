@@ -1,11 +1,35 @@
+import { randomUUID } from 'node:crypto'
+
 import type { DirectorContext } from '../../../../shared/types/director-context.js'
 import type {
+  ConfirmedRequirement,
   DirectorWorkspaceState,
   DirectorWorkspaceTurn,
   DirectorWorkspaceTurnRole,
 } from '../../../../shared/types/director-workspace-session.js'
 
 export type { DirectorWorkspaceState, DirectorWorkspaceTurn, DirectorWorkspaceTurnRole }
+
+export type RequirementOperation =
+  | { operation: 'add'; statement: string }
+  | { operation: 'replace'; targetRequirementId: string; statement: string }
+  | { operation: 'revoke'; targetRequirementId: string }
+
+export type RequirementChange =
+  | { type: 'none' }
+  | { type: 'apply'; operations: RequirementOperation[] }
+
+export interface RequirementChanges {
+  added: ConfirmedRequirement[]
+  replaced: Array<{ previous: ConfirmedRequirement; current: ConfirmedRequirement }>
+  revoked: ConfirmedRequirement[]
+  unchanged: ConfirmedRequirement[]
+  rejected: string[]
+}
+
+export type RequirementChangeResult =
+  | { ok: true; state: DirectorWorkspaceState; changes: RequirementChanges }
+  | { ok: false; state: DirectorWorkspaceState; changes: RequirementChanges; error: string }
 
 export interface DirectorWorkspacePatch {
   context?: unknown
@@ -26,6 +50,58 @@ function clone<T>(value: T): T {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function emptyRequirementChanges(): RequirementChanges {
+  return { added: [], replaced: [], revoked: [], unchanged: [], rejected: [] }
+}
+
+function requirementId() {
+  return `req_${randomUUID()}`
+}
+
+function normalizedStatement(value: string) {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function normalizedContext(input: DirectorContext): {
+  context: DirectorContext
+  legacyConstraints: string[]
+} {
+  const context = clone(input)
+  const legacyIntent = context.userIntent as Record<string, unknown>
+  const legacyConstraints = Array.isArray(legacyIntent.constraints)
+    ? legacyIntent.constraints
+      .filter((item): item is string => typeof item === 'string')
+      .map(normalizedStatement)
+      .filter(Boolean)
+    : []
+  delete legacyIntent.constraints
+  delete legacyIntent.requestedStyle
+  delete legacyIntent.rawText
+  return { context, legacyConstraints }
+}
+
+function importedRequirements(statements: string[]): ConfirmedRequirement[] {
+  return Array.from(new Set(statements)).map((statement) => ({
+    id: requirementId(),
+    statement,
+    status: 'active',
+    sourceTurnId: 'initial_context',
+  }))
+}
+
+/** Hydrate old JSON sessions once and remove fields superseded by the requirement ledger. */
+export function hydrateDirectorWorkspaceState(state: DirectorWorkspaceState): DirectorWorkspaceState {
+  const { context, legacyConstraints } = normalizedContext(state.context)
+  const existing = Array.isArray(state.confirmedRequirements)
+    ? clone(state.confirmedRequirements)
+    : []
+  const activeStatements = new Set(
+    existing.filter((item) => item.status === 'active').map((item) => normalizedStatement(item.statement)),
+  )
+  const imported = importedRequirements(legacyConstraints.filter((item) => !activeStatements.has(item)))
+  return { ...clone(state), context, confirmedRequirements: [...existing, ...imported] }
 }
 
 /**
@@ -55,13 +131,97 @@ export function createDirectorWorkspaceState(input: {
   draftId?: string
   baseRevision?: number
 }): DirectorWorkspaceState {
+  const { context, legacyConstraints } = normalizedContext(input.context)
+  const currentTimeline = context.currentTimeline
   return {
-    context: clone(input.context),
-    draftId: input.draftId,
-    baseRevision: input.baseRevision,
+    context,
+    confirmedRequirements: importedRequirements(legacyConstraints),
+    draftId: input.draftId ?? currentTimeline?.draftId,
+    baseRevision: input.baseRevision ?? currentTimeline?.currentRevision,
+    selectedItemId:
+      currentTimeline?.selectedClipId ?? currentTimeline?.selectedSceneId,
     rollingSummary: '',
     turns: [],
   }
+}
+
+export function applyDirectorRequirementChange(
+  state: DirectorWorkspaceState,
+  change: RequirementChange,
+  sourceTurnId: string,
+): RequirementChangeResult {
+  const changes = emptyRequirementChanges()
+  if (change.type === 'none') return { ok: true, state, changes }
+  if (change.operations.length < 1 || change.operations.length > 20) {
+    const error = 'Requirement operation count must be between 1 and 20.'
+    changes.rejected.push(error)
+    return { ok: false, state, changes, error }
+  }
+
+  const activeById = new Map(
+    state.confirmedRequirements.filter((item) => item.status === 'active').map((item) => [item.id, item]),
+  )
+  const targeted = new Set<string>()
+  for (const operation of change.operations) {
+    if ('statement' in operation) {
+      const statement = normalizedStatement(operation.statement)
+      if (!statement || statement.length > 500) {
+        const error = 'Requirement statement must contain 1 to 500 characters.'
+        changes.rejected.push(error)
+        return { ok: false, state, changes, error }
+      }
+    }
+    if (operation.operation === 'add') continue
+    if (targeted.has(operation.targetRequirementId)) {
+      const error = `Requirement ${operation.targetRequirementId} is targeted more than once.`
+      changes.rejected.push(error)
+      return { ok: false, state, changes, error }
+    }
+    targeted.add(operation.targetRequirementId)
+    if (!activeById.has(operation.targetRequirementId)) {
+      const error = `Requirement ${operation.targetRequirementId} is not active.`
+      changes.rejected.push(error)
+      return { ok: false, state, changes, error }
+    }
+  }
+
+  const next = hydrateDirectorWorkspaceState(state)
+  const active = () => next.confirmedRequirements.filter((item) => item.status === 'active')
+  for (const operation of change.operations) {
+    if (operation.operation === 'add') {
+      const statement = normalizedStatement(operation.statement)
+      const duplicate = active().find((item) => normalizedStatement(item.statement) === statement)
+      if (duplicate) {
+        changes.unchanged.push(clone(duplicate))
+        continue
+      }
+      const added: ConfirmedRequirement = {
+        id: requirementId(), statement, status: 'active', sourceTurnId,
+      }
+      next.confirmedRequirements.push(added)
+      changes.added.push(clone(added))
+      continue
+    }
+
+    const index = next.confirmedRequirements.findIndex((item) => item.id === operation.targetRequirementId)
+    const previous = clone(next.confirmedRequirements[index]!)
+    if (operation.operation === 'revoke') {
+      next.confirmedRequirements[index] = { ...next.confirmedRequirements[index]!, status: 'revoked' }
+      changes.revoked.push(clone(next.confirmedRequirements[index]!))
+      continue
+    }
+
+    const statement = normalizedStatement(operation.statement)
+    const current = {
+      id: requirementId(), statement, status: 'active' as const, sourceTurnId,
+    }
+    next.confirmedRequirements[index] = {
+      ...next.confirmedRequirements[index]!, status: 'superseded', supersededBy: current.id,
+    }
+    next.confirmedRequirements.push(current)
+    changes.replaced.push({ previous, current: clone(current) })
+  }
+  return { ok: true, state: next, changes }
 }
 
 export function applyDirectorWorkspacePatch(
@@ -120,6 +280,10 @@ export function compactDirectorWorkspaceTurns(
 }
 
 export function compactDirectorWorkspaceContext(state: DirectorWorkspaceState) {
+  const confirmedRequirements = state.confirmedRequirements.filter((item) => item.status === 'active')
+  const recentRequirementChanges = state.confirmedRequirements
+    .filter((item) => item.status !== 'active')
+    .slice(-20)
   return {
     durableFacts: {
       draftId: state.draftId,
@@ -128,6 +292,8 @@ export function compactDirectorWorkspaceContext(state: DirectorWorkspaceState) {
       slots: state.context.slots,
       effectiveCreativeConfig: state.context.effectiveCreativeConfig,
       userIntent: state.context.userIntent,
+      confirmedRequirements,
+      recentRequirementChanges,
       currentTimeline: state.context.currentTimeline,
       timelineFacts: state.context.timelineFacts,
       materialRoles: state.context.materials.map((item) => ({

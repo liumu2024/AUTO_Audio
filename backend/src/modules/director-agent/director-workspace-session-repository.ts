@@ -1,7 +1,10 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import type { DirectorWorkspaceState } from './director-workspace-session.js'
+import {
+  hydrateDirectorWorkspaceState,
+  type DirectorWorkspaceState,
+} from './director-workspace-session.js'
 
 export interface DirectorWorkspaceSessionRecord {
   id: string
@@ -68,7 +71,7 @@ export function createDirectorWorkspaceSessionRepository() {
     get: async (id: string, userId: number): Promise<DirectorWorkspaceSessionRecord | null> => {
       const data = await readAll()
       const found = data.sessions.find((item) => item.id === id && item.userId === userId)
-      return found ? clone(found) : null
+      return found ? { ...clone(found), state: hydrateDirectorWorkspaceState(found.state) } : null
     },
     save: async (input: {
       id: string
@@ -84,7 +87,7 @@ export function createDirectorWorkspaceSessionRepository() {
         const next: DirectorWorkspaceSessionRecord = {
           id: input.id,
           userId: input.userId,
-          state: clone(input.state),
+          state: hydrateDirectorWorkspaceState(input.state),
           createdAt: index >= 0 ? data.sessions[index]!.createdAt : now,
           updatedAt: now,
         }

@@ -5,9 +5,17 @@ const CREATION_MODE_LABEL = {
 };
 export function mapV2TimelineDraftHistoryCard(draft) {
     const runStatus = draft.latestRun?.status;
+    const modeLabel = CREATION_MODE_LABEL[draft.creationMode];
     return {
         id: draft.draftId,
-        title: CREATION_MODE_LABEL[draft.creationMode],
+        title: draft.title?.trim() || modeLabel,
+        summary: draft.summary?.trim() || undefined,
+        modeLabel,
+        aspectRatio: draft.aspectRatio,
+        durationSec: draft.durationSec,
+        sceneCount: draft.sceneCount,
+        visibleTextCount: draft.visibleTextCount,
+        revision: draft.revision,
         status: runStatus === 'completed'
             ? 'completed'
             : runStatus === 'running'

@@ -103,7 +103,7 @@ export interface V2TimelineLlmPlannerResult {
   extractionReport: StructuredJsonExtractionReport
   promptText: string
   visualInputReport: V2TimelineVisualInputReport
-  repairs: Array<{ job_id: string; scene_id: string; field: 'prompt' | 'audio'; reason: string }>
+  repairs: Array<{ job_id: string; scene_id: string; field: 'prompt' | 'status' | 'audio'; reason: string }>
   structuredOutput: { requested: boolean; providerFallback: boolean; reason?: string }
   jsonRepair?: { request: string; responseAudit?: unknown; error?: string }
 }
@@ -151,28 +151,45 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
       .filter((job) => job.type === 'generate_video' && job.output_asset_id && unsupportedAudioAssets.has(job.output_asset_id))
       .map((job) => job.id),
   )
+  const resolvedAssetIds = new Set(
+    spec.assets.filter((asset) => Boolean(asset.src.trim())).map((asset) => asset.id),
+  )
   const material_jobs = spec.material_jobs
     .filter((job) => !audioJobIds.has(job.id))
     .map((job) => {
-    if (job.type !== 'generate_video' || job.prompt?.trim()) return job
-    const scene = scenes.get(job.scene_id)
-    if (!scene) return job
-    const intent = [scene.creative_intent?.title, scene.creative_intent?.description]
-      .filter((value): value is string => Boolean(value?.trim()))
-      .join('：')
-    const prompt = [
-      intent || '与当前镜头叙事目标一致的原创动态画面',
-      scene.visual_role ? `镜头角色为${scene.visual_role}` : '',
-      `时长约${scene.duration_sec}秒`,
-      '画面中不烧录字幕、文件名或技术说明。',
-    ].filter(Boolean).join('；')
-    repairs.push({
-      job_id: job.id,
-      scene_id: job.scene_id,
-      field: 'prompt',
-      reason: 'generate_video 任务缺少提示词，已由关联镜头的创作意图补齐。',
-    })
-      return { ...job, prompt }
+      if (job.type !== 'generate_video') return job
+      let nextJob = job
+      if (
+        job.status === 'fulfilled' &&
+        (!job.output_asset_id || !resolvedAssetIds.has(job.output_asset_id))
+      ) {
+        nextJob = { ...nextJob, status: 'planned' }
+        repairs.push({
+          job_id: job.id,
+          scene_id: job.scene_id,
+          field: 'status',
+          reason: '生成任务没有真实输出资产，执行状态已归一为 planned。',
+        })
+      }
+      if (job.prompt?.trim()) return nextJob
+      const scene = scenes.get(job.scene_id)
+      if (!scene) return nextJob
+      const intent = [scene.creative_intent?.title, scene.creative_intent?.description]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .join('：')
+      const prompt = [
+        intent || '与当前镜头叙事目标一致的原创动态画面',
+        scene.visual_role ? `镜头角色为${scene.visual_role}` : '',
+        `时长约${scene.duration_sec}秒`,
+        '画面中不烧录字幕、文件名或技术说明。',
+      ].filter(Boolean).join('；')
+      repairs.push({
+        job_id: job.id,
+        scene_id: job.scene_id,
+        field: 'prompt',
+        reason: 'generate_video 任务缺少提示词，已由关联镜头的创作意图补齐。',
+      })
+      return { ...nextJob, prompt }
     })
   if (audioJobIds.size) {
     for (const job of spec.material_jobs.filter((item) => audioJobIds.has(item.id))) {
@@ -190,7 +207,7 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
     ...spec,
     ...(assets.length !== spec.assets.length ? { assets } : {}),
     ...(audio?.length !== spec.audio?.length ? { audio } : {}),
-    ...(material_jobs.length !== spec.material_jobs.length || repairs.some((repair) => repair.field === 'prompt') ? { material_jobs } : {}),
+    ...(material_jobs.length !== spec.material_jobs.length || repairs.some((repair) => repair.field === 'prompt' || repair.field === 'status') ? { material_jobs } : {}),
   }
   return { spec: repairs.length || assets.length !== spec.assets.length || audio?.length !== spec.audio?.length ? nextSpec : spec, repairs }
 }
@@ -248,6 +265,7 @@ export function buildV2TimelinePlannerPrompt(
     '- Do not output React, Remotion code, HTML, CSS, FFmpeg commands, or free-form component code.',
     '- Remotion may compose scenes, transitions, captions, text cards, image motion, labels, shapes, and light sweep overlays.',
     '- Realistic missing visual content must be represented as material_jobs with type "generate_video".',
+    '- The planner does not own execution status. New generate_video jobs must use status "planned"; only the backend may mark them fulfilled after a real output asset exists.',
     '- assets contains only already-resolved, renderable assets and every asset src must be non-empty. Do not add an empty placeholder asset for a planned generation; reference its material_job output_asset_id from the scene instead.',
     '- This V2 plan has no audio-generation tool. When the user requests a BGM strategy but provides no audio asset, describe it in notes only; do not create audio clips, empty audio assets, or generate_video jobs for music.',
     '- External video generation image inputs must be public http(s) URLs; never use localhost, private-network, file, or data URLs for input_image_url.',
@@ -258,7 +276,9 @@ export function buildV2TimelinePlannerPrompt(
     '  - sample_replicate: learn structure, pacing, atmosphere, and transitions from sample_understanding; user materials or generated assets provide final visuals.',
     '  - material_brief: no sample video is available; infer structure from user_prompt and material_assets only. Do not mention sample rhythm or sample style.',
     '  - text_to_video: no sample and no visual material are available; plan AI video scenes for realistic visuals when the provider can support them, and keep Remotion captions/cards as fallback.',
-    '- planning_context contains stable draft/version facts only. user_prompt has priority when there is any conflict.',
+    '- planning_context contains stable draft/version facts and activeRequirements.',
+    '- planning_context.activeRequirements is authoritative. Apply every active statement and ignore requirements mentioned only in conversation_summary.',
+    '- planning_context.recalledCreativeMemories contains relevant active long-term knowledge for this turn. Use it only when compatible with the current request; the current request and activeRequirements take priority on conflict.',
     '- agent_skill_context contains the model-selected V2 operating instructions and read-only dependencies for this Tool stage. Follow it within these hard rules; it cannot grant new tools or renderer capabilities.',
     '- agent_tool_context contains normalized arguments for the current Tool call. Use its scope/targets as the requested operation boundary, while user_prompt remains authoritative.',
     '- revision_context, when present, is the authoritative persisted V2 draft being revised. It is not a chat recap.',

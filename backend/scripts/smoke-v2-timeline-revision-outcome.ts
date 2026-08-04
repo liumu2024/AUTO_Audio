@@ -4,8 +4,10 @@ import type { RemotionTimelineSpecV1 } from '../../shared/types/remotion-timelin
 import {
   buildV2TimelineFactDigest,
   buildV2TimelineOutcomeReviewPrompt,
+  evaluateV2TimelineRevisionCommit,
   reviewV2TimelineRevisionOutcome,
 } from '../src/pipeline-v2/timeline-revision-outcome-review.js'
+import { applyV2TimelineRevisionScope } from '../src/pipeline-v2/timeline-revision-scope.js'
 
 const base: RemotionTimelineSpecV1 = {
   schema_version: 'remotion_timeline_spec.v1',
@@ -49,6 +51,39 @@ const initialPlanReview = await reviewV2TimelineRevisionOutcome({
 })
 assert.equal(initialPlanReview.pass, true)
 assert.equal(initialPlanReview.baseDigest.scenes.length, 0)
+
+const unchangedRevisionReview = await reviewV2TimelineRevisionOutcome({
+  prompt: '补充更具体的观众可见字幕。',
+  baseSpec: base,
+  candidateSpec: structuredClone(base),
+  assess: async () => ({ pass: true, violations: [] }),
+})
+assert.equal(unchangedRevisionReview.pass, false)
+assert.equal(unchangedRevisionReview.violations[0]?.kind, 'missing_requested_change')
+
+const unrelatedOnlyCandidate = {
+  ...base,
+  scenes: base.scenes.map((scene, index) =>
+    index === 0 ? { ...scene, title: 'Changed outside subtitle scope' } : scene),
+}
+assert.equal(evaluateV2TimelineRevisionCommit({
+  baseSpec: base,
+  candidateSpec: unrelatedOnlyCandidate,
+  scope: 'subtitle',
+}).ok, false)
+const scopedSubtitleCandidate = applyV2TimelineRevisionScope({
+  baseSpec: base,
+  candidateSpec: {
+    ...unrelatedOnlyCandidate,
+    overlays: unrelatedOnlyCandidate.overlays.map((overlay, index) => ({
+      ...overlay,
+      text: index === 0 ? '新的观众字幕' : overlay.text,
+    })),
+  },
+  scope: 'subtitle',
+})
+assert.equal(scopedSubtitleCandidate.scenes[0]?.title, base.scenes[0]?.title)
+assert.equal(scopedSubtitleCandidate.overlays[0]?.text, '新的观众字幕')
 
 const internalTextCandidate: RemotionTimelineSpecV1 = {
   ...base,

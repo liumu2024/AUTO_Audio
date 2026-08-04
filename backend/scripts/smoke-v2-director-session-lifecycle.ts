@@ -74,26 +74,23 @@ assert.equal(restoredDraftId, 'v2_draft_existing')
 
 const draftAuthorization = deliveryAuthorizationFromDirectorDecision({
   prompt: '创建一版 15 秒暴雨通勤提醒短片，先出可编辑方案，不要渲染',
-  executionEffect: 'draft_change',
-  nextAction: 'GENERATE_TIMELINE',
-  conversationIntent: 'create',
+  intent: 'create',
+  requestsDelivery: false,
 })
 assert.equal(draftAuthorization, undefined)
 
 const deliveryAuthorization = deliveryAuthorizationFromDirectorDecision({
   prompt: '当前版本可以了，请直接导出 MP4',
-  executionEffect: 'delivery',
-  nextAction: 'RENDER',
-  conversationIntent: 'execute',
+  intent: 'execute',
+  requestsDelivery: true,
 })
 assert.equal(deliveryAuthorization?.granted, true)
 assert.equal(deliveryAuthorization?.evidence, '当前版本可以了，请直接导出 MP4')
 
 const discussionAuthorization = deliveryAuthorizationFromDirectorDecision({
   prompt: '你觉得现在适合导出吗？',
-  executionEffect: 'none',
-  nextAction: 'ACKNOWLEDGE',
-  conversationIntent: 'chat',
+  intent: 'chat',
+  requestsDelivery: false,
 })
 assert.equal(discussionAuthorization, undefined)
 

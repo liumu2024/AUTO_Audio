@@ -36,6 +36,7 @@ function v2TimelineInput(
     plannerMode: 'llm' as const,
     planningContext: {
       kind: options.planningKind ?? (current.draftId ? 'revision' : 'initial'),
+      activeRequirements: [],
       draftId: current.draftId ?? undefined,
       baseRevision: current.draftRevision ?? undefined,
       selectedClipId: current.selectedClipId ?? undefined,
@@ -135,7 +136,6 @@ export function createDirectorActionExecutor(): DirectorActionExecutor {
         aspectRatio: ctx.aspectRatio,
         durationSec: ctx.durationSec,
         styleIntensity: ctx.styleIntensity,
-        rawText: ctx.prompt,
       })
 
       const current = useV2TimelineStore.getState()

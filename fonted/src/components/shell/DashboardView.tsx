@@ -14,9 +14,8 @@ import * as api from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useAppShellStore } from '@/stores/appShellStore'
 import { useEditorStore } from '@/stores/editorStore'
-import { usePlaybackStore } from '@/stores/playbackStore'
 import { useTaskStore } from '@/stores/taskStore'
-import { useV2TimelineStore } from '@/stores/v2TimelineStore'
+import { activateV2DraftWorkspace } from '@/services/director/v2DirectorDraftWorkspace'
 import { mapV2TimelineDraftHistoryCard } from '@shared/lib/v2-timeline-draft-history'
 import type { V2TimelineDraftHistoryDto } from '@/lib/api'
 
@@ -87,16 +86,9 @@ export function DashboardView() {
     try {
       const { draft: persisted } = await api.getV2TimelineDraft(draft.draftId)
       const card = mapV2TimelineDraftHistoryCard(persisted)
-      useV2TimelineStore.getState().openPersistedDraft(persisted)
+      activateV2DraftWorkspace(persisted)
       useEditorStore.getState().enterV2Workspace()
-      useEditorStore.getState().setGenerationEditEnabled(true)
-      useEditorStore.getState().setTimelineMode('generation')
       useEditorStore.getState().setProjectName(card.title)
-      usePlaybackStore.getState().pause()
-      usePlaybackStore.getState().setDuration(persisted.spec.canvas.duration_sec)
-      usePlaybackStore.getState().seek(0)
-      useTaskStore.getState().setActiveTaskId(persisted.draftId)
-      useTaskStore.getState().setBackendReady(true)
       addLog(`[V2 工作台] 已打开草稿 ${persisted.draftId}，revision ${persisted.revision}。`)
       setActiveView('editor')
     } catch (error) {
@@ -200,6 +192,18 @@ export function DashboardView() {
                   <p className="line-clamp-2 text-sm font-medium text-zinc-200">
                     {card.title}
                   </p>
+                  {card.summary ? (
+                    <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-zinc-500">
+                      {card.summary}
+                    </p>
+                  ) : null}
+                  <div className="mt-2 flex flex-wrap gap-1 text-[9px] text-zinc-500">
+                    <span className="rounded bg-zinc-800 px-1.5 py-0.5">{card.modeLabel}</span>
+                    {card.aspectRatio ? <span className="rounded bg-zinc-800 px-1.5 py-0.5">{card.aspectRatio}</span> : null}
+                    {card.durationSec ? <span className="rounded bg-zinc-800 px-1.5 py-0.5">{card.durationSec}s</span> : null}
+                    {card.sceneCount != null ? <span className="rounded bg-zinc-800 px-1.5 py-0.5">{card.sceneCount} 镜头</span> : null}
+                    {card.visibleTextCount != null ? <span className="rounded bg-zinc-800 px-1.5 py-0.5">{card.visibleTextCount} 段文字</span> : null}
+                  </div>
                   <p className="mt-1 truncate font-mono text-[10px] text-zinc-600">
                     {card.id}
                   </p>
@@ -276,6 +280,28 @@ export function DashboardView() {
                   <dt className="text-zinc-600">创建时间</dt>
                   <dd>{formatDate(viewing.updatedAt)}</dd>
                 </div>
+                <div>
+                  <dt className="text-zinc-600">画幅 / 时长</dt>
+                  <dd>
+                    {mapV2TimelineDraftHistoryCard(viewing).aspectRatio ?? '未记录'} /{' '}
+                    {mapV2TimelineDraftHistoryCard(viewing).durationSec ?? '未记录'}s
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-zinc-600">镜头 / 可见文字</dt>
+                  <dd>
+                    {mapV2TimelineDraftHistoryCard(viewing).sceneCount ?? 0} /{' '}
+                    {mapV2TimelineDraftHistoryCard(viewing).visibleTextCount ?? 0}
+                  </dd>
+                </div>
+                {mapV2TimelineDraftHistoryCard(viewing).summary ? (
+                  <div className="col-span-2">
+                    <dt className="text-zinc-600">方案摘要</dt>
+                    <dd className="mt-1 leading-relaxed text-zinc-300">
+                      {mapV2TimelineDraftHistoryCard(viewing).summary}
+                    </dd>
+                  </div>
+                ) : null}
                 <div className="col-span-2">
                   <dt className="text-zinc-600">V2 草稿 ID</dt>
                   <dd className="break-all font-mono">{viewing.draftId}</dd>

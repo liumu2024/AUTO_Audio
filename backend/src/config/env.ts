@@ -169,6 +169,10 @@ export const env = {
     'V2_VIDEO_GENERATION_POLL_INTERVAL_MS',
     3_000,
   ),
+  v2MaterialGenerationConcurrency: readNumber(
+    'V2_MATERIAL_GENERATION_CONCURRENCY',
+    3,
+  ),
   v2GeneratedVideoWidth: readNumber('V2_GENERATED_VIDEO_WIDTH', 1080),
   v2GeneratedVideoHeight: readNumber('V2_GENERATED_VIDEO_HEIGHT', 1920),
   v2GeneratedVideoFps: readNumber('V2_GENERATED_VIDEO_FPS', 30),

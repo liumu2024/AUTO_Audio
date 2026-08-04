@@ -20,71 +20,39 @@ try {
     call += 1
     const output = call === 1
       ? {
-          intent: 'analyze_materials',
-          confidence: 0.96,
-          contentDomain: 'product_marketing',
-          slotsPatch: {},
-          missingSlots: [],
-          requiresConfirmation: false,
-          executionEffect: 'workspace_change',
-          nextAction: 'ACKNOWLEDGE',
-          assistantMessage: '我先读取当前选中的素材事实。',
-          publicThoughts: [],
-          conversationIntent: 'execute',
-          statePatch: {},
-          nextStep: 'execute',
-          requirements: [],
+          replyDraft: '我先读取当前选中的素材事实。',
+          intent: 'execute',
+          creativeConfigDelta: { contentDomain: 'product_marketing' },
+          stateActions: [],
           skillRequests: [{ skillId: 'v2-timeline-authoring', purpose: '读取当前 V2 素材事实' }],
           toolRequests: [{
-            callId: 'inspect_loop_001',
+            ref: 'inspect_loop_001',
             toolId: 'material.inspect',
             skillId: 'v2-timeline-authoring',
-            arguments: { materialIds: ['material_1'] },
+            arguments: {},
             requestedMode: 'preview',
+            dependsOn: [],
           }],
+          missingInformation: [],
         }
-      : call === 2
-        ? {
-          assistantMessage: '已读取产品图，它现在是可用于后续方案的候选视觉素材。',
-          publicThoughts: ['最终回复来自真实 material.inspect 结果。'],
+      : {
+          replyDraft: '我先读取当前选中的样例。',
+          intent: 'execute',
+          creativeConfigDelta: { contentDomain: 'product_marketing' },
+          stateActions: [],
+          skillRequests: [{ skillId: 'sample-reference-analysis', purpose: '理解用户选中的样例' }],
+          toolRequests: [{
+            ref: 'sample_loop_001',
+            toolId: 'sample.analyze',
+            skillId: 'sample-reference-analysis',
+            arguments: {},
+            requestedMode: 'preview',
+            dependsOn: [],
+          }],
+          missingInformation: [],
         }
-        : call === 3
-          ? {
-              intent: 'analyze_sample',
-              confidence: 0.96,
-              contentDomain: 'product_marketing',
-              slotsPatch: {},
-              missingSlots: [],
-              requiresConfirmation: false,
-              executionEffect: 'workspace_change',
-              nextAction: 'ANALYZE_SAMPLE',
-              assistantMessage: '我先读取当前选中的样例。',
-              publicThoughts: [],
-              conversationIntent: 'execute',
-              statePatch: {},
-              nextStep: 'execute',
-              requirements: [],
-              skillRequests: [{ skillId: 'sample-reference-analysis', purpose: '理解用户选中的样例' }],
-              toolRequests: [{
-                callId: 'sample_loop_001',
-                toolId: 'sample.analyze',
-                skillId: 'sample-reference-analysis',
-                arguments: { sampleId: 'sample_missing' },
-                requestedMode: 'preview',
-              }],
-            }
-          : {
-              assistantMessage: '样例文件当前无法读取；会话与已有方案没有被改写，修复文件后可继续分析。',
-              publicThoughts: ['最终回复明确依据 sample.analyze 的失败结果。'],
-            }
     return new Response(JSON.stringify({
-      id: call === 1
-        ? 'resp_loop_decision'
-        : call === 2
-          ? 'resp_loop_feedback'
-          : call === 3
-            ? 'resp_sample_decision'
-            : 'resp_sample_feedback',
+      id: call === 1 ? 'resp_loop_decision' : 'resp_sample_decision',
       output_text: JSON.stringify(output),
     }), { status: 200 })
   }
@@ -121,11 +89,11 @@ try {
   assert.equal(events.find((event) => event.type === 'tool_result')?.ok, true)
   assert.equal(
     events.find((event) => event.type === 'assistant_reply')?.message,
-    '已读取产品图，它现在是可用于后续方案的候选视觉素材。',
+    '已检查 1 个 V2 候选素材。',
   )
-  assert.equal(responseBodies[1]?.previous_response_id, 'resp_loop_decision')
+  assert.equal(responseBodies.length, 1)
   const workspaceEvent = events.find((event) => event.type === 'workspace_session')
-  assert.equal(workspaceEvent?.responseId, 'resp_loop_feedback')
+  assert.equal(workspaceEvent?.responseId, 'resp_loop_decision')
 
   const failedEvents = []
   const missingSamplePath = path.join(temporaryRoot, 'missing-sample.mp4')
@@ -153,13 +121,13 @@ try {
   const failedResult = failedEvents.find((event) => event.type === 'tool_result')
   assert.equal(failedResult?.ok, false)
   assert.match(failedResult?.summary ?? '', /Tool 执行异常/)
-  assert.equal(
-    failedEvents.find((event) => event.type === 'assistant_reply')?.message,
-    '样例文件当前无法读取；会话与已有方案没有被改写，修复文件后可继续分析。',
+  assert.match(
+    failedEvents.find((event) => event.type === 'assistant_reply')?.message ?? '',
+    /Tool 执行异常/,
   )
-  assert.equal(responseBodies[3]?.previous_response_id, 'resp_sample_decision')
+  assert.equal(responseBodies.length, 2)
   const failedWorkspace = failedEvents.find((event) => event.type === 'workspace_session')
-  assert.equal(failedWorkspace?.responseId, 'resp_sample_feedback')
+  assert.equal(failedWorkspace?.responseId, 'resp_sample_decision')
   assert.match(failedWorkspace?.state.recentFailure?.reason ?? '', /Tool 执行异常/)
 } finally {
   globalThis.fetch = originalFetch

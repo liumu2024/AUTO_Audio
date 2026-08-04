@@ -9,6 +9,7 @@ import type {
 import { standardizeGeneratedVideoAsset } from './media-standardizer.js'
 import {
   createNoopMaterialGenerationAdapter,
+  type V2MaterialGenerationResult,
   type V2MaterialGenerationAdapter,
 } from './material-generation-adapter.js'
 
@@ -34,6 +35,21 @@ export interface V2TimelineMaterialResolutionReport {
     standardized_src?: string
     error?: string
   }>
+  delivery_readiness: {
+    ready: boolean
+    planned_generated_scene_count: number
+    resolved_generated_scene_count: number
+    fallback_scene_count: number
+    missing_generated_scene_ids: string[]
+  }
+}
+
+export interface V2TimelineMaterialProgress {
+  status: 'started' | 'fulfilled' | 'fallback' | 'failed'
+  jobId: string
+  sceneId: string
+  completed: number
+  total: number
 }
 
 function assetById(assets: RemotionTimelineAsset[], id: string | undefined) {
@@ -119,11 +135,24 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
   spec: RemotionTimelineSpecV1
   adapter?: V2MaterialGenerationAdapter
   outputDir?: string
+  maxConcurrency?: number
+  onProgress?: (event: V2TimelineMaterialProgress) => void | Promise<void>
 }): Promise<{
   spec: RemotionTimelineSpecV1
   report: V2TimelineMaterialResolutionReport
 }> {
-  const spec = assertValidRemotionTimelineSpec(input.spec)
+  // Planner output describes desired work, not authoritative execution state.
+  // A generated job is fulfilled only when its output asset actually exists.
+  const normalizedInputSpec: RemotionTimelineSpecV1 = {
+    ...input.spec,
+    material_jobs: input.spec.material_jobs.map((job) =>
+      job.type === 'generate_video' &&
+      job.status === 'fulfilled' &&
+      !assetById(input.spec.assets, job.output_asset_id)
+        ? { ...job, status: 'planned' as const }
+        : job),
+  }
+  const spec = assertValidRemotionTimelineSpec(normalizedInputSpec)
   const adapter = input.adapter ?? createNoopMaterialGenerationAdapter()
   const fulfilledJobs: string[] = []
   const failedJobs: V2TimelineMaterialResolutionReport['failed_jobs'] = []
@@ -131,41 +160,116 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
   const generationTrace: V2TimelineMaterialResolutionReport['generation_trace'] = []
   const blankCardFallbackJobs = new Set<string>()
 
-  for (const job of spec.material_jobs) {
+  type JobOutcome = {
+    fulfilledJob?: string
+    failedJob?: V2TimelineMaterialResolutionReport['failed_jobs'][number]
+    resolvedAsset?: RemotionTimelineAsset
+    trace?: V2TimelineMaterialResolutionReport['generation_trace'][number]
+    blankCardFallbackJob?: string
+  }
+  const total = spec.material_jobs.length
+  let completed = 0
+  const reportProgress = async (
+    job: RemotionTimelineMaterialJob,
+    status: V2TimelineMaterialProgress['status'],
+  ) => {
+    if (status !== 'started') completed += 1
+    await input.onProgress?.({
+      status,
+      jobId: job.id,
+      sceneId: job.scene_id,
+      completed,
+      total,
+    })
+  }
+  const resolveJob = async (job: RemotionTimelineMaterialJob): Promise<JobOutcome> => {
     const startedAt = Date.now()
-    if (job.status === 'fulfilled' || job.type === 'reuse_asset') {
-      fulfilledJobs.push(job.id)
-      continue
+    await reportProgress(job, 'started')
+    if (job.type === 'reuse_asset') {
+      if (!assetById(spec.assets, job.output_asset_id)) {
+        const reason = 'reuse_asset job references an unavailable asset.'
+        await reportProgress(job, 'failed')
+        return {
+          failedJob: { id: job.id, reason },
+          trace: {
+            id: job.id,
+            scene_id: job.scene_id,
+            type: job.type,
+            output_asset_id: job.output_asset_id,
+            status: 'failed',
+            elapsed_ms: Date.now() - startedAt,
+            error: reason,
+          },
+        }
+      }
+      await reportProgress(job, 'fulfilled')
+      return {
+        fulfilledJob: job.id,
+        trace: {
+          id: job.id,
+          scene_id: job.scene_id,
+          type: job.type,
+          output_asset_id: job.output_asset_id,
+          status: 'fulfilled',
+          elapsed_ms: Date.now() - startedAt,
+        },
+      }
+    }
+    if (
+      job.type === 'generate_video' &&
+      job.status === 'fulfilled' &&
+      assetById(spec.assets, job.output_asset_id)
+    ) {
+      await reportProgress(job, 'fulfilled')
+      return {
+        fulfilledJob: job.id,
+        trace: {
+          id: job.id,
+          scene_id: job.scene_id,
+          type: job.type,
+          output_asset_id: job.output_asset_id,
+          status: 'fulfilled',
+          elapsed_ms: Date.now() - startedAt,
+        },
+      }
     }
     if (job.type === 'request_user_material') {
-      failedJobs.push({ id: job.id, reason: 'User material is required.' })
-      generationTrace.push({
+      const trace: V2TimelineMaterialResolutionReport['generation_trace'][number] = {
         id: job.id,
         scene_id: job.scene_id,
         type: job.type,
         status: 'failed',
         elapsed_ms: Date.now() - startedAt,
         error: 'User material is required.',
-      })
-      continue
+      }
+      await reportProgress(job, 'failed')
+      return {
+        failedJob: { id: job.id, reason: 'User material is required.' },
+        trace,
+      }
     }
     if (job.type !== 'generate_video') {
-      failedJobs.push({ id: job.id, reason: `Unsupported timeline material job type: ${job.type}` })
-      continue
+      const reason = `Unsupported timeline material job type: ${job.type}`
+      await reportProgress(job, 'failed')
+      return { failedJob: { id: job.id, reason } }
     }
     if (!job.prompt || !job.output_asset_id) {
-      failedJobs.push({ id: job.id, reason: 'generate_video jobs require prompt and output_asset_id.' })
-      continue
+      const reason = 'generate_video jobs require prompt and output_asset_id.'
+      await reportProgress(job, 'failed')
+      return { failedJob: { id: job.id, reason } }
     }
 
-    const generated = await adapter.generate({
+    const generated: V2MaterialGenerationResult = await adapter.generate({
       jobId: job.id,
       shotId: job.scene_id,
       type: 'generate_video',
       prompt: job.prompt,
       inputImageUrl: job.input_image_url,
       outputAssetId: job.output_asset_id,
-    })
+    }).catch((error: unknown) => ({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    }))
 
     if (generated.ok && generated.asset) {
       const normalized = await standardizeIfVideo({
@@ -180,9 +284,7 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
         height: spec.canvas.height,
         fps: spec.canvas.fps,
       })
-      fulfilledJobs.push(job.id)
-      resolvedAssets.push(normalized.asset)
-      generationTrace.push({
+      const trace: V2TimelineMaterialResolutionReport['generation_trace'][number] = {
         id: job.id,
         scene_id: job.scene_id,
         type: job.type,
@@ -193,15 +295,14 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
         status: 'fulfilled',
         elapsed_ms: Date.now() - startedAt,
         standardized_src: normalized.standardizedSrc,
-      })
-      continue
+      }
+      await reportProgress(job, 'fulfilled')
+      return { fulfilledJob: job.id, resolvedAsset: normalized.asset, trace }
     }
 
     const fallback = fallbackAsset({ job, currentAssets: spec.assets })
     if (fallback) {
-      fulfilledJobs.push(job.id)
-      resolvedAssets.push(fallback)
-      generationTrace.push({
+      const trace: V2TimelineMaterialResolutionReport['generation_trace'][number] = {
         id: job.id,
         scene_id: job.scene_id,
         type: job.type,
@@ -212,14 +313,13 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
         status: 'fallback',
         elapsed_ms: Date.now() - startedAt,
         error: generated.error ?? 'Generation failed; used fallback asset.',
-      })
-      continue
+      }
+      await reportProgress(job, 'fallback')
+      return { fulfilledJob: job.id, resolvedAsset: fallback, trace }
     }
 
     if (job.fallback_kind === 'blank_card') {
-      fulfilledJobs.push(job.id)
-      blankCardFallbackJobs.add(job.id)
-      generationTrace.push({
+      const trace: V2TimelineMaterialResolutionReport['generation_trace'][number] = {
         id: job.id,
         scene_id: job.scene_id,
         type: job.type,
@@ -230,12 +330,13 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
         status: 'fallback',
         elapsed_ms: Date.now() - startedAt,
         error: generated.error ?? 'Generation failed; kept the existing Remotion fallback scene.',
-      })
-      continue
+      }
+      await reportProgress(job, 'fallback')
+      return { fulfilledJob: job.id, blankCardFallbackJob: job.id, trace }
     }
 
-    failedJobs.push({ id: job.id, reason: generated.error ?? 'Material generation failed.' })
-    generationTrace.push({
+    const reason = generated.error ?? 'Material generation failed.'
+    const trace: V2TimelineMaterialResolutionReport['generation_trace'][number] = {
       id: job.id,
       scene_id: job.scene_id,
       type: job.type,
@@ -245,8 +346,33 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
       provider_task_id: generated.providerTaskId,
       status: 'failed',
       elapsed_ms: Date.now() - startedAt,
-      error: generated.error ?? 'Material generation failed.',
-    })
+      error: reason,
+    }
+    await reportProgress(job, 'failed')
+    return { failedJob: { id: job.id, reason }, trace }
+  }
+
+  const outcomes: JobOutcome[] = new Array(spec.material_jobs.length)
+  let nextIndex = 0
+  const concurrency = Math.min(
+    Math.max(1, Math.floor(input.maxConcurrency ?? 3)),
+    Math.max(1, spec.material_jobs.length),
+  )
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    while (true) {
+      const index = nextIndex
+      nextIndex += 1
+      const job = spec.material_jobs[index]
+      if (!job) return
+      outcomes[index] = await resolveJob(job)
+    }
+  }))
+  for (const outcome of outcomes) {
+    if (outcome.fulfilledJob) fulfilledJobs.push(outcome.fulfilledJob)
+    if (outcome.failedJob) failedJobs.push(outcome.failedJob)
+    if (outcome.resolvedAsset) resolvedAssets.push(outcome.resolvedAsset)
+    if (outcome.trace) generationTrace.push(outcome.trace)
+    if (outcome.blankCardFallbackJob) blankCardFallbackJobs.add(outcome.blankCardFallbackJob)
   }
 
   const mergedAssets = mergeAssets({ existing: spec.assets, resolved: resolvedAssets })
@@ -261,6 +387,12 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
           ...scene,
           type: 'remotion_card',
           asset_id: undefined,
+          title: scene.creative_intent?.title?.trim() || scene.title?.trim() || '画面待补充',
+          body:
+            scene.creative_intent?.description?.trim() ||
+            scene.body?.trim() ||
+            job.prompt?.trim() ||
+            '本镜头的生成素材尚未完成。',
         }
       }
       if (!job?.output_asset_id || !resolvedAssetIds.has(job.output_asset_id)) return scene
@@ -282,6 +414,36 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
         : job,
     ),
   }
+  const plannedGeneratedSceneIds = [...new Set(
+    spec.material_jobs
+      .filter((job) => job.type === 'generate_video')
+      .map((job) => job.scene_id),
+  )]
+  const resolvedGeneratedSceneIds = new Set(
+    generationTrace
+      .filter((item) => item.status === 'fulfilled')
+      .map((item) => item.scene_id),
+  )
+  for (const job of spec.material_jobs.filter((item) => item.type === 'generate_video' && item.status === 'fulfilled')) {
+    if (job.output_asset_id && assetById(mergedAssets, job.output_asset_id)) {
+      resolvedGeneratedSceneIds.add(job.scene_id)
+    }
+  }
+  const fallbackSceneIds = new Set(
+    generationTrace
+      .filter((item) => item.status === 'fallback')
+      .map((item) => item.scene_id),
+  )
+  const missingGeneratedSceneIds = plannedGeneratedSceneIds.filter(
+    (sceneId) => !resolvedGeneratedSceneIds.has(sceneId),
+  )
+  const deliveryReadiness = {
+    ready: failedJobs.length === 0 && missingGeneratedSceneIds.length === 0,
+    planned_generated_scene_count: plannedGeneratedSceneIds.length,
+    resolved_generated_scene_count: resolvedGeneratedSceneIds.size,
+    fallback_scene_count: fallbackSceneIds.size,
+    missing_generated_scene_ids: missingGeneratedSceneIds,
+  }
 
   return {
     spec: assertValidRemotionTimelineSpec(nextSpec),
@@ -292,6 +454,7 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
       failed_jobs: failedJobs,
       resolved_assets: resolvedAssets,
       generation_trace: generationTrace,
+      delivery_readiness: deliveryReadiness,
     },
   }
 }

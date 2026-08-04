@@ -1,14 +1,10 @@
 import type {
   DirectorContentDomain,
   DirectorContextSlots,
-  DirectorConversationIntent,
-  DirectorGoal,
-  DirectorIntentResult,
   DirectorMaterialSummary,
   DirectorMaterialStatus,
   DirectorReferenceSummary,
   DirectorSampleVideoStatus,
-  DirectorUserIntent,
 } from '../types/director-context.js'
 import type { V2SampleUnderstandingResult } from '../types/v2-sample-understanding.js'
 
@@ -143,35 +139,6 @@ export function inferContentDomain(text: string): DirectorContentDomain {
 
 export function isLandscapeLikeDomain(domain: DirectorContentDomain): boolean {
   return domain === 'landscape_montage' || domain === 'music_video'
-}
-
-function goalFromConversationIntent(intent: DirectorConversationIntent): DirectorGoal {
-  if (intent === 'render') return 'render'
-  if (intent === 'generate_timeline') return 'generate_timeline'
-  if (intent === 'revise_timeline') return 'revise_timeline'
-  if (intent === 'analyze_materials') return 'analyze_materials'
-  return 'analyze_sample'
-}
-
-export function directorIntentToUserIntent(
-  result: DirectorIntentResult,
-  current: DirectorUserIntent,
-  prompt: string,
-): DirectorUserIntent {
-  const hasTaskGoal = result.intent === 'analyze_sample' || result.intent === 'analyze_materials' || result.intent === 'generate_timeline' || result.intent === 'revise_timeline' || result.intent === 'render'
-  return {
-    ...current,
-    ...(hasTaskGoal ? { goal: goalFromConversationIntent(result.intent) } : {}),
-    aspectRatio: result.slotsPatch.aspectRatio ?? current.aspectRatio,
-    durationSec: result.slotsPatch.durationSec ?? current.durationSec,
-    styleIntensity: result.slotsPatch.styleIntensity ?? current.styleIntensity,
-    requestedStyle: prompt.trim() || current.requestedStyle,
-    rawText: prompt.trim() || current.rawText,
-    constraints:
-      result.slotsPatch.subtitlePolicy === 'none'
-        ? [...(current.constraints ?? []), 'no_subtitle']
-        : current.constraints,
-  }
 }
 
 export function summarizeDirectorReference(

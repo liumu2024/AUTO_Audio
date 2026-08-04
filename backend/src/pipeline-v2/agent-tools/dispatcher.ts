@@ -1,23 +1,37 @@
 import { randomUUID } from 'node:crypto'
 
 import { validateRemotionTimelineSpec } from '../../../../shared/lib/remotion-timeline-validator.js'
+import type { DirectorConversationRuntime } from '../../../../shared/lib/director-understanding.js'
 import type { DirectorContext, DirectorTimelineFacts } from '../../../../shared/types/director-context.js'
 import type { DirectorWorkspaceState } from '../../../../shared/types/director-workspace-session.js'
 import type { RemotionTimelineSpecV1 } from '../../../../shared/types/remotion-timeline-spec.v1.js'
 import { analyzeV2Sample } from '../sample-understanding-service.js'
 import { previewV2RemotionTimeline, runV2RemotionTimeline } from '../remotion-timeline-service.js'
 import { buildV2TimelineRevisionContext } from '../timeline-revision-context.js'
+import { evaluateV2TimelineRevisionCommit } from '../timeline-revision-outcome-review.js'
 import { createV2TimelineDraftRepository } from '../timeline-draft-repository.js'
 import type { V2PlannerInput } from '../v2-input.js'
-import { validateV2AgentToolRequest, type V2AgentToolMode } from './registry.js'
+import {
+  bindV2AgentToolArguments,
+  evaluateV2AgentToolReadiness,
+  validateV2AgentToolRequest,
+  type V2AgentToolMode,
+} from './registry.js'
 import type { V2AgentExecutionStage } from '../agent-skills/registry.js'
 
-export interface V2AgentToolRequest {
-  callId: string
+export interface V2AgentToolProposal {
+  /** Model-local action reference. It is never used as an execution identity. */
+  ref: string
   toolId: string
   skillId: string
   arguments: Record<string, unknown>
   requestedMode: V2AgentToolMode
+  dependsOn: string[]
+}
+
+export interface V2AgentToolRequest extends V2AgentToolProposal {
+  /** Canonical server-owned execution identity. */
+  callId: string
 }
 
 export interface V2AgentToolResult {
@@ -31,6 +45,15 @@ export interface V2AgentToolResult {
   recovery?: string
   /** True only when the V2 timeline planner was actually invoked. */
   plannerInvoked?: boolean
+}
+
+export interface V2AgentToolProgress {
+  phase: string
+  progress: number
+  message: string
+  elapsedMs?: number
+  jobId?: string
+  sceneId?: string
 }
 
 export interface V2AgentToolAuthorizationGrant {
@@ -60,10 +83,8 @@ function plannerInput(input: {
   workspace: DirectorWorkspaceState
   authorization?: V2AgentToolAuthorizationGrant
   stage: V2AgentExecutionStage
+  recalledCreativeMemories?: string[]
 }): V2PlannerInput {
-  const targetIds = Array.isArray(input.stage.toolRequest.arguments.targetIds)
-    ? input.stage.toolRequest.arguments.targetIds.filter((item): item is string => typeof item === 'string')
-    : []
   return {
     taskId: input.taskId,
     prompt: input.prompt,
@@ -80,9 +101,13 @@ function plannerInput(input: {
     canvas: canvas(input.context.effectiveCreativeConfig?.aspectRatio ?? input.context.slots.aspectRatio),
     planningContext: {
       kind: input.workspace.draftId ? 'revision' : 'initial',
+      activeRequirements: input.workspace.confirmedRequirements
+        .filter((item) => item.status === 'active')
+        .map((item) => item.statement),
+      recalledCreativeMemories: input.recalledCreativeMemories ?? [],
       draftId: input.workspace.draftId,
       baseRevision: input.workspace.baseRevision,
-      selectedClipId: targetIds[0] ?? input.workspace.selectedItemId,
+      selectedClipId: input.workspace.selectedItemId,
       authorizationEvidence: input.authorization?.evidence,
     },
     agentSkillContext: {
@@ -117,24 +142,17 @@ function timelineFacts(revision: number, spec: RemotionTimelineSpecV1): Director
   }
 }
 
-function subtitleOnly(base: RemotionTimelineSpecV1, candidate: RemotionTimelineSpecV1): RemotionTimelineSpecV1 {
-  return {
-    ...base,
-    caption_tracks: candidate.caption_tracks ?? base.caption_tracks,
-    overlays: [
-      ...base.overlays.filter((overlay) => overlay.type !== 'caption'),
-      ...candidate.overlays.filter((overlay) => overlay.type === 'caption'),
-    ],
-  }
-}
-
 export async function dispatchV2AgentTool(input: {
   stage: V2AgentExecutionStage
   prompt: string
   userId: number
   context: DirectorContext
+  runtime: DirectorConversationRuntime
   workspace: DirectorWorkspaceState
   authorization?: V2AgentToolAuthorizationGrant
+  traceSessionId?: string
+  recalledCreativeMemories?: string[]
+  onProgress?: (event: V2AgentToolProgress) => void | Promise<void>
 }): Promise<V2AgentToolResult> {
   const request = input.stage.toolRequest
   if (input.stage.primarySkill.id !== request.skillId) {
@@ -147,23 +165,39 @@ export async function dispatchV2AgentTool(input: {
   if (input.workspace.recentToolCallIds?.includes(request.callId)) {
     return { callId: request.callId, toolId: request.toolId, ok: false, summary: '重复的工具调用已被拒绝。', recovery: '等待已有调用的真实结果。' }
   }
-  if (checked.tool.requiresExplicitAuthorization && !input.authorization?.granted) {
-    return { callId: request.callId, toolId: request.toolId, ok: false, summary: '该交付操作缺少本轮模型确认的执行授权。', recovery: checked.tool.recovery }
+  const readiness = evaluateV2AgentToolReadiness({
+    toolId: request.toolId,
+    context: input.context,
+    runtime: input.runtime,
+    workspace: input.workspace,
+    authorizationGranted: input.authorization?.granted,
+  })
+  if (readiness.status !== 'ready') {
+    return {
+      callId: request.callId,
+      toolId: request.toolId,
+      ok: false,
+      summary: readiness.status === 'needs_authorization'
+        ? '当前操作需要用户明确授权。'
+        : readiness.missing.map((item) => item.description).join('；'),
+      recovery: checked.tool.recovery,
+    }
   }
+  const bound = bindV2AgentToolArguments({
+    modelArguments: checked.arguments,
+    context: input.context,
+    workspace: input.workspace,
+    userId: input.userId,
+  })
 
   if (request.toolId === 'material.inspect') {
-    const requestedIds = checked.arguments.materialIds as string[] | undefined
-    const materials = requestedIds?.length
-      ? input.context.materials.filter((material) => requestedIds.includes(material.id))
-      : input.context.materials
+    const selected = new Set(bound.system.materialIds)
+    const materials = input.context.materials.filter((material) => selected.has(material.id))
     return { callId: request.callId, toolId: request.toolId, ok: true, summary: `已检查 ${materials.length} 个 V2 候选素材。`, output: { materials: materials.map(({ id, type, name, tags }) => ({ id, type, name, tags })) } }
   }
   if (request.toolId === 'sample.analyze') {
     const sample = input.context.sampleVideo
     if (!sample?.url) return { callId: request.callId, toolId: request.toolId, ok: false, summary: '没有用户选中的样例视频。', recovery: checked.tool.recovery }
-    if (checked.arguments.sampleId && checked.arguments.sampleId !== sample.id) {
-      return { callId: request.callId, toolId: request.toolId, ok: false, summary: 'Tool 指定的样例与用户当前选择不一致。', recovery: checked.tool.recovery }
-    }
     const resolvedContext = plannerInput({
       taskId: 'sample-skill-context',
       prompt: input.prompt,
@@ -171,6 +205,7 @@ export async function dispatchV2AgentTool(input: {
       workspace: input.workspace,
       authorization: input.authorization,
       stage: input.stage,
+      recalledCreativeMemories: input.recalledCreativeMemories,
     })
     const result = await analyzeV2Sample({
       taskId: `v2_sample_tool_${Date.now()}_${randomUUID().slice(0, 8)}`,
@@ -179,6 +214,9 @@ export async function dispatchV2AgentTool(input: {
       sampleVideoName: sample.name,
       agentSkillContext: resolvedContext.agentSkillContext,
       agentToolContext: resolvedContext.agentToolContext,
+      traceContext: input.traceSessionId
+        ? { sessionId: input.traceSessionId, operationId: `sample_${request.callId}` }
+        : undefined,
     })
     return { callId: request.callId, toolId: request.toolId, ok: true, summary: '样例理解已完成；结果仅作为 V2 风格与节奏参考。', sampleUnderstanding: result.understanding, output: { traceDir: result.traceDir } }
   }
@@ -200,15 +238,55 @@ export async function dispatchV2AgentTool(input: {
         : input.workspace,
       authorization: input.authorization,
       stage: input.stage,
+      recalledCreativeMemories: input.recalledCreativeMemories,
     })
     if (existing && input.workspace.draftId && input.workspace.baseRevision) {
-      const targetIds = checked.arguments.targetIds as string[] | undefined
-      const selectedClipId = targetIds?.[0] ?? input.workspace.selectedItemId
-      plan = { ...plan, planningContext: { kind: 'revision', draftId: input.workspace.draftId, baseRevision: input.workspace.baseRevision, selectedClipId, authorizationEvidence: input.authorization?.evidence }, revisionBaseSpec: existing.spec, revisionContext: buildV2TimelineRevisionContext({ draftId: input.workspace.draftId, baseRevision: input.workspace.baseRevision, spec: existing.spec, selectedClipId }) }
+      const selectedClipId = bound.system.selectedTimelineItemId
+      plan = {
+        ...plan,
+        planningContext: {
+          ...plan.planningContext!,
+          kind: 'revision',
+          draftId: input.workspace.draftId,
+          baseRevision: input.workspace.baseRevision,
+          selectedClipId,
+          authorizationEvidence: input.authorization?.evidence,
+        },
+        revisionBaseSpec: existing.spec,
+        revisionScope: request.toolId === 'timeline.patch' ? 'subtitle' : undefined,
+        revisionContext: buildV2TimelineRevisionContext({ draftId: input.workspace.draftId, baseRevision: input.workspace.baseRevision, spec: existing.spec, selectedClipId }),
+      }
     }
-    const preview = await previewV2RemotionTimeline(plan)
+    const preview = await previewV2RemotionTimeline(
+      plan,
+      {
+        traceContext: input.traceSessionId
+          ? {
+              sessionId: input.traceSessionId,
+              operationId: `${request.toolId}_${request.callId}`,
+            }
+          : undefined,
+      },
+    )
     let spec = preview.spec
-    if (request.toolId === 'timeline.patch' && existing) spec = subtitleOnly(existing.spec, preview.spec)
+    if (request.toolId === 'timeline.patch' && existing) {
+      const commit = evaluateV2TimelineRevisionCommit({
+        baseSpec: existing.spec,
+        candidateSpec: spec,
+        scope: 'subtitle',
+      })
+      if (!commit.ok) {
+        return {
+          callId: request.callId,
+          toolId: request.toolId,
+          ok: false,
+          summary: commit.violation?.message ?? '字幕修订没有产生可保存的变化。',
+          output: { revisionCommit: commit },
+          recovery: '保留当前 V2 草稿，请规划模型依据本轮字幕要求重新生成实际差异。',
+          plannerInvoked: true,
+        }
+      }
+    }
     const validation = validateRemotionTimelineSpec(spec)
     if (!validation.ok) return { callId: request.callId, toolId: request.toolId, ok: false, summary: 'V2 时间线未通过结构校验。', output: { validation }, recovery: checked.tool.recovery, plannerInvoked: true }
     const draft = existing && input.workspace.draftId && input.workspace.baseRevision
@@ -218,15 +296,21 @@ export async function dispatchV2AgentTool(input: {
   }
   if (request.toolId === 'timeline.render') {
     if (!existing) return { callId: request.callId, toolId: request.toolId, ok: false, summary: '正式渲染需要当前 V2 草稿版本。', recovery: checked.tool.recovery }
-    if (
-      (checked.arguments.draftId && checked.arguments.draftId !== input.workspace.draftId) ||
-      (checked.arguments.revision && checked.arguments.revision !== input.workspace.baseRevision)
-    ) {
-      return { callId: request.callId, toolId: request.toolId, ok: false, summary: 'Tool 指定的草稿版本与当前 V2 工作区不一致。', recovery: checked.tool.recovery }
-    }
-    const sourceDraft = await drafts.getDraft(input.workspace.draftId!, input.userId)
+    const sourceDraft = await drafts.getDraft(bound.system.draftId!, bound.system.userId)
     if (!sourceDraft) return { callId: request.callId, toolId: request.toolId, ok: false, summary: '当前 V2 草稿已不可读取。', recovery: checked.tool.recovery }
-    const result = await runV2RemotionTimeline({ ...sourceDraft.plannerInput, taskId: `v2_render_tool_${Date.now()}_${randomUUID().slice(0, 8)}`, timelineSpecOverride: existing.spec })
+    const result = await runV2RemotionTimeline(
+      {
+        ...sourceDraft.plannerInput,
+        taskId: `v2_render_tool_${Date.now()}_${randomUUID().slice(0, 8)}`,
+        timelineSpecOverride: existing.spec,
+      },
+      {
+        onProgress: input.onProgress,
+        traceContext: input.traceSessionId
+          ? { sessionId: input.traceSessionId, operationId: `render_${request.callId}` }
+          : undefined,
+      },
+    )
     return { callId: request.callId, toolId: request.toolId, ok: result.ok, summary: result.ok ? 'V2 正式渲染已完成。' : 'V2 正式渲染未完成。', output: { traceDir: result.traceDir, outputPath: result.outputPath } }
   }
   return { callId: request.callId, toolId: request.toolId, ok: false, summary: '当前 V2 Tool 尚无执行器。', recovery: checked.tool.recovery }

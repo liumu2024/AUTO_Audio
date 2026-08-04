@@ -1,6 +1,5 @@
 import {
   createDefaultDirectorSlots,
-  directorIntentToUserIntent,
   mergeDirectorSlots,
 } from '@shared/lib/director-understanding'
 import type {
@@ -80,12 +79,4 @@ export function buildDirectorContextFromUI(input: {
     explicitUiControls,
     slots: mergeDirectorSlots(baseSlots, runtimeSlots),
   }
-}
-
-export function applyIntentFromAction(input: {
-  action: { intent: DirectorUserIntent; slots: DirectorContextSlots; result: import('@shared/types/director-context').DirectorIntentResult }
-  prompt: string
-  existingIntent?: DirectorUserIntent
-}): DirectorUserIntent {
-  return directorIntentToUserIntent(input.action.result, input.existingIntent ?? input.action.intent, input.prompt)
 }

@@ -13,6 +13,7 @@ import { extractAudioVisualUnderstandingHints } from '../modules/sample-understa
 import { resolveVideoInput } from '../modules/video-understanding/resolve-video-input.js'
 import type { VideoInput } from '../modules/video-understanding/video-input.js'
 import { createV2TraceWriter } from './trace.js'
+import type { V2TraceContext } from './trace.js'
 import type { V2AgentSkillContext, V2AgentToolContext } from './v2-input.js'
 
 const SampleUnderstandingJsonSchema = {
@@ -41,6 +42,7 @@ export interface V2SampleAnalyzeInput {
   sampleVideoName?: string
   agentSkillContext?: V2AgentSkillContext
   agentToolContext?: V2AgentToolContext
+  traceContext?: V2TraceContext
 }
 
 export interface V2SampleAnalyzeResult {
@@ -400,7 +402,11 @@ async function maybeDeleteFile(fileId: string): Promise<void> {
 }
 
 export async function analyzeV2Sample(input: V2SampleAnalyzeInput): Promise<V2SampleAnalyzeResult> {
-  const trace = createV2TraceWriter({ taskId: input.taskId })
+  const trace = createV2TraceWriter({
+    taskId: input.taskId,
+    sessionId: input.traceContext?.sessionId,
+    operationId: input.traceContext?.operationId,
+  })
   await trace.writeJson('01-input', 'sample-understanding-input.json', input)
   const video = await resolveVideoInput(input.sampleVideoPath)
   const hints = await extractAudioVisualUnderstandingHints(video)
@@ -497,6 +503,13 @@ export async function analyzeV2Sample(input: V2SampleAnalyzeInput): Promise<V2Sa
     '',
     '本步骤只理解样例视频，不生成 V2 时间线方案，也不渲染成片。',
   ])
+  await trace.appendSessionEvent({
+    type: 'sample_understanding_completed',
+    source: understanding.source,
+    duration_sec: understanding.sample.duration_sec,
+    segment_count: understanding.segments.length,
+    artifact_dir: trace.rootDir,
+  })
   return {
     taskId: input.taskId,
     understanding,

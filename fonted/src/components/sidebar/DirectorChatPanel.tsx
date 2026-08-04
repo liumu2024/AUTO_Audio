@@ -19,6 +19,7 @@ import {
   syncDirectorSessionSnapshot,
 } from '@shared/lib/director-state-machine'
 import { buildDirectorContextFromUI } from '@/services/director/directorDecisionContext'
+import { activateV2DraftWorkspace } from '@/services/director/v2DirectorDraftWorkspace'
 import {
   createDirectorActionExecutor,
   runDirectorAction,
@@ -284,8 +285,7 @@ export function DirectorChatPanel() {
         await restoreWorkspaceDraft({
           workspace: session.state,
           loadDraft: async (draftId) => (await getV2TimelineDraft(draftId)).draft,
-          openDraft: (draft) =>
-            useV2TimelineStore.getState().openPersistedDraft(draft),
+          openDraft: activateV2DraftWorkspace,
         })
       })
       .catch(() => {
@@ -637,6 +637,7 @@ export function DirectorChatPanel() {
       await streamDirectorChat(
         {
           prompt,
+          turnRequestId: crypto.randomUUID(),
           workspaceSessionId:
             workspaceSessionIdRef.current ?? browserWorkspaceSessionId(),
           context: directorContext,
@@ -684,11 +685,36 @@ export function DirectorChatPanel() {
                `${event.dependency ? '已加载依赖说明' : '已加载能力说明'}：${event.skillId} v${event.version}。`,
              )
            }
-          if (event.type === 'tool_proposed') debugThoughts.push(`后端已提案：${event.toolId}。`)
-          if (event.type === 'tool_started') debugThoughts.push(`后端正在执行：${event.toolId}。`)
+          if (event.type === 'tool_proposed') {
+            debugThoughts.push(
+              event.modeNormalized
+                ? `后端已提案：${event.toolId}；调用范围由 ${event.requestedMode} 归一为 ${event.effectiveMode}。`
+                : `后端已提案：${event.toolId}（${event.effectiveMode}）。`,
+            )
+          }
+          if (event.type === 'tool_started') {
+            debugThoughts.push(`后端正在执行：${event.toolId}。`)
+            if (event.toolId === 'timeline.render') {
+              useTaskStore.getState().startTask(prompt, event.callId)
+            }
+          }
+          if (event.type === 'tool_progress') {
+            const elapsedLabel = event.elapsedMs == null
+              ? ''
+              : ` · ${(event.elapsedMs / 1000).toFixed(1)}s`
+            useTaskStore.getState().updateProgress(
+              event.progress,
+              `${event.message}${elapsedLabel}`,
+              `[${event.phase}] ${event.message}${elapsedLabel}`,
+            )
+          }
           if (event.type === 'tool_result') {
+            if (event.toolId === 'timeline.render') {
+              if (event.ok) useTaskStore.getState().completeTask()
+              else useTaskStore.getState().setFailed(event.summary)
+            }
             if (event.ok && event.draft) {
-              useV2TimelineStore.getState().openPersistedDraft(event.draft)
+              activateV2DraftWorkspace(event.draft)
               debugThoughts.push(`已同步 V2 草稿 v${event.draft.revision} 到时间线工作区。`)
             }
             debugThoughts.push(event.ok ? `后端结果：${event.summary}` : `后端未完成：${event.summary}`)

@@ -45,7 +45,7 @@ const v2Compact = compactDirectorContextForPrompt({
 assert.equal('currentEditablePlan' in v2Compact, false)
 assert.equal('conversationSummary' in v2Compact, false)
 assert.equal(JSON.stringify(v2Compact).includes('legacy_plan_sentinel'), false)
-assert.equal(JSON.stringify(v2Compact).includes('legacy_outline_sentinel'), false)
+assert.equal(v2Compact.conversationMemory, 'legacy_outline_sentinel')
 assert.equal(v2Compact.currentEditableTimeline?.kind, 'v2_timeline')
 assert.equal(v2Compact.currentEditableTimeline?.currentRevision, 3)
 

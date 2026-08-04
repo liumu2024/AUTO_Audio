@@ -76,6 +76,7 @@ function planningContextValue(value: unknown): V2PlannerInput['planningContext']
   if (kind !== 'initial' && kind !== 'revision') return undefined
   return {
     kind,
+    activeRequirements: [],
     draftId: stringValue(record.draftId) || undefined,
     baseRevision: numberValue(record.baseRevision),
     selectedClipId: stringValue(record.selectedClipId) || undefined,

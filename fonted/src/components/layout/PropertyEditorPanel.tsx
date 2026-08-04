@@ -2,6 +2,12 @@ import { SlidersHorizontal } from 'lucide-react'
 
 import { V2SamplePropertyInspector } from '@/components/layout/V2SamplePropertyInspector'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  buildV2PlanPresentation,
+  resolveV2PlanSceneIdFromClip,
+  type V2PlanScenePresentation,
+  type V2PlanVisibleText,
+} from '@/services/director/v2DirectorDraftWorkspace'
 import { useEditorStore } from '@/stores/editorStore'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 
@@ -17,9 +23,14 @@ function V2TimelinePropertyInspector() {
   const preview = useV2TimelineStore((state) => state.preview)
   const selectedClipId = useV2TimelineStore((state) => state.selectedClipId)
   const updateSpec = useV2TimelineStore((state) => state.updateSpec)
-  const sceneId = selectedClipId?.replace(/^v2-(?:scene|overlay|transition)-/, '')
+  const sceneId = spec ? resolveV2PlanSceneIdFromClip(spec, selectedClipId) : undefined
   const scene = sceneId ? spec?.scenes.find((item) => item.id === sceneId) : undefined
+  const presentation = spec ? buildV2PlanPresentation(spec, preview?.review.scenes) : undefined
+  const sceneFacts = sceneId ? presentation?.scenes.find((item) => item.id === sceneId) : undefined
   const review = sceneId ? preview?.review.scenes.find((item) => item.id === sceneId) : undefined
+  const selectedOverlayId = selectedClipId?.startsWith('v2-overlay-')
+    ? selectedClipId.slice('v2-overlay-'.length)
+    : undefined
 
   return (
     <aside className="flex h-full min-h-0 w-full flex-col border-l border-zinc-800 bg-zinc-950">
@@ -38,18 +49,15 @@ function V2TimelinePropertyInspector() {
         ) : (
           <div className="space-y-4">
             <section className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3">
-              <p className="text-sm font-semibold text-violet-100">{scene.creative_intent?.title ?? scene.title ?? scene.id}</p>
+              <p className="text-sm font-semibold text-violet-100">{sceneFacts?.title ?? scene.id}</p>
               <p className="mt-1 font-mono text-[10px] text-violet-200/70">{scene.start_sec.toFixed(2)}s – {(scene.start_sec + scene.duration_sec).toFixed(2)}s</p>
             </section>
-            <Detail label="模型创作说明" value={scene.creative_intent?.description ?? scene.body ?? review?.description_zh ?? review?.source_zh} />
+            <Detail label="模型创作说明" value={sceneFacts?.description ?? review?.description_zh ?? review?.source_zh} />
+            {sceneFacts ? <SceneFacts scene={sceneFacts} selectedOverlayId={selectedOverlayId} /> : null}
             <label className="block space-y-1.5">
               <span className="text-[10px] font-medium text-zinc-500">我的修改要求</span>
               <Textarea value={scene.note ?? ''} placeholder="例如：保留主体，改为更克制的字幕和更慢的运镜" className="min-h-[96px] text-xs" onChange={(event) => updateSpec((current) => ({ ...current, scenes: current.scenes.map((item) => item.id === scene.id ? { ...item, note: event.target.value } : item) }))} />
             </label>
-            <Detail label="模型预览" value={review?.description_zh ?? review?.source_zh} />
-            <Detail label="镜头运动" value={review?.motion_zh} />
-            <Detail label="素材使用" value={review?.material_usage_zh ?? review?.asset_label_zh} />
-            <Detail label="字幕/文字" value={review?.overlay_texts_zh?.join(' / ')} />
           </div>
         )}
       </div>
@@ -57,7 +65,174 @@ function V2TimelinePropertyInspector() {
   )
 }
 
+function SceneFacts({
+  scene,
+  selectedOverlayId,
+}: {
+  scene: V2PlanScenePresentation
+  selectedOverlayId?: string
+}) {
+  return (
+    <>
+      <section className="space-y-1.5">
+        <h3 className="text-[10px] font-medium text-zinc-500">画面构成</h3>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <Fact label="画面方式" value={sceneTypeLabel(scene.sceneType)} />
+          <Fact label="镜头职责" value={visualRoleLabel(scene.visualRole)} />
+          <Fact label="素材/生成" value={scene.assetLabel ?? materialPlanLabel(scene)} />
+          <Fact label="镜头运动" value={motionLabel(scene.motion)} />
+        </div>
+        {scene.materialPlan?.prompt ? (
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/55 p-3 text-xs leading-relaxed text-zinc-300">
+            {scene.materialPlan.prompt}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="space-y-1.5">
+        <h3 className="text-[10px] font-medium text-zinc-500">
+          成片可见文字 / 字幕（{scene.visibleTexts.length} 段）
+        </h3>
+        {scene.visibleTexts.length ? (
+          <div className="space-y-2">
+            {scene.visibleTexts.map((item, index) => (
+              <InspectorVisibleText
+                key={item.id}
+                item={item}
+                index={index}
+                selected={item.id === selectedOverlayId}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed border-zinc-800 p-3 text-xs text-zinc-500">
+            这个镜头目前没有可见字幕或标题。
+          </div>
+        )}
+      </section>
+
+      <Detail
+        label="镜头衔接"
+        value={
+          scene.transitionAfter
+            ? `${transitionLabel(scene.transitionAfter.type)} · ${scene.transitionAfter.duration_sec}s`
+            : '直接结束或硬切到下一镜头'
+        }
+      />
+    </>
+  )
+}
+
+function InspectorVisibleText({
+  item,
+  index,
+  selected,
+}: {
+  item: V2PlanVisibleText
+  index: number
+  selected: boolean
+}) {
+  return (
+    <div className={`rounded-lg border p-3 ${selected ? 'border-amber-400/60 bg-amber-500/10' : 'border-zinc-800 bg-zinc-900/55'}`}>
+      <p className="text-[10px] text-zinc-500">
+        {index + 1}. {overlayTypeLabel(item.type)} · {item.startSec.toFixed(1)}s–{item.endSec.toFixed(1)}s
+      </p>
+      <p className="mt-1.5 text-xs leading-5 text-zinc-100">“{item.text}”</p>
+      <p className="mt-1.5 text-[10px] text-zinc-500">
+        {animationLabel(item.enterAnimation)}
+        {item.maxLines
+          ? ` · ${item.maxLinesSource === 'track_default' ? '方案轨道设置（可修改）' : '本段设置'}最多 ${item.maxLines} 行`
+          : ''}
+        {` · 位置 ${Math.round(item.xPct)}%, ${Math.round(item.yPct)}%`}
+      </p>
+    </div>
+  )
+}
+
+function Fact({ label, value }: { label: string; value?: string }) {
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900/55 p-2">
+      <p className="text-[9px] text-zinc-500">{label}</p>
+      <p className="mt-1 text-zinc-300">{value ?? '未指定'}</p>
+    </div>
+  )
+}
+
 function Detail({ label, value }: { label: string; value?: string }) {
   if (!value) return null
   return <section className="space-y-1.5"><h3 className="text-[10px] font-medium text-zinc-500">{label}</h3><div className="rounded-lg border border-zinc-800 bg-zinc-900/55 p-3 text-xs leading-relaxed text-zinc-300">{value}</div></section>
+}
+
+function sceneTypeLabel(type: V2PlanScenePresentation['sceneType']) {
+  return {
+    user_video: '用户视频',
+    ai_video: 'AI 视频',
+    image_motion: '图片动效',
+    remotion_card: 'Remotion 程序化画面',
+    caption_scene: '文字场景',
+    data_viz: '数据可视化',
+  }[type]
+}
+
+function visualRoleLabel(role: V2PlanScenePresentation['visualRole']) {
+  if (!role) return undefined
+  return {
+    hook: '开场吸引',
+    proof: '事实证明',
+    feature: '重点内容',
+    transition: '内容衔接',
+    cta: '结尾行动',
+  }[role]
+}
+
+function motionLabel(motion: V2PlanScenePresentation['motion']) {
+  if (!motion) return undefined
+  return {
+    none: '固定画面',
+    slow_zoom_in: '缓慢推近',
+    slow_zoom_out: '缓慢拉远',
+    pan_left: '向左平移',
+    pan_right: '向右平移',
+  }[motion]
+}
+
+function materialPlanLabel(scene: V2PlanScenePresentation) {
+  if (!scene.materialPlan) return 'Remotion 直接编排'
+  return {
+    reuse_asset: '复用已有素材',
+    generate_video: '计划生成 AI 视频',
+    request_user_material: '等待用户素材',
+  }[scene.materialPlan.type]
+}
+
+function overlayTypeLabel(type: V2PlanVisibleText['type']) {
+  return {
+    caption: '字幕',
+    title: '标题',
+    label: '标签',
+    shape: '图形',
+    image_badge: '图片角标',
+    light_sweep: '扫光效果',
+  }[type]
+}
+
+function animationLabel(animation: V2PlanVisibleText['enterAnimation']) {
+  return {
+    none: '无入场动画',
+    fade: '渐显',
+    slide_up_fade: '上移渐显',
+    pop: '弹出',
+    pulse: '脉冲',
+    sweep: '扫光',
+  }[animation ?? 'none']
+}
+
+function transitionLabel(type: NonNullable<V2PlanScenePresentation['transitionAfter']>['type']) {
+  return {
+    cut: '硬切',
+    fade: '淡化',
+    slide: '滑动',
+    wipe: '擦除',
+    light_flash: '闪光',
+  }[type]
 }

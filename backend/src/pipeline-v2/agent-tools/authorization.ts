@@ -7,14 +7,12 @@ import type { V2AgentToolAuthorizationGrant } from './dispatcher.js'
  */
 export function deliveryAuthorizationFromDirectorDecision(input: {
   prompt: string
-  executionEffect: 'none' | 'workspace_change' | 'draft_change' | 'delivery'
-  nextAction: string
-  conversationIntent?: 'chat' | 'create' | 'revise' | 'execute' | 'clarify'
+  intent?: 'chat' | 'create' | 'revise' | 'execute' | 'clarify'
+  requestsDelivery: boolean
 }): V2AgentToolAuthorizationGrant | undefined {
   if (
-    input.executionEffect !== 'delivery' ||
-    input.nextAction !== 'RENDER' ||
-    input.conversationIntent !== 'execute' ||
+    !input.requestsDelivery ||
+    input.intent !== 'execute' ||
     !input.prompt.trim()
   ) {
     return undefined

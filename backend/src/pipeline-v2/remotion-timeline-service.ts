@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
+import { env } from '../config/env.js'
 import {
   validateRemotionTimelineSpec,
   type RemotionTimelineValidationReport,
@@ -8,6 +9,7 @@ import {
 import { normalizeV2TimelineTextOwnership } from '../../../shared/lib/remotion-timeline-text-ownership.js'
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import { createConfiguredV2MaterialGenerationAdapter } from './configured-material-adapter.js'
+import type { V2MaterialGenerationAdapter } from './material-generation-adapter.js'
 import {
   resolveRemotionTimelineMaterialJobs,
   standardizeRemotionTimelineVideoAssets,
@@ -29,9 +31,11 @@ import {
   type V2TimelinePlanningReview,
 } from './remotion-timeline-review.js'
 import { createV2TraceWriter } from './trace.js'
+import type { V2TraceContext } from './trace.js'
 import type { V2PlannerInput } from './v2-input.js'
 import type { V2TimelineVisualInputReport } from './remotion-timeline-llm-planner.js'
 import { applyV2TimelineRevisionPreservation } from './timeline-revision-context.js'
+import { applyV2TimelineRevisionScope } from './timeline-revision-scope.js'
 import {
   reviewV2TimelineRevisionOutcome,
   V2TimelineRevisionOutcomeError,
@@ -63,6 +67,26 @@ export interface V2TimelineRunResult {
     metrics: Record<string, number>
     warnings: string[]
   }
+}
+
+export interface V2TimelineRunProgress {
+  phase: 'prepare' | 'material_generation' | 'standardize' | 'remotion_render' | 'complete'
+  progress: number
+  message: string
+  elapsedMs?: number
+  jobId?: string
+  sceneId?: string
+}
+
+export interface V2TimelineRunOptions {
+  onProgress?: (event: V2TimelineRunProgress) => void | Promise<void>
+  traceContext?: V2TraceContext
+  /** Internal test seam. HTTP and Director callers never bind this option. */
+  materialAdapter?: V2MaterialGenerationAdapter
+}
+
+export interface V2TimelinePreviewOptions {
+  traceContext?: V2TraceContext
 }
 
 function plannerInputFrom(input: V2PlannerInput & { imageSrc?: string }): V2RemotionTimelinePlannerInput {
@@ -136,6 +160,17 @@ async function resolveTimelineSpec(input: {
           llmPlanner.jsonRepair.responseAudit ?? { error: llmPlanner.jsonRepair.error ?? null })
       }
       {
+        if (input.plannerInput.revisionBaseSpec && input.plannerInput.revisionScope) {
+          llmPlanner = {
+            ...llmPlanner,
+            spec: applyV2TimelineRevisionScope({
+              baseSpec: input.plannerInput.revisionBaseSpec,
+              candidateSpec: llmPlanner.spec,
+              scope: input.plannerInput.revisionScope,
+            }),
+          }
+          await input.trace.writeJson('02-planning', 'timeline-scoped-candidate.json', llmPlanner.spec)
+        }
         let outcomeReview = await reviewV2TimelineRevisionOutcome({
           prompt: input.plannerInput.prompt,
           baseSpec: input.plannerInput.revisionBaseSpec,
@@ -162,6 +197,17 @@ async function resolveTimelineSpec(input: {
           )
           await input.trace.writeJson('02-planning', 'timeline-outcome-correction-model-response.audit.json', llmPlanner.initialResponseAudit)
           await input.trace.writeJson('02-planning', 'timeline-outcome-correction-json-candidate.audit.json', llmPlanner.rawResponse)
+          if (input.plannerInput.revisionBaseSpec && input.plannerInput.revisionScope) {
+            llmPlanner = {
+              ...llmPlanner,
+              spec: applyV2TimelineRevisionScope({
+                baseSpec: input.plannerInput.revisionBaseSpec,
+                candidateSpec: llmPlanner.spec,
+                scope: input.plannerInput.revisionScope,
+              }),
+            }
+            await input.trace.writeJson('02-planning', 'timeline-outcome-correction-scoped-candidate.json', llmPlanner.spec)
+          }
           outcomeReview = await reviewV2TimelineRevisionOutcome({
             prompt: input.plannerInput.prompt,
             baseSpec: input.plannerInput.revisionBaseSpec,
@@ -221,8 +267,13 @@ async function resolveTimelineSpec(input: {
 
 export async function previewV2RemotionTimeline(
   input: V2PlannerInput & { imageSrc?: string },
+  options: V2TimelinePreviewOptions = {},
 ): Promise<V2TimelinePreviewResult> {
-  const trace = createV2TraceWriter({ taskId: input.taskId })
+  const trace = createV2TraceWriter({
+    taskId: input.taskId,
+    sessionId: options.traceContext?.sessionId,
+    operationId: options.traceContext?.operationId,
+  })
   await trace.writeJson('01-input', 'timeline-planner-input.json', traceablePlannerInput(input))
   const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
   await trace.writeJson('01-input', 'timeline-hard-requirements.json', hardRequirements)
@@ -287,6 +338,14 @@ export async function previewV2RemotionTimeline(
     '',
     '本步骤只规划并审查 V2 时间线：待生成的 AI 视频会保留预览兜底，尚不生成素材，也不渲染成片。',
   ])
+  await trace.appendSessionEvent({
+    type: 'timeline_preview_completed',
+    planner_source: resolved.plannerSource,
+    scene_count: spec.scenes.length,
+    planned_ai_video_scene_count: review.metrics.planned_ai_video_scene_count,
+    validation_ok: validation.ok,
+    artifact_dir: trace.rootDir,
+  })
   return {
     taskId: input.taskId,
     plannerSource: resolved.plannerSource,
@@ -299,13 +358,27 @@ export async function previewV2RemotionTimeline(
 
 export async function runV2RemotionTimeline(
   input: V2PlannerInput & { imageSrc?: string; timelineSpecOverride?: unknown },
+  options: V2TimelineRunOptions = {},
 ): Promise<V2TimelineRunResult> {
+  const startedAt = Date.now()
   const trace = createV2TraceWriter({
     taskId: input.timelineSpecOverride
       ? `${input.taskId}__run_${Date.now()}`
       : input.taskId,
+    sessionId: options.traceContext?.sessionId,
+    operationId: options.traceContext?.operationId,
   })
+  const reportProgress = async (event: V2TimelineRunProgress) => {
+    const progressEvent = { ...event, elapsedMs: Date.now() - startedAt }
+    await trace.appendSessionEvent({
+      type: 'render_progress',
+      ...progressEvent,
+      artifact_dir: trace.rootDir,
+    })
+    await options.onProgress?.(progressEvent)
+  }
   await trace.writeJson('01-input', 'timeline-planner-input.json', traceablePlannerInput(input))
+  await reportProgress({ phase: 'prepare', progress: 5, message: '正在读取并校验当前 V2 草稿。' })
   const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
   await trace.writeJson('01-input', 'timeline-hard-requirements.json', hardRequirements)
   const outputRoot = outputRootFor(input.taskId)
@@ -360,17 +433,47 @@ export async function runV2RemotionTimeline(
   if (!validation.ok) {
     throw new Error(`RemotionTimelineSpec validation failed: ${JSON.stringify(validation.issues, null, 2)}`)
   }
+  await reportProgress({
+    phase: 'prepare',
+    progress: 10,
+    message: resolved.plannerSource === 'override'
+      ? '已读取当前草稿；本次渲染不会重新规划方案。'
+      : 'V2 时间线规划与校验已完成。',
+  })
 
   const materialResolution = await resolveRemotionTimelineMaterialJobs({
     spec,
-    adapter: createConfiguredV2MaterialGenerationAdapter({ outputDir: outputRoot }),
+    adapter: options.materialAdapter
+      ?? createConfiguredV2MaterialGenerationAdapter({ outputDir: outputRoot }),
     outputDir: outputRoot,
+    maxConcurrency: env.v2MaterialGenerationConcurrency,
+    onProgress: async (event) => {
+      const fraction = event.total > 0 ? event.completed / event.total : 1
+      await reportProgress({
+        phase: 'material_generation',
+        progress: Math.round(10 + fraction * 70),
+        message: event.status === 'started'
+          ? `正在生成镜头素材：${event.sceneId}`
+          : `镜头素材 ${event.sceneId}：${event.status}`,
+        jobId: event.jobId,
+        sceneId: event.sceneId,
+      })
+    },
   })
   await trace.writeJson('03-material-jobs', 'timeline-material-resolution.json', materialResolution.report)
+  await trace.writeJson('03-material-jobs', 'delivery-readiness.json', materialResolution.report.delivery_readiness)
   if (!materialResolution.report.ok) {
     throw new Error(`Timeline material resolution failed: ${JSON.stringify(materialResolution.report.failed_jobs, null, 2)}`)
   }
+  if (!materialResolution.report.delivery_readiness.ready) {
+    throw new Error(
+      `Timeline delivery is incomplete; generated scenes are missing: ${
+        materialResolution.report.delivery_readiness.missing_generated_scene_ids.join(', ')
+      }`,
+    )
+  }
 
+  await reportProgress({ phase: 'standardize', progress: 85, message: '正在标准化已生成的视频素材。' })
   const standardized = await standardizeRemotionTimelineVideoAssets({
     spec: materialResolution.spec,
     outputDir: outputRoot,
@@ -383,6 +486,7 @@ export async function runV2RemotionTimeline(
     throw new Error(`Renderable timeline validation failed: ${JSON.stringify(renderValidation.issues, null, 2)}`)
   }
 
+  await reportProgress({ phase: 'remotion_render', progress: 92, message: '素材已齐备，正在由 Remotion 编排并渲染。' })
   const render = await renderV2RemotionTimeline({
     spec: standardized.spec,
     outputDir: outputRoot,
@@ -402,10 +506,21 @@ export async function runV2RemotionTimeline(
       transition_count: standardized.spec.transitions.length,
       overlay_count: standardized.spec.overlays.length,
       standardized_video_asset_count: standardized.standardized_assets.length,
+      planned_generated_scene_count: materialResolution.report.delivery_readiness.planned_generated_scene_count,
+      resolved_generated_scene_count: materialResolution.report.delivery_readiness.resolved_generated_scene_count,
+      fallback_scene_count: materialResolution.report.delivery_readiness.fallback_scene_count,
     },
     warnings,
   }
   await trace.writeJson('07-evaluation', 'timeline-evaluation.json', evaluation)
+  await reportProgress({ phase: 'complete', progress: 100, message: 'V2 视频渲染已完成。' })
+  await trace.appendSessionEvent({
+    type: 'render_completed',
+    ok: evaluation.ok,
+    output_path: render.outputPath,
+    material_delivery: materialResolution.report.delivery_readiness,
+    artifact_dir: trace.rootDir,
+  })
   await trace.writeSummary([
     '# V2 时间线渲染',
     '',
