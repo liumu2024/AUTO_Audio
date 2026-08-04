@@ -84,6 +84,7 @@
 - `GET /health`：后端健康检查。
 - `POST /api/uploads`：上传素材，支持本地访问 URL、公共 URL 发布和重复文件 hash 识别。
 - `POST /api/director/chat`：导演智能体对话入口。
+- `GET/POST /api/creative-memories`、`GET /api/creative-memories/search`、`PATCH/DELETE /api/creative-memories/:memoryId`：创作偏好记忆的查询、新增、检索、修改与删除。
 - `POST /api/v2/sample/analyze`：V2 样例视频理解。
 - `POST /api/v2/timeline/preview`：V2 时间线方案预览，只规划和校验，不渲染。
 - `POST /api/v2/timeline/run`：V2 时间线执行，包含素材生成、标准化、Remotion 渲染和基础评估。
@@ -95,6 +96,7 @@
 后端主要模块：
 
 - `modules/director-agent/`：导演对话智能体，包括 LLM 意图路由、硬保护和控制器。
+- `modules/creative-memory/`：创作偏好记忆的持久化、关键词检索、批量动作应用与管理接口（user/draft 作用域、active/candidate/revoked 状态、来源会话与轮次溯源）。
 - `modules/upload/`：上传、本地保存、去重、公共素材发布。
 - `modules/video-understanding/`：旧版视频理解能力。
 - `modules/sample-understanding/`：旧版样例理解相关 prompt 和分层规则。

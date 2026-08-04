@@ -1,0 +1,17 @@
+{
+  "version": "v2-creative-memory-decisions.v1",
+  "domains": [
+    { "id": "color", "split": "dev", "user": "长期画面偏好中性低饱和色调", "userFact": "中性低饱和", "draft": "当前草稿只使用蓝灰色点缀", "draftFact": "蓝灰色", "candidate": "这次也许可以试试少量暖色高光", "candidateFact": "暖色高光" },
+    { "id": "caption", "split": "dev", "user": "长期字幕偏好只保留关键信息", "userFact": "关键信息", "draft": "当前草稿字幕最多两行", "draftFact": "最多两行", "candidate": "这次也许可以试试逐字高亮", "candidateFact": "逐字高亮" },
+    { "id": "narration", "split": "dev", "user": "长期旁白偏好中性沉稳的女声", "userFact": "中性沉稳", "draft": "当前草稿旁白不使用夸张语气", "draftFact": "夸张语气", "candidate": "这次也许可以试试更年轻的声音", "candidateFact": "年轻的声音" },
+    { "id": "transition", "split": "dev", "user": "长期转场偏好克制自然", "userFact": "克制自然", "draft": "当前草稿禁止快速闪烁转场", "draftFact": "快速闪烁", "candidate": "这次也许可以试试一次擦除转场", "candidateFact": "擦除转场" },
+    { "id": "pacing", "split": "dev", "user": "长期剪辑节奏偏好前快后稳", "userFact": "前快后稳", "draft": "当前草稿前三秒必须快速进入主题", "draftFact": "前三秒", "candidate": "这次也许可以试试结尾放慢两秒", "candidateFact": "放慢两秒" },
+    { "id": "typography", "split": "dev", "user": "长期字体偏好简洁无衬线体", "userFact": "无衬线", "draft": "当前草稿标题使用白色粗体", "draftFact": "白色粗体", "candidate": "这次也许可以试试一处手写体", "candidateFact": "手写体" },
+    { "id": "brand_voice", "split": "dev", "user": "长期品牌表达偏好可靠但不冰冷", "userFact": "可靠但不冰冷", "draft": "当前草稿避免恐吓式文案", "draftFact": "恐吓式", "candidate": "这次也许可以试试一句轻松幽默的表达", "candidateFact": "轻松幽默" },
+    { "id": "music", "split": "dev", "user": "长期配乐偏好轻柔原声乐器", "userFact": "原声乐器", "draft": "当前草稿背景音乐不能盖过旁白", "draftFact": "盖过旁白", "candidate": "这次也许可以试试木吉他节奏", "candidateFact": "木吉他" },
+    { "id": "shots", "split": "holdout", "user": "长期镜头偏好真实生活化场景", "userFact": "生活化场景", "draft": "当前草稿避免夸张广角镜头", "draftFact": "夸张广角", "candidate": "这次也许可以试试一个俯拍镜头", "candidateFact": "俯拍镜头" },
+    { "id": "cta", "split": "holdout", "user": "长期行动号召偏好一句自然短句", "userFact": "自然短句", "draft": "当前草稿结尾不展示价格", "draftFact": "不展示价格", "candidate": "这次也许可以试试口播行动号召", "candidateFact": "口播行动号召" },
+    { "id": "material", "split": "holdout", "user": "长期素材偏好优先使用真实产品画面", "userFact": "真实产品画面", "draft": "当前草稿必须使用用户上传的门锁素材", "draftFact": "用户上传", "candidate": "这次也许可以试试一段抽象光影素材", "candidateFact": "抽象光影" },
+    { "id": "structure", "split": "holdout", "user": "长期结构偏好先呈现场景再说明功能", "userFact": "先呈现场景", "draft": "当前草稿最后三秒用于品牌收束", "draftFact": "最后三秒", "candidate": "这次也许可以试试开头直接展示产品", "candidateFact": "直接展示产品" }
+  ]
+}

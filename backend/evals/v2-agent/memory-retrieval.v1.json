@@ -1,0 +1,30 @@
+{
+  "version": "v2-creative-memory-retrieval.v1",
+  "drafts": ["draft_memory_alpha", "draft_memory_beta"],
+  "memories": [
+    { "key": "neutral_color", "scopeType": "user", "status": "active", "statement": "画面整体偏好中性低饱和色调" },
+    { "key": "warm_color", "scopeType": "user", "status": "revoked", "statement": "画面整体使用温暖高饱和色调" },
+    { "key": "reliable_voice", "scopeType": "user", "status": "active", "statement": "品牌表达可靠但不冰冷" },
+    { "key": "restrained_transition", "scopeType": "user", "status": "active", "statement": "转场保持克制，避免快速闪烁" },
+    { "key": "simple_card", "scopeType": "user", "status": "active", "statement": "文字卡片保持简洁留白" },
+    { "key": "alpha_caption", "scopeType": "draft", "draftId": "draft_memory_alpha", "status": "active", "statement": "字幕只保留关键信息" },
+    { "key": "alpha_narration", "scopeType": "draft", "draftId": "draft_memory_alpha", "status": "active", "statement": "旁白使用中性沉稳的女声" },
+    { "key": "beta_caption", "scopeType": "draft", "draftId": "draft_memory_beta", "status": "active", "statement": "字幕逐字高亮并使用亮黄色" },
+    { "key": "beta_transition", "scopeType": "draft", "draftId": "draft_memory_beta", "status": "active", "statement": "每个镜头使用快速闪烁转场" },
+    { "key": "candidate_music", "scopeType": "user", "status": "candidate", "statement": "背景音乐可能偏好轻柔木吉他" },
+    { "key": "candidate_pacing", "scopeType": "user", "status": "candidate", "statement": "剪辑节奏可能偏好前快后稳" },
+    { "key": "candidate_alpha_cta", "scopeType": "draft", "draftId": "draft_memory_alpha", "status": "candidate", "statement": "结尾行动号召可能保持一句短句" },
+    { "key": "candidate_beta_cta", "scopeType": "draft", "draftId": "draft_memory_beta", "status": "candidate", "statement": "结尾行动号召可能使用连续两句" }
+  ],
+  "queries": [
+    { "id": "color", "draftId": "draft_memory_alpha", "query": "低饱和色调画面如何延续", "activeRelevant": { "neutral_color": 3 } },
+    { "id": "caption", "draftId": "draft_memory_alpha", "query": "字幕信息如何保持精简", "activeRelevant": { "alpha_caption": 3 }, "forbiddenKeys": ["beta_caption"] },
+    { "id": "voice", "draftId": "draft_memory_alpha", "query": "品牌表达要可靠，旁白使用中性沉稳女声", "activeRelevant": { "reliable_voice": 3, "alpha_narration": 2 } },
+    { "id": "transition", "draftId": "draft_memory_alpha", "query": "这版镜头转场不要闪烁，保持克制", "activeRelevant": { "restrained_transition": 3 }, "forbiddenKeys": ["beta_transition"] },
+    { "id": "music", "draftId": "draft_memory_alpha", "query": "背景音乐是否考虑轻柔木吉他", "candidateRelevant": ["candidate_music"] },
+    { "id": "pacing", "draftId": "draft_memory_alpha", "query": "剪辑节奏先快一些再稳定下来", "candidateRelevant": ["candidate_pacing"] },
+    { "id": "cta", "draftId": "draft_memory_alpha", "query": "结尾行动号召用一句短句是否合适", "candidateRelevant": ["candidate_alpha_cta"], "forbiddenKeys": ["candidate_beta_cta"] },
+    { "id": "short_phrase", "draftId": "draft_memory_alpha", "query": "创建一版文字卡片草稿", "activeRelevant": { "simple_card": 3 } },
+    { "id": "unrelated", "draftId": "draft_memory_alpha", "query": "今天天气怎么样", "activeRelevant": {} }
+  ]
+}

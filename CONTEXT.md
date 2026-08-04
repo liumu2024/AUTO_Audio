@@ -19,3 +19,6 @@
 - **Timeline action**: A Director instruction to generate, revise, validate, or render a V2 Timeline. It is distinct from legacy RenderPlan actions.
 - **Scene creative intent**: Editor-only explanation of a shot's narrative role, visual treatment, and material usage. It is never on-screen copy.
 - **On-screen copy**: Text intentionally visible in the finished video. For image/video scenes it exists only in `overlays[].text`; scene title/subtitle/body are reserved for text/card scenes.
+- **Creative memory**: A persisted creative preference in `creative_memories`, scoped to a user or a V2 draft, with `active` / `candidate` / `revoked` states and an explicit/inferred origin; it reaches planning only as a labeled suggestion, never as an invisible rule.
+- **Memory candidate**: A pending-confirmation creative preference that does not control creation until the user adopts it.
+- **Confirmed requirement**: A workspace-session requirement ledger entry (`confirmedRequirements`) that stays valid until a later turn replaces or revokes it; it outranks recalled memories but not the current user input.

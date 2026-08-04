@@ -12,7 +12,7 @@
 - Tool 异常被收敛为结构化失败，不中断会话状态保存。
 - 正式交付授权来自本轮模型的结构化执行决定，不依赖原文字符串匹配。
 
-对应可重复测试：`smoke-v2-agent-tool-skill-registry`、`smoke-v2-director-tool-feedback`、`smoke-v2-director-skill-tool-loop`、`smoke-v2-director-session-lifecycle`。
+对应可重复测试：`smoke-v2-agent-tool-skill-registry`、`smoke-v2-director-skill-tool-loop`、`smoke-v2-director-session-lifecycle`。
 
 ## 1. 局部时间线修订
 
@@ -51,6 +51,8 @@
 同一段字幕的音频起止与字幕段误差受控；BGM ducking 不压低旁白可懂度；生成片内声音、项目 BGM 和旁白在预览中可辨识。
 
 ## 3. 长期创作记忆与检索
+
+状态：第一阶段（可控写入、关键词检索、用户可见管理页、确认要求台账）已于 2026-08-04 完成并纳入正式回归；向量/混合检索、语义重排、自动冲突消解与跨项目候选聚合仍延后。
 
 ### 先做可控写入
 
