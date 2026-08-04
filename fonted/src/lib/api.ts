@@ -73,8 +73,26 @@ export type DirectorAgentStreamEvent =
       hash: string
       dependency: boolean
     }
-  | { type: 'tool_proposed'; callId: string; toolId: string; requestedMode: 'preview' | 'execute' }
+  | {
+      type: 'tool_proposed'
+      callId: string
+      toolId: string
+      requestedMode: 'preview' | 'execute'
+      effectiveMode: 'preview' | 'execute'
+      modeNormalized: boolean
+    }
   | { type: 'tool_started'; callId: string; toolId: string }
+  | {
+      type: 'tool_progress'
+      callId: string
+      toolId: string
+      phase: string
+      progress: number
+      message: string
+      elapsedMs?: number
+      jobId?: string
+      sceneId?: string
+    }
   | {
       type: 'tool_result'
       callId: string
@@ -114,6 +132,7 @@ export interface DirectorAgentChatPayload {
   context: DirectorContext
   runtime: DirectorConversationRuntime
   workspaceSessionId?: string
+  turnRequestId?: string
 }
 
 export interface DirectorWorkspaceSessionResponse {
@@ -239,6 +258,12 @@ export interface V2TimelineDraftHistoryDto {
   draftId: string
   revision: number
   creationMode: 'sample_replicate' | 'material_brief' | 'text_to_video'
+  title?: string
+  summary?: string
+  aspectRatio?: '9:16' | '16:9' | '1:1' | '4:3'
+  durationSec?: number
+  sceneCount?: number
+  visibleTextCount?: number
   plannerSource?: string
   traceDir?: string
   createdAt: string
@@ -289,6 +314,46 @@ export interface V2TimelineDraftRunResult {
   evaluation: V2TimelineRunResult['evaluation']
 }
 
+export interface CreativeMemoryDto {
+  id: string
+  userId: number
+  scopeType: 'user' | 'draft'
+  draftId?: string
+  statement: string
+  status: 'active' | 'candidate' | 'revoked'
+  origin: 'explicit' | 'inferred'
+  sourceWorkspaceSessionId?: string
+  sourceTurnIds: string[]
+  sourceExcerpt?: string
+  createdAt: string
+  updatedAt: string
+  revokedAt?: string
+}
+
+export interface CreativeMemorySearchResult {
+  active: Array<{
+    memory: CreativeMemoryDto
+    score: number
+    matchedTerms: string[]
+    rank: number
+  }>
+  candidate: Array<{
+    memory: CreativeMemoryDto
+    score: number
+    matchedTerms: string[]
+    rank: number
+  }>
+  audit: Array<{
+    memoryId: string
+    status: CreativeMemoryDto['status']
+    score: number
+    matchedTerms: string[]
+    rank?: number
+    selected: boolean
+    reason: 'selected' | 'below_threshold' | 'top_k_cutoff' | 'scope_filtered' | 'status_filtered'
+  }>
+}
+
 async function request<T>(
   path: string,
   init?: RequestInit,
@@ -312,6 +377,63 @@ async function request<T>(
 
 export async function healthCheck(): Promise<{ ok: boolean }> {
   return request('/health')
+}
+
+export async function listCreativeMemories(input: {
+  draftId?: string
+  scopeType?: CreativeMemoryDto['scopeType']
+  status?: CreativeMemoryDto['status']
+} = {}) {
+  const query = new URLSearchParams()
+  if (input.draftId) query.set('draftId', input.draftId)
+  if (input.scopeType) query.set('scopeType', input.scopeType)
+  if (input.status) query.set('status', input.status)
+  return request<{ memories: CreativeMemoryDto[] }>(
+    `/api/creative-memories${query.size ? `?${query}` : ''}`,
+  )
+}
+
+export async function searchCreativeMemories(input: {
+  draftId?: string
+  query: string
+  activeLimit?: number
+  candidateLimit?: number
+}) {
+  const query = new URLSearchParams()
+  if (input.draftId) query.set('draftId', input.draftId)
+  query.set('q', input.query)
+  if (input.activeLimit) query.set('activeLimit', String(input.activeLimit))
+  if (input.candidateLimit) query.set('candidateLimit', String(input.candidateLimit))
+  return request<CreativeMemorySearchResult>(`/api/creative-memories/search?${query}`)
+}
+
+export async function createCreativeMemory(input: {
+  scopeType: CreativeMemoryDto['scopeType']
+  draftId?: string
+  statement: string
+}) {
+  return request<{ memory: CreativeMemoryDto }>('/api/creative-memories', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function updateCreativeMemory(input: {
+  id: string
+  statement?: string
+  status?: CreativeMemoryDto['status']
+}) {
+  return request<{ memory: CreativeMemoryDto }>(
+    `/api/creative-memories/${encodeURIComponent(input.id)}`,
+    { method: 'PATCH', body: JSON.stringify({ statement: input.statement, status: input.status }) },
+  )
+}
+
+export async function deleteCreativeMemory(id: string) {
+  return request<{ deleted: true }>(
+    `/api/creative-memories/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  )
 }
 
 export async function previewV2Timeline(payload: V2TimelinePayload) {

@@ -21,6 +21,7 @@ model User {
   materials UserMaterial[]
   tasks     ReplicationTask[]
   v2TimelineDrafts V2TimelineDraft[]
+  creativeMemories CreativeMemory[]
 
   @@map("users")
 }
@@ -77,6 +78,7 @@ model V2TimelineDraft {
   user       User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   revisions  V2TimelineRevision[]
   renderRuns V2TimelineRenderRun[]
+  creativeMemories CreativeMemory[]
 
   @@index([userId])
   @@map("v2_timeline_drafts")
@@ -119,4 +121,27 @@ model V2TimelineRenderRun {
 
   @@index([draftId, createdAt])
   @@map("v2_timeline_render_runs")
+}
+
+model CreativeMemory {
+  id                       String   @id
+  userId                   Int      @map("user_id")
+  scopeType                String   @map("scope_type")
+  draftId                  String?  @map("draft_id")
+  statement                String
+  status                   String
+  origin                   String
+  sourceWorkspaceSessionId String?  @map("source_workspace_session_id")
+  sourceTurnIdsJson        Json     @map("source_turn_ids_json")
+  sourceExcerpt            String?  @map("source_excerpt")
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+  revokedAt                DateTime? @map("revoked_at")
+
+  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  draft V2TimelineDraft? @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([draftId, status])
+  @@map("creative_memories")
 }

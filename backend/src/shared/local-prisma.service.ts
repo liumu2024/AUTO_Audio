@@ -75,6 +75,22 @@ interface LocalV2TimelineRenderRun {
   completedAt: string | null
 }
 
+interface LocalCreativeMemory {
+  id: string
+  userId: number
+  scopeType: 'user' | 'draft'
+  draftId: string | null
+  statement: string
+  status: 'active' | 'candidate' | 'revoked'
+  origin: 'explicit' | 'inferred'
+  sourceWorkspaceSessionId: string | null
+  sourceTurnIdsJson: unknown
+  sourceExcerpt: string | null
+  createdAt: string
+  updatedAt: string
+  revokedAt: string | null
+}
+
 interface LocalDbState {
   users: LocalUser[]
   userMaterials: LocalUserMaterial[]
@@ -82,6 +98,7 @@ interface LocalDbState {
   v2TimelineDrafts: LocalV2TimelineDraft[]
   v2TimelineRevisions: LocalV2TimelineRevision[]
   v2TimelineRenderRuns: LocalV2TimelineRenderRun[]
+  creativeMemories: LocalCreativeMemory[]
 }
 
 function localDataDir(): string {
@@ -112,6 +129,7 @@ function defaultState(): LocalDbState {
     v2TimelineDrafts: [],
     v2TimelineRevisions: [],
     v2TimelineRenderRuns: [],
+    creativeMemories: [],
   }
 }
 
@@ -130,6 +148,7 @@ function loadState(): LocalDbState {
     v2TimelineDrafts: saved.v2TimelineDrafts ?? [],
     v2TimelineRevisions: saved.v2TimelineRevisions ?? [],
     v2TimelineRenderRuns: saved.v2TimelineRenderRuns ?? [],
+    creativeMemories: saved.creativeMemories ?? [],
   }
 }
 
@@ -185,6 +204,15 @@ function v2RenderRunOut(run: LocalV2TimelineRenderRun): Record<string, unknown> 
     ...clone(run),
     createdAt: new Date(run.createdAt),
     completedAt: ensureDate(run.completedAt),
+  }
+}
+
+function creativeMemoryOut(memory: LocalCreativeMemory): Record<string, unknown> {
+  return {
+    ...clone(memory),
+    createdAt: new Date(memory.createdAt),
+    updatedAt: new Date(memory.updatedAt),
+    revokedAt: ensureDate(memory.revokedAt),
   }
 }
 
@@ -471,6 +499,9 @@ function makeLocalPrisma() {
           state.v2TimelineRenderRuns = state.v2TimelineRenderRuns.filter(
             (run) => !deletedIds.has(run.draftId),
           )
+          state.creativeMemories = state.creativeMemories.filter(
+            (memory) => !memory.draftId || !deletedIds.has(memory.draftId),
+          )
           return { count: deletedIds.size }
         }),
     },
@@ -504,6 +535,89 @@ function makeLocalPrisma() {
         )
         return revision ? v2RevisionOut(revision) : null
       },
+    },
+    creativeMemory: {
+      create: async (args: { data: Partial<LocalCreativeMemory> }) =>
+        write(() => {
+          const now = new Date().toISOString()
+          const memory: LocalCreativeMemory = {
+            id: String(args.data.id),
+            userId: Number(args.data.userId),
+            scopeType: args.data.scopeType === 'draft' ? 'draft' : 'user',
+            draftId: (args.data.draftId as string | null | undefined) ?? null,
+            statement: String(args.data.statement),
+            status: (args.data.status as LocalCreativeMemory['status']) ?? 'active',
+            origin: (args.data.origin as LocalCreativeMemory['origin']) ?? 'explicit',
+            sourceWorkspaceSessionId:
+              (args.data.sourceWorkspaceSessionId as string | null | undefined) ?? null,
+            sourceTurnIdsJson: args.data.sourceTurnIdsJson ?? [],
+            sourceExcerpt: (args.data.sourceExcerpt as string | null | undefined) ?? null,
+            createdAt: now,
+            updatedAt: now,
+            revokedAt: null,
+          }
+          state.creativeMemories.push(memory)
+          return creativeMemoryOut(memory)
+        }),
+      findMany: async (args: {
+        where?: Record<string, unknown>
+        orderBy?: Record<string, 'asc' | 'desc'>
+        take?: number
+      }) => {
+        const memories = state.creativeMemories.filter((memory) =>
+          Object.entries(args.where ?? {}).every(
+            ([key, value]) => memory[key as keyof LocalCreativeMemory] === value,
+          ),
+        )
+        const [field, direction] = Object.entries(args.orderBy ?? {})[0] ?? []
+        if (field) {
+          const factor = direction === 'asc' ? 1 : -1
+          memories.sort((left, right) =>
+            String(left[field as keyof LocalCreativeMemory] ?? '').localeCompare(
+              String(right[field as keyof LocalCreativeMemory] ?? ''),
+            ) * factor,
+          )
+        }
+        return memories.slice(0, args.take ?? undefined).map(creativeMemoryOut)
+      },
+      findFirst: async (args: { where?: Record<string, unknown> }) => {
+        const memory = state.creativeMemories.find((item) =>
+          Object.entries(args.where ?? {}).every(
+            ([key, value]) => item[key as keyof LocalCreativeMemory] === value,
+          ),
+        )
+        return memory ? creativeMemoryOut(memory) : null
+      },
+      updateMany: async (args: {
+        where: Record<string, unknown>
+        data: Partial<LocalCreativeMemory>
+      }) =>
+        write(() => {
+          let count = 0
+          for (const memory of state.creativeMemories) {
+            if (!Object.entries(args.where).every(
+              ([key, value]) => memory[key as keyof LocalCreativeMemory] === value,
+            )) continue
+            const rawRevokedAt = (args.data as unknown as Record<string, unknown>).revokedAt
+            const data = clone(args.data) as Partial<LocalCreativeMemory>
+            Object.assign(memory, data, { updatedAt: new Date().toISOString() })
+            if (rawRevokedAt instanceof Date) {
+              memory.revokedAt = rawRevokedAt.toISOString()
+            }
+            count += 1
+          }
+          return { count }
+        }),
+      deleteMany: async (args: { where: Record<string, unknown> }) =>
+        write(() => {
+          const before = state.creativeMemories.length
+          state.creativeMemories = state.creativeMemories.filter((memory) =>
+            !Object.entries(args.where).every(
+              ([key, value]) => memory[key as keyof LocalCreativeMemory] === value,
+            ),
+          )
+          return { count: before - state.creativeMemories.length }
+        }),
     },
     v2TimelineRenderRun: {
       create: async (args: { data: Partial<LocalV2TimelineRenderRun> }) =>
