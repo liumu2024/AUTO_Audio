@@ -84,7 +84,7 @@ generate_video job
 ## Trace 顺序
 
 ```text
-backend/tmp/v2-agent-trace/<taskId>/
+backend/tmp/v2-traces/tasks/<taskId>/
   00-summary/summary.zh.md
   01-input/timeline-planner-input.json
   02-planning/timeline-spec.json

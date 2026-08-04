@@ -97,7 +97,7 @@ preview/run results directly and writes local task-store logs.
 5. The user revises or confirms the plan.
 6. `POST /api/v2/timeline/run` resolves material jobs, optionally calls the
    video model, normalizes media, and renders MP4.
-7. V2 trace is written under `backend/tmp/v2-agent-trace/<taskId>/`.
+7. V2 trace is written under `backend/tmp/v2-traces/tasks/<taskId>/` (director sessions use `sessions/<workspace>/operations/<operation>/`).
 
 ## Quick Checks
 

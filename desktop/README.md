@@ -23,7 +23,7 @@ npm.cmd run desktop:dev
 2. Open Electron.
 3. Let Electron start the backend API and Vite frontend with matching local
    ports.
-4. Let the backend run analyzer and generator jobs in-process.
+4. Let the backend run in-process with local JSON persistence.
 
 The local desktop database is a JSON file under Electron's user data directory.
 Keep real Ark keys in `backend/.env`; the desktop launcher reuses the same

@@ -268,7 +268,7 @@ DIRECTOR_AGENT_RESPONSE_CONTINUITY=true
 默认 V2 Trace 位于：
 
 ```text
-backend/tmp/v2-agent-trace/
+backend/tmp/v2-traces/
   sessions/<workspace-session-id>/
     session.json
     events.jsonl

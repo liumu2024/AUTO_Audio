@@ -22,7 +22,7 @@ shared library code. There is no standalone generated-video sample result.
 | --- | --- |
 | backend smoke scripts | Build render plans and test Remotion paths |
 | frontend test fixtures | Validate stores, timeline derivation, and editor sync |
-| local analyzer fallback | Development-only structure fixture |
+| local fixture store | Development-only structure fixture |
 
 ## Editing Guidelines
 

@@ -38,7 +38,6 @@ flowchart TB
 | `backend/src/app.ts` | Express API entry |
 | `backend/src/pipeline-v2/` | V2 timeline planning, validation, material generation, standardization, rendering, trace |
 | `backend/src/modules/upload/` | Local uploads and optional public asset publishing |
-| `backend/src/modules/video-task/` | Historical task list/detail/cancel compatibility APIs |
 | `fonted/src/` | React editor UI |
 | `shared/types/` | Shared protocol types |
 | `shared/lib/` | Adapters and derivation helpers |

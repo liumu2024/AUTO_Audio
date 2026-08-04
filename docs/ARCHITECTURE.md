@@ -75,7 +75,7 @@ the storage adapter.
 | Users/tasks/material rows | local JSON adapter | PostgreSQL/Prisma |
 | Uploaded files | `backend/uploads/` | `backend/uploads/` or deployment storage |
 | Rendered MP4 | `backend/v2-renders/` | `backend/v2-renders/` or deployment storage |
-| Runtime trace | `backend/tmp/v2-agent-trace/<taskId>/` | configured V2 trace root |
+| Runtime trace | `backend/tmp/v2-traces/tasks/<taskId>/` or `sessions/<workspace>/operations/<operation>/` | configured V2 trace root |
 
 Runtime trace contains compact phase folders for input, planning, review,
 material jobs, standardized assets, render props, Remotion logs, and evaluation.

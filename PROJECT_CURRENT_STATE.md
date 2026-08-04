@@ -11,7 +11,7 @@
 - V2 的核心协议是 `shared/types/remotion-timeline-spec.v1.ts` 中的 `RemotionTimelineSpecV1`。
 - V2 导演正式执行入口是后端 `modules/director-agent/director-agent.service.ts`，Tool/Skill 权威目录与调度位于 `backend/src/pipeline-v2/agent-tools/`、`agent-skills/`；前端只发送输入、展示事件并同步服务端草稿快照。
 - V2 的后端 API 是 `/api/v2/sample/analyze`、`/api/v2/timeline/preview`、`/api/v2/timeline/run`。
-- V2 的 trace 在 `backend/tmp/v2-agent-trace/<taskId>`，不要把旧的 `backend/tmp/agent-trace` 当成主线证据。
+- V2 的 trace 在 `backend/tmp/v2-traces/`：导演会话走 `sessions/<workspace>/operations/<operation>/`，独立调用走 `tasks/<taskId>/`；不要把旧的 `backend/tmp/agent-trace` 当成主线证据。
 - V2 支持三条分支：有样例视频的 `sample_replicate`、无样例但有素材的 `material_brief`、纯文字的 `text_to_video`。
 - 不要把“生成视频”重新绑定成“必须先上传样例视频”。
 - 不要把“纯文字生成”误判成缺素材；如果外部视频模型不支持纯文生视频，应在能力层说明，而不是要求用户补样例。
@@ -91,17 +91,12 @@
 - `/uploads`：本地上传素材静态访问。
 - `/renders`：旧渲染结果静态访问。
 - `/v2-renders`：V2 渲染结果静态访问。
-- WebSocket：`/ws/tasks?taskId=<id>`，用于任务进度和状态推送。
 
 后端主要模块：
 
 - `modules/director-agent/`：导演对话智能体，包括 LLM 意图路由、硬保护和控制器。
 - `modules/creative-memory/`：创作偏好记忆的持久化、关键词检索、批量动作应用与管理接口（user/draft 作用域、active/candidate/revoked 状态、来源会话与轮次溯源）。
 - `modules/upload/`：上传、本地保存、去重、公共素材发布。
-- `modules/video-understanding/`：旧版视频理解能力。
-- `modules/sample-understanding/`：旧版样例理解相关 prompt 和分层规则。
-- `modules/generator/`、`modules/render-engine/`、`modules/render-plan/`：V1/legacy 生成和渲染链路。
-- `modules/effect-roadmap/`、`modules/remotion-component-authoring/`：早期组件能力、效果路线图、组件生成相关模块。
 - `pipeline-v2/`：当前重点 V2 链路。
 
 ## 4. V2 主链路
@@ -180,8 +175,8 @@ V2 run 链路：
 
 - `components/sidebar/DirectorChatPanel.tsx`：导演聊天面板。
 - `components/sidebar/ChatInput.tsx`：输入框、附件、画幅等控制项。
-- `components/shell/V2TimelineView.tsx`：V2 timeline 方案展示和执行入口。
-- `services/director/directorActionExecutor.ts`：旧前端 action 兼容入口，不是 V2 Director Tool 的权威执行器。
+- `components/canvas/MigrationCanvas.tsx`、`GeneratedPlayer.tsx`：V2 方案画布与播放器（沿用迁移期命名）。
+- `services/director/v2DirectorDraftWorkspace.ts`：V2 草稿激活桥接，把持久化 spec 打开到时间线工作区。
 - `services/director/v2DirectorTimeline.ts`：前端组装 V2 API payload、上传 blob、同步工作台状态。
 - `lib/api.ts`：前端 HTTP API 封装。
 - `stores/directorChatStore.ts`：对话消息状态。
@@ -334,7 +329,7 @@ V2 run 链路：
   - `POST /api/v2/timeline/run`
   - 返回最终 spec、素材生成报告、标准化资产、渲染结果、evaluation 和 traceDir。
 
-WebSocket 用于任务状态推送，当前主要面向任务进度和后台状态，并非 V2 spec 的主要数据传输通道。
+V2 任务进度通过 Director SSE 的 `tool_progress` 事件推送；旧 `/ws/tasks` WebSocket 任务通道已移除（2026-08-04）。
 
 ## 8. 素材处理
 
@@ -403,9 +398,10 @@ V2 当前选择的是“固定渲染器 + 严格 JSON”模式，而不是每次
 
 ## 11. Trace 和可观测性
 
-V2 trace 默认写入：
+V2 trace 默认写入（2026-08-04 起统一根目录与分层，旧目录与运行产物已清理）：
 
-- `backend/tmp/v2-agent-trace/<taskId>/`
+- `backend/tmp/v2-traces/sessions/<workspace>/operations/<operation>/`：导演会话（含事件流 `events.jsonl`）。
+- `backend/tmp/v2-traces/tasks/<taskId>/`：样例理解、时间线 preview/run 等独立调用。
 
 主要阶段：
 
@@ -697,7 +693,6 @@ V1 代码不是全部无用。它目前仍承担历史兼容、UI 适配、旧�
 - `shared/types/remotion-timeline-spec.v1.ts`
 - `shared/lib/remotion-timeline-validator.ts`
 - `fonted/src/services/director/v2DirectorTimeline.ts`
-- `fonted/src/services/director/directorActionExecutor.ts`
 - `fonted/src/stores/v2TimelineStore.ts`
 - `fonted/src/lib/api.ts`
 
@@ -712,32 +707,18 @@ V1 代码不是全部无用。它目前仍承担历史兼容、UI 适配、旧�
 - `/api/v2/timeline/preview`
 - `/api/v2/timeline/run`
 - `v2TimelineStore`
-- `tmp/v2-agent-trace`
+- `tmp/v2-traces`
 - `v2-renders`
 
-### 17.3 V1 legacy 清单
+### 17.3 V1 legacy 状态（2026-08-04 清理）
 
-这些模块大多来自早期 RenderPlan workflow 或组件生成实验。它们可能仍被 UI 适配层引用，但不应再作为新生成链路的判断依据：
+早期 RenderPlan workflow / 组件生成实验模块已全部移除（无代码引用，仅剩空目录骨架也已删除）：
 
-- `backend/src/modules/generator/`
-- `backend/src/modules/render-engine/`
-- `backend/src/modules/render-plan/`
-- `backend/src/modules/analyzer/`
-- `backend/src/modules/pipeline/`
-- `backend/src/modules/video-task/`
-- `backend/src/modules/effect-roadmap/`
-- `backend/src/modules/effect-composition/`
-- `backend/src/modules/remotion-component-authoring/`
-- `shared/lib/render-plan-*`
-- `shared/lib/render-action-engine.ts`
-- `shared/lib/template-to-migration.adapter.ts`
-- `shared/types/migration-protocol*`
-- `fonted/src/stores/renderPlanStore.ts`
-- `fonted/src/stores/migrationProjectStore.ts`
-- `fonted/src/stores/pipelineStore.ts`
-- `fonted/src/stores/timelineStore.ts`
+- `backend/src/modules/generator/`、`render-engine/`、`render-plan/`、`analyzer/`、`pipeline/`、`video-task/`、`effect-roadmap/`、`effect-composition/`、`effect-debug-artifacts/`、`remotion-component-authoring/`
+- `shared/lib/render-plan-*`、`shared/lib/render-action-engine.ts`、`shared/lib/template-to-migration.adapter.ts`、`shared/types/migration-protocol*`
+- `fonted/src/stores/renderPlanStore.ts`、`migrationProjectStore.ts`、`pipelineStore.ts`、`timelineStore.ts`
 
-这些代码不能在没有验证引用关系的情况下删除。原因是：当前前端仍会把 V2 spec 同步到部分旧 store，用于工作台展示、时间线兼容和 UI 过渡。
+同一轮还移除了 V1 任务通道与执行层：`user_materials` / `replication_tasks` 数据模型、`/ws/tasks` WebSocket 通道、`agent-trace` 模块、`directorActionExecutor` 前端执行器。
 
 ### 17.4 桥接层清单
 
@@ -746,7 +727,6 @@ V1 代码不是全部无用。它目前仍承担历史兼容、UI 适配、旧�
 重点文件：
 
 - `fonted/src/services/director/v2DirectorTimeline.ts`
-- `fonted/src/services/director/directorActionExecutor.ts`
 - `shared/lib/director-action-engine.ts`
 - `shared/lib/director-state-machine.ts`
 - `shared/lib/director-understanding.ts`
@@ -779,7 +759,7 @@ V1 代码不是全部无用。它目前仍承担历史兼容、UI 适配、旧�
 - 用户要求重新渲染当前方案，系统却重新生成了一版方案。
 - 用户上传 16:9 控件选择后，后端仍按 9:16 规划。
 - V2 preview 已有 spec，但旧 pipeline 状态被当成唯一真实状态。
-- trace 写入 `tmp/agent-trace` 的 V1 目录，而不是 `tmp/v2-agent-trace`。
+- trace 写入 `tmp/agent-trace` 的 V1 目录，而不是 `tmp/v2-traces`。
 
 ### 17.6 判断优先级
 
@@ -788,7 +768,7 @@ V1 代码不是全部无用。它目前仍承担历史兼容、UI 适配、旧�
 1. 用户最新消息和当前 UI 控件。
 2. `v2TimelineStore.spec`、`v2TimelineStore.preview`、`v2TimelineStore.result`。
 3. `RemotionTimelineSpecV1.task_id`、`canvas`、`scenes`、`assets`、`material_jobs`。
-4. V2 trace 目录：`backend/tmp/v2-agent-trace/<taskId>`。
+4. V2 trace 目录：`backend/tmp/v2-traces/<taskId>`。
 5. director context 中的 sample/material/slot 状态。
 6. 旧 pipeline/timeline/project store，仅作为 UI 兼容参考。
 7. V1 RenderPlan，仅作为 legacy 参考，不应决定 V2 主链路。
@@ -844,7 +824,7 @@ V1 代码不是全部无用。它目前仍承担历史兼容、UI 适配、旧�
 5. 后端 `npm run build` 通过。
 6. 前端 `npm run build` 通过。
 7. 根目录 `npm run v2:check` 或对应 V2 smoke 通过。
-8. 至少跑一次 V2 preview，确认 trace 仍写入 `tmp/v2-agent-trace`。
+8. 至少跑一次 V2 preview，确认 trace 仍写入 `tmp/v2-traces`。
 
 如果只是不想让 V1 影响 V2，优先选择“隔离判断”和“改桥接层优先级”，而不是直接删除。
 
@@ -871,7 +851,7 @@ V1 代码不是全部无用。它目前仍承担历史兼容、UI 适配、旧�
 3. 无样例、无素材、只有文字：能走 `text_to_video` 或明确提示视频生成 provider 能力不足。
 4. 已有 V2 timeline 后说“渲染”：应走 `/api/v2/timeline/run`，不应重新生成方案。
 5. 用户只是问问题：应自然回答，不应强制要求上传样例或素材。
-6. trace 位置应是 `backend/tmp/v2-agent-trace/<taskId>`。
+6. trace 位置应是 `backend/tmp/v2-traces/<taskId>`。
 
 ### 17.12 推荐改造方向
 
@@ -937,7 +917,7 @@ curl http://localhost:3001/health
 常见输出位置：
 
 - 上传素材：`backend/uploads`
-- V2 trace：`backend/tmp/v2-agent-trace/<taskId>`
+- V2 trace：`backend/tmp/v2-traces/<taskId>`
 - V2 渲染结果：`backend/v2-renders/<taskId>`
 - Remotion 临时静态资源：`remotion/public/v2-assets/<taskId>`
 
@@ -1068,7 +1048,7 @@ Content-Type: application/json
     "summary_zh": "样例整体摘要",
     "segments": []
   },
-  "traceDir": "D:/project/backend/tmp/v2-agent-trace/v2_sample_001"
+  "traceDir": "D:/project/backend/tmp/v2-traces/v2_sample_001"
 }
 ```
 
@@ -1291,7 +1271,7 @@ Content-Type: application/json
 - 不要让模型输出抽象自然语言后直接交给 Remotion；必须落到 `RemotionTimelineSpecV1`。
 - 不要让旧 RenderPlan 或旧 pipeline 状态覆盖 V2 spec。
 - 不要因为 `uploads` 里出现重复文件名就直接判断去重失效；应查看 `.upload-index.json` 和接口返回的 `contentHash`、`duplicateOf`。
-- 不要把 `backend/tmp/agent-trace` 当成 V2 主 trace；V2 主 trace 是 `backend/tmp/v2-agent-trace`。
+- 不要把 `backend/tmp/agent-trace` 当成 V2 主 trace；V2 主 trace 是 `backend/tmp/v2-traces`。
 - 不要在正式文档、日志或 trace 中写入 API Key 明文。
 - 不要为了让构建通过而删除 bridge 层同步，除非确认 UI 不再依赖旧 store。
 
@@ -1324,7 +1304,7 @@ Content-Type: application/json
 - 前端构建通过：`npm.cmd --prefix fonted run build`。
 - 如果涉及渲染、素材生成或协议，运行 `npm run v2:check` 或对应 smoke。
 - `RemotionTimelineSpecV1` 仍能通过 validator。
-- V2 trace 仍写入 `backend/tmp/v2-agent-trace/<taskId>`。
+- V2 trace 仍写入 `backend/tmp/v2-traces/<taskId>`。
 - `sample_replicate`、`material_brief`、`text_to_video` 三分支没有被破坏。
 - “生成方案”走 `/api/v2/timeline/preview`。
 - “渲染当前方案”走 `/api/v2/timeline/run`。
@@ -1400,7 +1380,7 @@ flowchart TD
   GEN --> STD["FFmpeg 标准化"]
   STD --> REMOTION["Remotion Timeline Renderer"]
   REMOTION --> OUT["MP4 / v2-renders"]
-  OUT --> TRACE["tmp/v2-agent-trace"]
+  OUT --> TRACE["tmp/v2-traces"]
 ```
 
 三分支流转：
@@ -1478,7 +1458,7 @@ sequenceDiagram
 |---|---|---:|---|---|
 | `backend/uploads` | 用户上传素材 | 谨慎 | 只在用户确认或测试清理时删除 | 可能包含用户原始素材；不要批量误删。 |
 | `backend/uploads/.upload-index.json` | 上传 hash 去重索引 | 谨慎 | 与 uploads 一起维护 | 删除会导致重复识别历史丢失。 |
-| `backend/tmp/v2-agent-trace` | V2 trace | 可按任务清 | 删除指定 task 目录 | 调试证据链，测试结束可清。 |
+| `backend/tmp/v2-traces` | V2 trace（sessions/ 与 tasks/） | 可按任务清 | 删除指定 workspace/task 目录 | 调试证据链，测试结束可清。 |
 | `backend/tmp/agent-trace` | V1 trace | 可按任务清 | 删除旧测试目录 | legacy trace，不是 V2 主证据。 |
 | `backend/v2-renders` | V2 输出视频和中间素材 | 可按任务清 | 删除指定 task 目录 | 可能包含用户需要的最终 MP4。 |
 | `backend/renders` | V1/旧输出 | 可按任务清 | 删除旧任务输出 | 删除前确认不是用户需要的结果。 |
@@ -1501,7 +1481,7 @@ sequenceDiagram
 本项目会处理用户上传的视频、图片、提示词、模型返回、trace 和本地路径。第三方接手时必须注意：
 
 - `backend/uploads` 可能包含用户隐私素材。
-- `backend/tmp/v2-agent-trace` 可能包含用户 prompt、本地路径、模型返回和素材 URL。
+- `backend/tmp/v2-traces` 可能包含用户 prompt、本地路径、模型返回和素材 URL。
 - `backend/v2-renders` 可能包含用户生成结果。
 - 不要把 trace、uploads、renders 直接发给公开服务。
 - 不要把 API Key 写入 Markdown、trace、console log、测试 fixture。
@@ -1679,7 +1659,7 @@ ADR-007：为什么需要 trace
 - 不要直接删除 V1 legacy，除非确认没有引用且构建和 V2 smoke 通过。
 - 不要写针对某个测试样例的补丁，要修通用机制。
 
-每次修改前，请先说明本次改动属于 V2 主链路、V1 legacy 还是桥接层。每次修改后，请至少验证后端 build、前端 build，以及 sample_replicate、material_brief、text_to_video 三条分支没有被破坏。涉及渲染或素材生成时，还要检查 backend/tmp/v2-agent-trace 下的 trace。
+每次修改前，请先说明本次改动属于 V2 主链路、V1 legacy 还是桥接层。每次修改后，请至少验证后端 build、前端 build，以及 sample_replicate、material_brief、text_to_video 三条分支没有被破坏。涉及渲染或素材生成时，还要检查 backend/tmp/v2-traces 下的 trace。
 
 如果出现重复问题，不要继续局部补丁，先判断是否是状态源冲突、V1 反向干扰、协议边界不清或 provider 能力误判。
 ```

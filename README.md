@@ -101,7 +101,7 @@ implemented effects. Missing media is never silently invented.
 | Soft review gate | Planner output is converted into a Chinese planning review so the user can revise before costly generation. |
 | Material fallback | Planned AI-video jobs can fall back to static image motion or Remotion card scenes when generation is unavailable. |
 | Media normalization | FFmpeg preflight and standardization protect Remotion/FFmpeg composition from provider format drift. |
-| Output trace | Every V2 run writes a compact task-scoped trace under `backend/tmp/v2-agent-trace/<taskId>/`. |
+| Output trace | Every V2 run writes a compact trace under `backend/tmp/v2-traces/tasks/<taskId>/` (director sessions use `sessions/<workspace>/operations/<operation>/`). |
 
 ## Local Desktop Run
 
@@ -224,7 +224,7 @@ published URL, upload fails before the provider call.
 The active desktop flow writes V2 Timeline trace under:
 
 ```text
-backend/tmp/v2-agent-trace/<taskId>/
+backend/tmp/v2-traces/tasks/<taskId>/
   00-summary/summary.zh.md
   01-input/timeline-planner-input.json
   02-planning/timeline-spec.json
