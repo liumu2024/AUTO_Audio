@@ -1,7 +1,7 @@
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { env } from '../../config/env.js'
+import { env } from '../config/env.js'
 import type { VideoInput } from './video-input.js'
 
 const UPLOADS_DIR = path.resolve(process.cwd(), 'uploads')

@@ -62,9 +62,6 @@ export const env = {
   tosEndpoint: readEnv('TOS_ENDPOINT'),
   tosBucket: readEnv('TOS_BUCKET'),
   tosObjectPrefix: readEnv('TOS_OBJECT_PREFIX') ?? 'dpl304/uploads',
-  agentTraceDir: defaultAgentTraceDir,
-  enableAgentTrace: readEnv('ENABLE_AGENT_TRACE') !== 'false',
-  traceVerbosity: readEnv('TRACE_VERBOSITY') === 'debug' ? 'debug' : 'compact',
 
   /** API keys from backend/.env. */
   arkApiKeyName,

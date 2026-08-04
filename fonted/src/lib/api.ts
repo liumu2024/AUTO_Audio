@@ -1,5 +1,4 @@
 import { env } from '@/config/env'
-import type { DirectorAction } from '@shared/types/director-action'
 import type { DirectorSessionState } from '@shared/types/director-state'
 import type { DirectorWorkspaceState } from '@shared/types/director-workspace-session'
 import type { DirectorConversationRuntime } from '@shared/lib/director-understanding'
@@ -60,10 +59,6 @@ export type DirectorAgentStreamEvent =
       missingSlots: string[]
     }
   | { type: 'constraint_resolution'; config: NonNullable<DirectorContext['effectiveCreativeConfig']> }
-  | {
-      type: 'action_plan'
-      action: DirectorAction
-    }
   | { type: 'skill_selected'; skillId: string; purpose: string }
   | {
       type: 'skill_loaded'
@@ -119,7 +114,6 @@ export type DirectorAgentStreamEvent =
     }
   | {
       type: 'done'
-      action?: DirectorAction
       message?: string
     }
   | {

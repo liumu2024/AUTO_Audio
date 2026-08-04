@@ -29,8 +29,6 @@ async function clearDir(dir: string): Promise<number> {
 
 async function main(): Promise<void> {
   const [tasks, materials] = await Promise.all([
-    prisma.replicationTask.deleteMany(),
-    prisma.userMaterial.deleteMany(),
   ])
 
   const uploadsRemoved = await clearDir(path.join(backendRoot, 'uploads'))

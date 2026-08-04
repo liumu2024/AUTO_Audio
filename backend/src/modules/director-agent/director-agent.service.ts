@@ -461,9 +461,22 @@ export async function* streamDirectorAgentChat(
   await trace.writeJson('00-director-turn', 'creative-memory-retrieval.json', {
     query: input.prompt,
     draft_id: workspaceState.draftId ?? null,
-    active: creativeMemoryRetrieval.active,
-    candidate: creativeMemoryRetrieval.candidate,
-    audit: creativeMemoryRetrieval.audit,
+    active: creativeMemoryRetrieval.active.map((item) => ({
+      id: item.memory.id,
+      scope_type: item.memory.scopeType,
+      statement: item.memory.statement,
+      score: item.score,
+    })),
+    candidate: creativeMemoryRetrieval.candidate.map((item) => ({
+      id: item.memory.id,
+      scope_type: item.memory.scopeType,
+      statement: item.memory.statement,
+      score: item.score,
+    })),
+    audit_summary: creativeMemoryRetrieval.audit.reduce((summary, item) => {
+      summary[item.reason] = (summary[item.reason] ?? 0) + 1
+      return summary
+    }, {} as Record<string, number>),
     error: creativeMemoryRetrievalError ?? null,
   })
   const routed = await routeDirectorIntentWithLlm({
@@ -475,11 +488,12 @@ export async function* streamDirectorAgentChat(
     previousResponseId:
       workspaceState.responseContinuityDisabled ? undefined : workspaceState.responseId,
   })
-  await trace.writeJson('00-director-turn', 'model-response.audit.json', routed.modelResponseAudit ?? {
-    output_text: routed.modelOutputText ?? null,
-  })
-  await trace.writeJson('00-director-turn', 'model-protocol-diagnostic.json', {
+  await trace.writeJson('00-director-turn', 'model-call.json', {
     source: routed.source,
+    model_called: routed.modelCalled,
+    response_audit: routed.modelResponseAudit ?? {
+      output_text: routed.modelOutputText ?? null,
+    },
     protocol_error: routed.protocolError ?? null,
     fallback_reason: routed.fallbackReason ?? null,
     structured_output: routed.structuredOutput ?? null,
@@ -586,11 +600,6 @@ export async function* streamDirectorAgentChat(
     responseId: routed.responseId,
     responseContinuityDisabled: routed.responseContinuityRejected || undefined,
   })
-  await trace.writeJson('00-director-turn', 'effective-creative-config.json', {
-    explicit_ui_controls: input.context.explicitUiControls ?? {},
-    model_inferred_slots: routed.result.modelInferredSlots ?? {},
-    effective_config: effectiveCreativeConfig,
-  })
   workspaceState = appendDirectorWorkspaceTurn(workspaceState, {
     role: 'user',
     content: input.prompt,
@@ -626,22 +635,6 @@ export async function* streamDirectorAgentChat(
       normalized_arguments: stage.toolRequest.arguments,
     })),
   })
-  if (executionPlan.loadedSkills.length) {
-    await trace.writeText(
-      '00-director-turn',
-      'loaded-skill-instructions.md',
-      executionPlan.loadedSkills
-        .map((skill) => [
-          `# ${skill.id}`,
-          `version: ${skill.version}`,
-          `source: ${skill.source}`,
-          `sha256: ${skill.hash}`,
-          '',
-          skill.content,
-        ].join('\n'))
-        .join('\n\n---\n\n'),
-    )
-  }
   for (const selected of executionPlan.selectedSkills) {
     yield { type: 'skill_selected', skillId: selected.skillId, purpose: selected.purpose }
   }

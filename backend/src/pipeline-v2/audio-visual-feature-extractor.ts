@@ -4,8 +4,8 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
 
-import type { AudioVisualUnderstandingHints } from '../../../../../shared/types/sample-understanding-skills.js'
-import type { VideoInput } from '../../video-understanding/video-input.js'
+import type { AudioVisualUnderstandingHints } from '../../../shared/types/sample-understanding-skills.js'
+import type { VideoInput } from './video-input.js'
 
 const execFileAsync = promisify(execFile)
 

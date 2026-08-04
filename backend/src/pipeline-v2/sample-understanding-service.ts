@@ -9,9 +9,9 @@ import {
   extractStructuredJsonCandidate,
 } from '../modules/agent-tools/structured-json-tool.js'
 import { env } from '../config/env.js'
-import { extractAudioVisualUnderstandingHints } from '../modules/sample-understanding/preprocessor/audio-visual-feature-extractor.js'
-import { resolveVideoInput } from '../modules/video-understanding/resolve-video-input.js'
-import type { VideoInput } from '../modules/video-understanding/video-input.js'
+import { extractAudioVisualUnderstandingHints } from './audio-visual-feature-extractor.js'
+import { resolveVideoInput } from './resolve-video-input.js'
+import type { VideoInput } from './video-input.js'
 import { createV2TraceWriter } from './trace.js'
 import type { V2TraceContext } from './trace.js'
 import type { V2AgentSkillContext, V2AgentToolContext } from './v2-input.js'

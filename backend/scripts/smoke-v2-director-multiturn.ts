@@ -167,7 +167,6 @@ try {
     slots: { ...baseContext.slots, durationSec: undefined },
     currentTimeline: { kind: 'v2_timeline', status: 'saved', draftId: 'draft_1', currentRevision: 1 },
   }, { hasV2Timeline: true, v2SceneCount: 3 })
-  assert.equal(asked.some((event) => event.type === 'action_plan'), false)
   const askedSession = asked.find((event) => event.type === 'workspace_session')!
   assert.equal((askedSession.state as { context: typeof baseContext }).context.slots.durationSec, 15)
   assert.equal(requests[1]?.previous_response_id, 'resp_1')
@@ -190,7 +189,6 @@ try {
   assert.equal(revised.some((event) => event.type === 'tool_started'), false)
 
   const failed = await turn('现在能否继续讨论节奏？')
-  assert.equal(failed.some((event) => event.type === 'action_plan'), false)
   assert.equal((failed.find((event) => event.type === 'workspace_session') as { modelCalled: boolean }).modelCalled, true)
 
   const recovered = await turn('继续讨论这一版的节奏')

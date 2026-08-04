@@ -34,7 +34,7 @@ export function createV2TraceWriter(input: {
   // A test process may set this once so every V2 trace it triggers shares one
   // named session folder. Production callers keep the established default.
   const configuredBaseDir = process.env.V2_TRACE_BASE_DIR?.trim()
-  const baseDir = input.baseDir ?? configuredBaseDir ?? 'tmp/v2-agent-trace'
+  const baseDir = input.baseDir ?? configuredBaseDir ?? 'tmp/v2-traces'
   const resolvedBaseDir = path.isAbsolute(baseDir) ? baseDir : path.resolve(cwd, baseDir)
   const sessionRootDir = input.sessionId
     ? path.join(resolvedBaseDir, 'sessions', safePart(input.sessionId))
@@ -42,7 +42,7 @@ export function createV2TraceWriter(input: {
   const operationId = input.operationId ?? input.taskId
   const rootDir = sessionRootDir
     ? path.join(sessionRootDir, 'operations', safePart(operationId))
-    : path.join(resolvedBaseDir, safePart(input.taskId))
+    : path.join(resolvedBaseDir, 'tasks', safePart(input.taskId))
 
   async function write(stage: string, fileName: string, content: string): Promise<string> {
     const dir = path.join(rootDir, safePart(stage))

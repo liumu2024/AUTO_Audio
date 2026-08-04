@@ -7,23 +7,14 @@ import {
   streamDirectorChat,
   getDirectorWorkspaceSession,
   getV2TimelineDraft,
-  reportDirectorWorkspaceOutcome,
   type DirectorAgentStreamEvent,
 } from '@/lib/api'
 import {
-  recordDirectorActionCompleted,
-  recordDirectorActionFailed,
-  recordDirectorActionPlanned,
-  recordDirectorActionRunning,
   summarizeDirectorSessionState,
   syncDirectorSessionSnapshot,
 } from '@shared/lib/director-state-machine'
 import { buildDirectorContextFromUI } from '@/services/director/directorDecisionContext'
 import { activateV2DraftWorkspace } from '@/services/director/v2DirectorDraftWorkspace'
-import {
-  createDirectorActionExecutor,
-  runDirectorAction,
-} from '@/services/director/directorActionExecutor'
 import {
   rememberActiveDirectorWorkspaceSessionId,
   resolveActiveDirectorWorkspaceSessionId,
@@ -35,7 +26,6 @@ import { useDirectorContextStore } from '@/stores/directorContextStore'
 import { useMaterialLibraryStore } from '@/stores/materialLibraryStore'
 import { useTaskStore } from '@/stores/taskStore'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
-import type { DirectorAction, DirectorActionType } from '@shared/types/director-action'
 import type {
   DirectorSessionState,
   DirectorTimelineSnapshot,
@@ -58,28 +48,6 @@ function attachmentTypeFromMime(mime: string): InputAttachment['type'] | null {
 
 function attachmentMaterialId(attachment: InputAttachment): string {
   return attachment.materialId ?? attachment.id.replace(/^att_/, '')
-}
-
-function materialPayload(attachments: InputAttachment[]) {
-  return attachments.map((att) => ({
-    id: attachmentMaterialId(att),
-    name: att.name,
-    type: att.type,
-    url: att.url,
-    tags: att.tags,
-  }))
-}
-
-function selectedSampleAttachment(
-  action: DirectorAction,
-  attachments: InputAttachment[],
-): InputAttachment | undefined {
-  const selectedId = action.slots.sampleMaterialId
-  if (!selectedId) return undefined
-  return attachments.find(
-    (attachment) =>
-      attachment.type === 'video' && attachmentMaterialId(attachment) === selectedId,
-  )
 }
 
 function syncDirectorContext(input: {
@@ -108,21 +76,6 @@ function syncDirectorContext(input: {
       tags: att.tags ?? [],
     })),
   )
-}
-
-function applyActionContext(action: DirectorAction) {
-  const contextStore = useDirectorContextStore.getState()
-  contextStore.applyIntentResult(action.result)
-  contextStore.patchSlots(action.slots)
-  contextStore.setUserIntent(action.intent)
-}
-
-function isMessageOnlyAction(type: DirectorActionType): boolean {
-  return type === 'ASK_USER' || type === 'REQUEST_PLUGIN'
-}
-
-function isRevisionOnlyAction(type: DirectorActionType): boolean {
-  return type === 'REVISE_TIMELINE'
 }
 
 function shouldShowThoughtSurface(event: DirectorAgentStreamEvent) {
@@ -157,7 +110,6 @@ function eventThought(event: DirectorAgentStreamEvent): string | null {
       .map((item) => `${item.field} 的 UI 值 ${item.uiValue} 覆盖模型理解 ${item.modelValue}`)
       .join('；')}；最终采用 ${event.config.aspectRatio}。`
   }
-  if (event.type === 'action_plan') return `下一步：${event.action.type}。`
   if (event.type === 'error') return `分析失败：${event.message}`
   return null
 }
@@ -253,7 +205,6 @@ function currentRecoverySuggestions() {
 
 export function DirectorChatPanel() {
   const setInputText = useCreationStore((s) => s.setInputText)
-  const setAnalyzing = useCreationStore((s) => s.setAnalyzing)
   const clearInputTray = useCreationStore((s) => s.clearInputTray)
 
   const isSending = useDirectorChatStore((s) => s.isSending)
@@ -270,7 +221,6 @@ export function DirectorChatPanel() {
 
   const [dragOver, setDragOver] = useState(false)
   const dragDepthRef = useRef(0)
-  const executorRef = useRef(createDirectorActionExecutor())
   const abortRef = useRef<AbortController | null>(null)
   const streamCancelRef = useRef(false)
   const workspaceSessionIdRef = useRef<string | null>(null)
@@ -293,31 +243,6 @@ export function DirectorChatPanel() {
       })
   }, [])
   const activeProgressMessageIdRef = useRef<string | null>(null)
-
-  const recordActionCompleted = (
-    outcome: Parameters<typeof recordDirectorActionCompleted>[0]['outcome'],
-  ) => {
-    const timeline = currentV2TimelineSnapshot()
-    useDirectorContextStore.getState().updateDirectorState((state) =>
-      recordDirectorActionCompleted({
-        state,
-        outcome,
-        timeline,
-      }),
-    )
-  }
-
-  const recordActionRunning = () => {
-    useDirectorContextStore.getState().updateDirectorState((state) =>
-      recordDirectorActionRunning({ state }),
-    )
-  }
-
-  const recordActionFailed = (actionType: DirectorActionType | undefined, error: string) => {
-    useDirectorContextStore.getState().updateDirectorState((state) =>
-      recordDirectorActionFailed({ state, actionType, error }),
-    )
-  }
 
   const ingestDroppedFiles = useCallback((files: FileList | null) => {
     if (!files?.length) return
@@ -362,174 +287,6 @@ export function DirectorChatPanel() {
     dragDepthRef.current = 0
     setDragOver(false)
     ingestDroppedFiles(e.dataTransfer.files)
-  }
-
-  const executeAction = async (input: {
-    actionPlan: DirectorAction
-    prompt: string
-    sampleVideoUrl: string
-    sampleVideoName?: string
-    materials: InputAttachment[]
-    conversationSummary?: string
-    progressMessageId?: string
-  }) => {
-    let { actionPlan, prompt, sampleVideoUrl, sampleVideoName, materials, conversationSummary } =
-      input
-    const reportOutcome = (ok: boolean, outcome: string) => {
-      const workspaceSessionId = workspaceSessionIdRef.current
-      if (!workspaceSessionId) return
-      const v2 = useV2TimelineStore.getState()
-      void reportDirectorWorkspaceOutcome({
-        workspaceSessionId,
-        action: actionPlan.type,
-        ok,
-        outcome,
-        traceDir: v2.result?.traceDir ?? v2.preview?.traceDir,
-        currentTimeline: currentV2TimelineSnapshot(),
-      })
-        .then((session) => useDirectorContextStore.getState().replaceContext(session.state.context))
-        .catch(() => {
-          // The V2 action already has its own result; do not hide it if session reporting fails.
-        })
-    }
-
-    // A newly uploaded video remains a creation material unless the director
-    // explicitly selected it through the structured candidate id. This happens
-    // after model routing, never through a client-side wording heuristic.
-    const selectedSample =
-      !sampleVideoUrl && actionPlan.type === 'ANALYZE_SAMPLE'
-        ? selectedSampleAttachment(actionPlan, materials)
-        : undefined
-    if (selectedSample) {
-      sampleVideoUrl = selectedSample.url
-      sampleVideoName = selectedSample.name
-      materials = materials.filter((item) => item.id !== selectedSample.id)
-      const creation = useCreationStore.getState()
-      creation.setSampleUrl(selectedSample.url, selectedSample.name)
-      creation.removeAttachment(selectedSample.id)
-      creation.setSampleParsed(false)
-      syncDirectorContext({
-        sampleUrl: sampleVideoUrl,
-        sampleName: sampleVideoName,
-        attachments: materials,
-      })
-    }
-
-    recordActionRunning()
-
-    if (isMessageOnlyAction(actionPlan.type)) {
-      recordActionCompleted({
-        phase: 'message',
-        action: actionPlan.type,
-        message: actionPlan.message,
-        userFacingOnly: true,
-      })
-      reportOutcome(true, actionPlan.message)
-      if (input.progressMessageId) {
-        updateMessage(input.progressMessageId, {
-          content: actionPlan.message,
-          kind: 'text',
-          status: 'done',
-        })
-      } else {
-        addAssistantMessage({ content: actionPlan.message })
-      }
-      return
-    }
-
-    if (isRevisionOnlyAction(actionPlan.type)) {
-      try {
-        const creation = useCreationStore.getState()
-        const outcome = await runDirectorAction({
-        action: actionPlan,
-        executor: executorRef.current,
-        context: {
-          prompt,
-          sampleVideoUrl,
-          sampleVideoName,
-          aspectRatio: actionPlan.slots.aspectRatio ?? creation.aspectRatio,
-          durationSec: actionPlan.slots.durationSec ?? creation.durationSec,
-          styleIntensity: actionPlan.slots.styleIntensity ?? creation.styleIntensity,
-          materials: materialPayload(materials),
-          conversationSummary,
-          activeTaskId: useV2TimelineStore.getState().taskId ?? activeTaskId,
-          execution: {
-            effect: actionPlan.payload?.executionEffect,
-            authorizationEvidence: actionPlan.payload?.authorizationEvidence,
-          },
-        },
-        })
-        recordActionCompleted(outcome)
-        reportOutcome(true, outcome.message)
-        if (input.progressMessageId) {
-          updateMessage(input.progressMessageId, {
-            content: actionPlan.message,
-            kind: 'progress',
-            status: 'done',
-          })
-        } else {
-          addAssistantMessage({ content: actionPlan.message })
-        }
-      } catch (error) {
-        reportOutcome(false, error instanceof Error ? error.message : String(error))
-        throw error
-      }
-      return
-    }
-
-    setAnalyzing(actionPlan.type === 'ANALYZE_SAMPLE')
-    const progressId = input.progressMessageId ?? addProgressMessage(actionPlan.message)
-    updateMessage(progressId, {
-      content: actionPlan.message,
-      kind: 'progress',
-      status: 'streaming',
-    })
-
-    try {
-      const creation = useCreationStore.getState()
-      const outcome = await runDirectorAction({
-        action: actionPlan,
-        executor: executorRef.current,
-        context: {
-          prompt,
-          sampleVideoUrl,
-          sampleVideoName,
-          aspectRatio: actionPlan.slots.aspectRatio ?? creation.aspectRatio,
-          durationSec: actionPlan.slots.durationSec ?? creation.durationSec,
-          styleIntensity: actionPlan.slots.styleIntensity ?? creation.styleIntensity,
-          materials: materialPayload(materials),
-          conversationSummary,
-          activeTaskId: useV2TimelineStore.getState().taskId ?? activeTaskId,
-          execution: {
-            effect: actionPlan.payload?.executionEffect,
-            authorizationEvidence: actionPlan.payload?.authorizationEvidence,
-          },
-        },
-      })
-      recordActionCompleted(outcome)
-      reportOutcome(true, outcome.message)
-
-      // The director's natural-language response remains the conversation.
-      // Execution status belongs to the progress state and the V2 workbench,
-      // rather than being replaced by a second, fixed assistant script.
-      updateMessage(progressId, {
-        content: actionPlan.message,
-        kind: 'progress',
-        status: 'done',
-      })
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      recordActionFailed(actionPlan.type, msg)
-      reportOutcome(false, msg)
-      updateMessage(progressId, {
-        content: msg,
-        kind: 'error',
-        status: 'error',
-        recoverySuggestions: currentRecoverySuggestions(),
-      })
-    } finally {
-      setAnalyzing(false)
-    }
   }
 
   const handleSend = async (text: string) => {
@@ -629,7 +386,6 @@ export function DirectorChatPanel() {
     abortRef.current = abort
     streamCancelRef.current = false
 
-    let actionPlan: DirectorAction | null = null
     let directMessage: string | null = null
     const debugThoughts: string[] = []
 
@@ -678,7 +434,6 @@ export function DirectorChatPanel() {
 
           const thought = eventThought(event)
           if (thought) debugThoughts.push(thought)
-          if (event.type === 'action_plan') actionPlan = event.action
            if (event.type === 'skill_selected') debugThoughts.push(`已选择创作能力：${event.skillId}。`)
            if (event.type === 'skill_loaded') {
              debugThoughts.push(
@@ -739,14 +494,13 @@ export function DirectorChatPanel() {
             )
           }
           if (event.type === 'done') {
-            if (event.action) actionPlan = event.action
             if (event.message) directMessage = event.message
           }
         },
         abort.signal,
       )
 
-      if (directMessage && !actionPlan) {
+      if (directMessage) {
         updateMessage(thinkingId, {
           content: directMessage,
           kind: 'text',
@@ -761,28 +515,6 @@ export function DirectorChatPanel() {
         }
         return
       }
-      if (!actionPlan) throw new Error('导演 Agent 没有返回下一步动作。')
-
-      useDirectorContextStore.getState().updateDirectorState((state) =>
-        recordDirectorActionPlanned({ state, action: actionPlan!, prompt }),
-      )
-      applyActionContext(actionPlan)
-      await executeAction({
-        actionPlan,
-        prompt,
-        sampleVideoUrl: effectiveSampleUrl,
-        sampleVideoName: effectiveSampleName,
-        materials: contextAttachments,
-        conversationSummary: directorContext.conversationSummary,
-        progressMessageId: thinkingId,
-      })
-      if (debugThoughts.length) {
-        addThoughtMessage({
-          content: '技术详情',
-          thoughts: debugThoughts,
-          status: 'done',
-        })
-      }
     } catch (e) {
       if (streamCancelRef.current) {
         updateMessage(thinkingId, {
@@ -793,8 +525,6 @@ export function DirectorChatPanel() {
         return
       }
       const msg = e instanceof Error ? e.message : String(e)
-      const failedAction = actionPlan as DirectorAction | null
-      recordActionFailed(failedAction?.type, msg)
       updateMessage(thinkingId, {
         content: msg,
         kind: 'error',

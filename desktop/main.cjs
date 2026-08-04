@@ -120,7 +120,6 @@ async function startManagedServices() {
     Number(process.env.DPL304_FRONTEND_PORT || DEFAULT_FRONTEND_PORT),
   )
   const backendBase = `http://127.0.0.1:${backendPort}`
-  const wsBase = `ws://127.0.0.1:${backendPort}`
   const frontendUrl = `http://127.0.0.1:${frontendPort}`
   const localDataDir = path.join(app.getPath('userData'), 'backend')
 
@@ -136,8 +135,6 @@ async function startManagedServices() {
     ...process.env,
     VITE_USE_BACKEND: 'true',
     VITE_API_BASE: backendBase,
-    VITE_WS_BASE: wsBase,
-    VITE_WS_PATH: process.env.VITE_WS_PATH || '/ws/tasks',
     VITE_USER_ID: process.env.VITE_USER_ID || '1',
   }
 
@@ -145,7 +142,7 @@ async function startManagedServices() {
     cwd: path.join(projectRoot, 'backend'),
     env: backendEnv,
   })
-  console.info('[desktop] local mode: backend will run analyzer/generator jobs in-process')
+  console.info('[desktop] local mode: backend runs in-process with local JSON persistence')
   spawnManaged(
     'frontend',
     [

@@ -5,7 +5,6 @@ import { MainCanvas } from '@/components/layout/MainCanvas'
 import { PropertyEditorPanel } from '@/components/layout/PropertyEditorPanel'
 import { TimelinePanel } from '@/components/layout/TimelinePanel'
 import { usePipelineBootstrap } from '@/hooks/usePipelineBootstrap'
-import { useTaskWebSocket } from '@/hooks/useTaskWebSocket'
 
 /**
  * AI 视频编辑器主布局
@@ -14,7 +13,6 @@ import { useTaskWebSocket } from '@/hooks/useTaskWebSocket'
  */
 export function VideoEditorLayout() {
   usePipelineBootstrap()
-  useTaskWebSocket()
 
   return (
     <div className="relative grid h-full w-full grid-cols-[320px_1fr_300px] grid-rows-[auto_minmax(0,1fr)] overflow-hidden bg-zinc-950 text-zinc-100">

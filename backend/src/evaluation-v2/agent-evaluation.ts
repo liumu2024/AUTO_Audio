@@ -588,7 +588,7 @@ function numberField(record: Record<string, unknown>, ...keys: string[]) {
 
 async function collectUsage(roots: string[]): Promise<TokenUsage> {
   const auditNames = new Set([
-    'model-response.audit.json',
+    'model-call.json',
     'model-json-repair-result.audit.json',
     'tool-result-model-response.audit.json',
     'llm-timeline-planner-model-response.audit.json',

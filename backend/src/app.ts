@@ -2,7 +2,6 @@ import cors from 'cors'
 import express from 'express'
 import { createServer } from 'node:http'
 import path from 'node:path'
-import { WebSocketServer } from 'ws'
 
 import { env } from './config/env.js'
 import {
@@ -21,7 +20,6 @@ import {
   removeCreativeMemory,
   searchCreativeMemories,
 } from './modules/creative-memory/creative-memory.controller.js'
-import { attachWebSocketServer } from './modules/websocket/ws.gateway.js'
 import {
   postV2SampleAnalyze,
   postV2TimelinePreview,
@@ -85,10 +83,7 @@ app.use(
 )
 
 const httpServer = createServer(app)
-const wss = new WebSocketServer({ server: httpServer, path: env.wsPath })
-attachWebSocketServer(wss)
 
 httpServer.listen(env.port, () => {
   console.info(`[app] HTTP  http://localhost:${env.port}`)
-  console.info(`[app] WS    ws://localhost:${env.port}${env.wsPath}?taskId=<id>`)
 })

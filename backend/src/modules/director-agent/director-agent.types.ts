@@ -1,4 +1,3 @@
-import type { DirectorAction } from '../../../../shared/types/director-action.js'
 import type { DirectorSessionState } from '../../../../shared/types/director-state.js'
 import type {
   DirectorContext,
@@ -47,10 +46,6 @@ export type DirectorAgentStreamEvent =
       missingSlots: string[]
     }
   | { type: 'constraint_resolution'; config: DirectorEffectiveCreativeConfig }
-  | {
-      type: 'action_plan'
-      action: DirectorAction
-    }
   | {
       type: 'skill_selected'
       skillId: string
@@ -116,7 +111,6 @@ export type DirectorAgentStreamEvent =
     }
   | {
       type: 'done'
-      action?: DirectorAction
       message?: string
     }
   | {

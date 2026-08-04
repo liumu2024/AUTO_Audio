@@ -4,7 +4,7 @@ import path from 'node:path'
 
 process.env.VIDEO_UNDERSTANDING_API_KEY = 'test-key'
 process.env.DIRECTOR_AGENT_API_KEY = 'test-key'
-process.env.V2_TRACE_BASE_DIR = path.join('tmp', 'v2-agent-trace', 'tests', `structured-protocol_${Date.now()}`)
+process.env.V2_TRACE_BASE_DIR = path.join('tmp', 'v2-traces', 'tests', `structured-protocol_${Date.now()}`)
 
 const samplePath = path.resolve(process.cwd(), '..', 'example_videos', '1.mp4')
 if (!existsSync(samplePath)) throw new Error(`Missing sample video: ${samplePath}`)
