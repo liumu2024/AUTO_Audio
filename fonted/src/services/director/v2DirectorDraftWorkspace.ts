@@ -38,6 +38,7 @@ export interface V2PlanVisibleText {
   widthPct?: number
   maxLines?: number
   maxLinesSource?: 'segment_override' | 'track_default'
+  background?: string
   enterAnimation: RemotionTimelineSpecV1['overlays'][number]['enter_animation']
   exitAnimation: RemotionTimelineSpecV1['overlays'][number]['exit_animation']
 }
@@ -165,6 +166,7 @@ export function buildV2PlanPresentation(
               : track?.max_lines != null
                 ? 'track_default'
                 : undefined,
+            background: overlay.background,
             enterAnimation:
               overlay.enter_animation ??
               overlay.animation ??

@@ -209,12 +209,8 @@ function VisibleTextRow({ item, index }: { item: V2PlanVisibleText; index: numbe
       <div className="flex flex-wrap items-center gap-2 text-[10px] text-zinc-500">
         <span className="font-medium text-amber-200">{index + 1}. {overlayTypeLabel(item.type)}</span>
         <span>{formatTimeRange(item.startSec, item.endSec)}</span>
-        <span>{animationLabel(item.enterAnimation)}</span>
-        {item.maxLines ? (
-          <span>
-            {item.maxLinesSource === 'track_default' ? '方案轨道设置（可修改）' : '本段设置'}：最多 {item.maxLines} 行
-          </span>
-        ) : null}
+        <span>入场动画：{animationLabel(item.enterAnimation)}</span>
+        <span>{backgroundLabel(item.background)}</span>
       </div>
       <p className="mt-1.5 text-sm leading-5 text-zinc-100">“{item.text}”</p>
     </div>
@@ -309,6 +305,15 @@ function animationLabel(animation: V2PlanVisibleText['enterAnimation']) {
     pulse: '脉冲',
     sweep: '扫光',
   }[animation ?? 'none']
+}
+
+function backgroundLabel(background: string | undefined) {
+  if (!background || background === 'transparent') return '背景：无'
+  const match = background.match(/rgba\([^)]*,\s*([\d.]+)\)/)
+  const alpha = match ? Number(match[1]) : 1
+  if (alpha <= 0.02) return '背景：透明'
+  if (alpha < 1) return `背景：半透明(${Math.round(alpha * 100)}%)`
+  return '背景：实底'
 }
 
 function transitionLabel(type: NonNullable<V2PlanScenePresentation['transitionAfter']>['type']) {

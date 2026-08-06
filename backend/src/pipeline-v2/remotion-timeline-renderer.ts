@@ -9,6 +9,7 @@ import type {
   RemotionTimelineSpecV1,
 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import {
+  markRenderFailed,
   markRenderSucceeded,
   readRenderComponent,
 } from '../modules/render-components/component-registry.js'
@@ -185,6 +186,11 @@ export async function renderV2RemotionTimeline(input: {
   let result
   try {
     result = await runCommand(commandForNode(), args, remotionRoot)
+  } catch (error) {
+    for (const id of referencedComponentIds(renderSpec)) {
+      await markRenderFailed(id)
+    }
+    throw error
   } finally {
     await injectCustomComponents({ spec: { ...renderSpec, scenes: [], transitions: [] }, remotionRoot })
   }

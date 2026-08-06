@@ -18,6 +18,7 @@ export interface RenderComponentManifest {
   createdAt: string
   purpose?: 'scene' | 'transition'
   renderedTimes: number
+  failedRenders: number
   sourceWorkspaceSessionId?: string
   sourcePrompt?: string
   promotedAt?: string
@@ -85,6 +86,7 @@ export async function registerRenderComponent(input: {
     bundle_path: bundlePath,
     createdAt: new Date().toISOString(),
     renderedTimes: 0,
+    failedRenders: 0,
     sourceWorkspaceSessionId: input.sourceWorkspaceSessionId,
     sourcePrompt: input.sourcePrompt?.trim().slice(0, 1000),
     version: 1,
@@ -152,12 +154,34 @@ export async function markRenderSucceeded(id: string): Promise<RenderComponentMa
   }
 }
 
+/** Negative feedback: a failed render demotes the component's rank. */
+export async function markRenderFailed(id: string): Promise<RenderComponentManifest | null> {
+  if (!componentIdValid(id)) return null
+  const manifestPath = path.join(renderComponentsRoot(), id, 'manifest.json')
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as RenderComponentManifest
+    const next: RenderComponentManifest = {
+      ...manifest,
+      failedRenders: (manifest.failedRenders ?? 0) + 1,
+    }
+    await writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
+    return next
+  } catch {
+    return null
+  }
+}
+
+function componentBehaviorScore(manifest: RenderComponentManifest): number {
+  return (manifest.renderedTimes ?? 0) - (manifest.failedRenders ?? 0) * 3
+}
+
 export async function listPromotedComponents(): Promise<
   Array<{ id: string; purpose?: 'scene' | 'transition'; description: string }>
 > {
   const manifests = await listRenderComponents()
   return manifests
     .filter((item) => item.status === 'promoted')
+    .sort((a, b) => componentBehaviorScore(b) - componentBehaviorScore(a))
     .slice(0, 20)
     .map((item) => ({ id: item.id, purpose: item.purpose, description: item.description }))
 }

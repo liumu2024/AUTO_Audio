@@ -139,10 +139,8 @@ function InspectorVisibleText({
       </p>
       <p className="mt-1.5 text-xs leading-5 text-zinc-100">“{item.text}”</p>
       <p className="mt-1.5 text-[10px] text-zinc-500">
-        {animationLabel(item.enterAnimation)}
-        {item.maxLines
-          ? ` · ${item.maxLinesSource === 'track_default' ? '方案轨道设置（可修改）' : '本段设置'}最多 ${item.maxLines} 行`
-          : ''}
+        入场动画：{animationLabel(item.enterAnimation)}
+        {` · ${backgroundLabel(item.background)}`}
         {` · 位置 ${Math.round(item.xPct)}%, ${Math.round(item.yPct)}%`}
       </p>
     </div>
@@ -225,6 +223,15 @@ function animationLabel(animation: V2PlanVisibleText['enterAnimation']) {
     pulse: '脉冲',
     sweep: '扫光',
   }[animation ?? 'none']
+}
+
+function backgroundLabel(background: string | undefined) {
+  if (!background || background === 'transparent') return '背景：无'
+  const match = background.match(/rgba\([^)]*,\s*([\d.]+)\)/)
+  const alpha = match ? Number(match[1]) : 1
+  if (alpha <= 0.02) return '背景：透明'
+  if (alpha < 1) return `背景：半透明(${Math.round(alpha * 100)}%)`
+  return '背景：实底'
 }
 
 function transitionLabel(type: NonNullable<V2PlanScenePresentation['transitionAfter']>['type']) {

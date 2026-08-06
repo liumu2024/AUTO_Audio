@@ -13,6 +13,7 @@ try {
     listRenderComponents,
     listPromotedComponents,
     markRenderSucceeded,
+    markRenderFailed,
     matchPromotedComponents,
     readRenderComponent,
     registerRenderComponent,
@@ -72,6 +73,24 @@ export default function BlurRise(props) {
   )
   const unrelated = await matchPromotedComponents(['完全无关的风景广告'])
   assert.equal(unrelated.length, 0, 'unrelated requests must not map to any component')
+
+  // Behavior-weighted ordering: more successful renders rank higher, and a
+  // failed render acts as negative feedback that demotes the component.
+  await registerRenderComponent({ id: 'cmp_alpha', source: valid, description: 'alpha effect' })
+  await registerRenderComponent({ id: 'cmp_beta', source: valid, description: 'beta effect' })
+  for (let i = 0; i < 3; i += 1) await markRenderSucceeded('cmp_alpha')
+  await markRenderSucceeded('cmp_beta')
+  const ordered = await listPromotedComponents()
+  const alphaIndex = ordered.findIndex((item) => item.id === 'cmp_alpha')
+  const betaIndex = ordered.findIndex((item) => item.id === 'cmp_beta')
+  assert.ok(alphaIndex >= 0 && betaIndex >= 0, 'both weighted components must be listed')
+  assert.ok(alphaIndex < betaIndex, 'more-rendered component must rank higher')
+  await markRenderFailed('cmp_alpha')
+  const afterFailure = await listPromotedComponents()
+  assert.ok(
+    afterFailure.findIndex((item) => item.id === 'cmp_alpha') > afterFailure.findIndex((item) => item.id === 'cmp_beta'),
+    'negative feedback must demote the failed component',
+  )
 
   // Malicious or unsafe components must be rejected by the static audit.
   const malicious: Array<{ name: string; source: string }> = [
