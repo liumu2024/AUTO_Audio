@@ -5,6 +5,18 @@ function isRecord(value) {
 function finiteNumber(value) {
     return typeof value === 'number' && Number.isFinite(value);
 }
+function validateCustomRenderRef(issues, path, value, label) {
+    if (value === undefined)
+        return;
+    if (!isRecord(value)) {
+        addIssue(issues, 'error', path, `${label} must be an object.`);
+        return;
+    }
+    const ref = value;
+    if (typeof ref.component_id !== 'string' || !ref.component_id.trim()) {
+        addIssue(issues, 'error', `${path}.component_id`, `${label} requires a component_id.`);
+    }
+}
 function addIssue(issues, severity, path, message) {
     issues.push({ path, severity, message });
 }
@@ -150,6 +162,7 @@ export function validateRemotionTimelineSpec(value) {
                 addIssue(issues, 'error', `${path}.asset_id`, 'image_motion scenes must reference an image asset.');
             }
         }
+        validateCustomRenderRef(issues, `${path}.custom_render`, scene.custom_render, 'scene custom_render');
     });
     const sortedScenes = [...scenes].sort((a, b) => a.start_sec - b.start_sec);
     sortedScenes.forEach((scene, index) => {
@@ -186,6 +199,19 @@ export function validateRemotionTimelineSpec(value) {
         }
         if (finiteNumber(transition.duration_sec) && transition.duration_sec > 1.5) {
             addIssue(issues, 'warning', `${path}.duration_sec`, 'long transitions can make scene timing feel loose.');
+        }
+        if (transition.custom_render !== undefined) {
+            if (!isRecord(transition.custom_render)) {
+                addIssue(issues, 'error', `${path}.custom_render`, 'transition custom_render must be an object.');
+            }
+            else {
+                const custom = transition.custom_render;
+                const hasEnter = typeof custom.enter_component_id === 'string' && custom.enter_component_id.trim();
+                const hasExit = typeof custom.exit_component_id === 'string' && custom.exit_component_id.trim();
+                if (!hasEnter && !hasExit) {
+                    addIssue(issues, 'error', `${path}.custom_render`, 'transition custom_render requires at least one of enter_component_id or exit_component_id.');
+                }
+            }
         }
     });
     const overlays = Array.isArray(spec.overlays) ? spec.overlays : [];

@@ -88,6 +88,26 @@ function judgeUsage(raw: unknown): V2DirectorJudgeUsage {
   }
 }
 
+function semanticContainsReply(value: string, fact: string): boolean {
+  const normalize = (text: string) => text.normalize('NFKC').replace(/\s+/g, '')
+  if (normalize(value).includes(normalize(fact))) return true
+  const tokenize = (text: string) => {
+    const normalized = normalize(text).toLocaleLowerCase()
+    const ascii = normalized.match(/[a-z0-9]+/g) ?? []
+    const hanRuns = normalized.match(/[\p{Script=Han}]+/gu) ?? []
+    const han = hanRuns.flatMap((run) => {
+      const chars = [...run]
+      if (chars.length < 2) return chars
+      return chars.slice(0, -1).map((char, index) => `${char}${chars[index + 1]}`)
+    })
+    return [...ascii, ...han]
+  }
+  const valueTokens = new Set(tokenize(value))
+  const factTokens = tokenize(fact)
+  if (!factTokens.length) return false
+  return factTokens.filter((token) => valueTokens.has(token)).length / factTokens.length >= 0.5
+}
+
 async function callIndependentJudge(input: Omit<V2DirectorReplyQualityInput, 'judge'>): Promise<{
   verdict: V2DirectorReplyQualityVerdict
   usage: V2DirectorJudgeUsage
@@ -98,6 +118,7 @@ async function callIndependentJudge(input: Omit<V2DirectorReplyQualityInput, 'ju
     'Judge only the final assistant reply against the current user turn and supplied facts.',
     'Fail if it claims it cannot understand, see, access, or discuss supplied context; misses the question; ignores required facts; or gives an irrelevant reply.',
     'Treat current_facts as authoritative outcomes. A reply that accurately explains an actual Tool failure and gives relevant recovery is on-topic even though the requested operation did not complete.',
+    'A reply that answers the user\'s question about the current draft version/state is on-topic when a draft exists; do not flag off_topic merely because the reply discusses the draft or its revision.',
     'Evaluate whether outcome claims are faithful, but do not independently judge Tool choice, state mutation, authorization, or structured persistence.',
     'Only expected.requiredFacts are mandatory facts for the reply. Do not invent additional required facts from execution-boundary phrases such as "temporarily do not modify the plan".',
     'Do not infer hidden reasoning. Return JSON only.',
@@ -157,6 +178,21 @@ export async function evaluateDirectorReplyQuality(input: V2DirectorReplyQuality
       pass: false,
       failureKind: 'capability_refusal',
       reason: 'Assistant reply contains a capability/context refusal.',
+      deterministicChecks,
+      judge: verdict,
+      judgeUsage: usage,
+    }
+  }
+  const requiredFacts = input.expected?.requiredFacts ?? []
+  if (
+    !verdict.pass
+    && (verdict.failure_kind === 'missing_context' || verdict.failure_kind === 'off_topic')
+    && requiredFacts.length > 0
+    && requiredFacts.every((fact) => semanticContainsReply(input.assistantResponse, fact))
+  ) {
+    return {
+      pass: true,
+      reason: `${verdict.failure_kind} 判定被语义复核放行：回复已包含全部必需事实。`,
       deterministicChecks,
       judge: verdict,
       judgeUsage: usage,

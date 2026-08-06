@@ -60,9 +60,15 @@ export interface V2PlannerInput {
   revisionBaseSpec?: RemotionTimelineSpecV1
   /** Tool-authorized field scope applied before review and persistence. */
   revisionScope?: V2TimelineRevisionScope
+  /** Tool-authorized target scene for the scene revision scope. */
+  revisionSceneId?: string
   /** Server-resolved instructions and normalized arguments for this Agent stage. */
   agentSkillContext?: V2AgentSkillContext
   agentToolContext?: V2AgentToolContext
+  /** System-confirmed effect->component mappings for this request. */
+  componentHints?: Array<{ component_id: string; purpose?: 'scene' | 'transition'; matched_text: string }>
+  /** All promoted (sedimented) render components available for reference. */
+  availableComponents?: Array<{ id: string; purpose?: 'scene' | 'transition'; description: string }>
   materials?: V2PlannerMaterialInput[]
   durationSec?: number
   plannerMode?: 'deterministic' | 'llm'

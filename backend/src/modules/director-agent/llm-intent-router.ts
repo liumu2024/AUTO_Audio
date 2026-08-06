@@ -19,6 +19,7 @@ import type {
 } from '../../../../shared/types/director-context.js'
 import type { ConfirmedRequirement } from '../../../../shared/types/director-workspace-session.js'
 import type { CreativeMemorySearchResult } from '../creative-memory/creative-memory.service.js'
+import { listPromotedComponents } from '../render-components/component-registry.js'
 
 const AspectRatioSchema = z.enum(['9:16', '16:9', '1:1', '4:3'])
 const ContentDomainSchema = z.enum([
@@ -162,6 +163,7 @@ export function compactDirectorContextForPrompt(input: {
   runtime: DirectorConversationRuntime
   confirmedRequirements?: ConfirmedRequirement[]
   retrievedCreativeMemories?: CreativeMemorySearchResult
+  promotedComponents?: Array<{ id: string; purpose?: 'scene' | 'transition'; description: string }>
 }) {
   const state = input.context.directorState
   const compactDirectorState = state
@@ -252,6 +254,7 @@ export function compactDirectorContextForPrompt(input: {
     },
     // This is server-owned V2 session memory, never a legacy timeline summary.
     conversationMemory: input.context.conversationSummary,
+    renderedComponents: input.promotedComponents ?? [],
   }
 }
 
@@ -262,6 +265,7 @@ export function buildDirectorModelPrompt(input: {
   runtime: DirectorConversationRuntime
   confirmedRequirements?: ConfirmedRequirement[]
   retrievedCreativeMemories?: CreativeMemorySearchResult
+  promotedComponents?: Array<{ id: string; purpose?: 'scene' | 'transition'; description: string }>
 }) {
   return `你是 AI Video Studio 的导演 Agent。请自然理解当前输入，并结合结构化事实和历史上下文处理指代、延续与冲突。
 
@@ -274,8 +278,7 @@ export function buildDirectorModelPrompt(input: {
 决策规则：
 - intent 只使用 chat、create、revise、execute、clarify。讨论、建议、评价、假设和只读问答使用 chat，不请求 Tool。
 - 如果当前输入唯一要求是记录、替换、撤销或查询创作要求，intent 必须为 chat 且 toolRequests 必须为空；create/revise 只表示用户同时明确要求创建或修订可编辑草稿，不能因要求文本出现“画面、字幕、风格”等词就主动执行。
-- 只有当前输入明确授权创建、修订或执行时才请求 Tool。渲染、导出等交付操作必须使用 execute。
-- 用户在当前输入中明确命令“渲染、导出、提交、生成成片”等交付动作，即为本轮明确授权；不要再次询问同一授权。服务端仍会执行最终权限校验。
+- 只有当前输入明确授权创建、修订或执行时才请求 Tool；渲染、导出等交付操作必须使用 execute。用户明确命令“渲染、导出、提交、生成成片”等交付动作即本轮授权，不要再次询问（服务端仍会执行最终权限校验）。
 - capabilitySnapshot 是服务端权威能力事实。不要从缺少某类素材推导整个任务不可执行；优先选择 ready 路径。blocked 时说明具体缺失项和 alternatives。
 - sample video 是结构和风格参考，materials 才是候选成片素材。模型不得填写样例、素材、草稿、版本、项目或用户 ID；这些由服务端绑定。
 - creativeConfigDelta 只写本轮新确认的创作参数；UI 明确值优先，不能被模型覆盖。
@@ -286,15 +289,21 @@ export function buildDirectorModelPrompt(input: {
 - replyDraft 不能声称要求、长期知识或 Tool 已成功保存/执行，服务端会根据实际 receipts 生成最终回复。
 - missingInformation 只列出真正阻塞当前目标的事实；可选补充不算阻塞。
 - Tool arguments 必须严格符合 Tool 卡片中的 inputSchema，不得增加字段。
+- 用户在本轮明确请求修改草稿（改字幕、换转场、换视觉策略、重排镜头）即为本轮执行授权；draft 修订不需要再次确认，直接选择 timeline.patch 执行。
+- 用户表达的效果需求（滤镜、合成、动画、转场）超出预置集时：先查 Current context 中 renderedComponents 清单，有则用 custom_render 引用；没有则通过 render.author 创作组件（用户无需明确要求写代码）。
+- timeline.patch 的 sceneId 必须使用当前草稿 timelineFacts 中真实存在的场景 id；不确定时省略 sceneId，服务端会按当前选中镜头解析。subtitle 范围可全量修订字幕，也可带目标 sceneId 只改该场景字幕。
+- scene 范围修改目标镜头的画面事实、字幕与相邻转场；visual_strategy 只切换目标镜头的视觉呈现（type/fit/motion/background/素材绑定），不动字幕与转场；两者都需要目标场景。
+- 要求台账（stateActions）与创作记忆（memoryActions）不要对同一句话同时输出：记录为“要求/约束”走 stateActions；记住“偏好/长期/以后都这样”走 memoryActions。
+- 用户明确说“记住/保存/沉淀”，或表达明确偏好（我喜欢、偏好、习惯、总是用…）时，必须输出对应的 memoryAction：稳定且跨项目→user+active；仅当前草稿→draft+active；不确定或仅一次选择→candidate。
 
 长期创作知识规则：
 - memoryActions 是可选附加动作；没有可跨轮复用的创作知识时省略或返回空数组，闲聊不得为了填字段而沉淀。
 - retrievedCreativeMemories 是召回候选，不是 confirmedRequirements。不得仅因为召回到 active 记忆就把它复制进 stateActions；需要规划时它会由服务端作为临时 Planner 上下文传入。
 - 用户长期稳定偏好使用 user scope；只适用于当前持久草稿的知识使用 draft scope。不要输出草稿 ID，服务端会绑定当前草稿。
-- 明确且稳定的知识可标记 active；从一次选择中推断的内容只能标记 candidate。candidate 不直接控制创作。
+- 推断或不确定的知识只能标记 candidate，candidate 不直接控制创作。
 - replace/revoke 只能引用 retrievedCreativeMemories 中的 memory id。每项必须引用本轮 currentTurnId；记忆失败不会阻断其他动作。
 输出字段：replyDraft、intent、creativeConfigDelta、stateActions、memoryActions、skillRequests、toolRequests、missingInformation。只输出 JSON。
-
+1
 Available Skill cards:
 ${JSON.stringify(listV2AgentSkillCards())}
 
@@ -305,11 +314,8 @@ Current context:
 ${JSON.stringify(compactDirectorContextForPrompt(input), null, 2)}
 
 输出前的最终核对：
-- 重新只看这条当前用户输入：${JSON.stringify(input.prompt)}
-- 它是否明确要求本轮创建、修订或执行产物？如果没有，不能仅凭已确认要求、历史或创作名词把 intent 升级为 create/revise/execute，toolRequests 必须为空。
-- “记录/更新一条要求”本身不等于“立即把要求应用到草稿”。只有用户在同一句中同时明确提出两者，才能同时返回状态动作与 Tool。
-- “只有 A 成功后才做 B / 先 A 再做 B”是在当前轮明确请求 A 和 B，并为 B 建立条件依赖；除非用户另说“以后、暂不、先别做 B”，不能把 B 丢掉。
-- 如果用户明确说后一个动作只有在前一个动作成功后才能发生，后一个动作必须 dependsOn 前一个 ref。
+- 只看这条当前用户输入：${JSON.stringify(input.prompt)}
+- 它是否明确要求本轮创建、修订或执行产物？如果没有，toolRequests 必须为空；“记录要求”不等于“应用草稿”，只有同一句同时提出两者才同时返回状态动作与 Tool。
 只输出最终 JSON。`
 }
 
@@ -645,6 +651,7 @@ export async function routeDirectorIntentWithLlm(input: {
   confirmedRequirements?: ConfirmedRequirement[]
   retrievedCreativeMemories?: CreativeMemorySearchResult
 }): Promise<LlmIntentRouterOutput> {
+  const promotedComponents = await listPromotedComponents()
   if (!env.directorAgentEnabled) {
     return buildDirectorContextFallback({
       ...input,
@@ -654,7 +661,7 @@ export async function routeDirectorIntentWithLlm(input: {
 
   try {
     const response = await callResponsesApi({
-      promptText: buildDirectorModelPrompt(input),
+      promptText: buildDirectorModelPrompt({ ...input, promotedComponents }),
       previousResponseId: input.previousResponseId,
     })
     const raw = response.raw

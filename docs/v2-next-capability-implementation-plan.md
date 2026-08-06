@@ -16,17 +16,19 @@
 
 ## 1. 局部时间线修订
 
+状态：`timeline.patch` 已开放 `subtitle` / `scene` / `visual_strategy` / `global` 四个通用范围（2026-08-04）；`audio` 已取消，不再规划（2026-08-04）。
+
 ### 目标
 
 在现有 `timeline.patch(scope=subtitle)` 基础上，分批开放 `scene`、`visual_strategy`、`audio` 和 `global`。每种范围只允许改变其声明的事实，其余基础版本事实必须由服务端保护。
 
 ### 实施
 
-1. 为每个 scope 定义输入 JSON Schema、允许字段、禁止字段和差异审查规则。
-2. `scene` 要求 `scene_id`；允许该镜头、关联字幕和相邻转场，禁止改其他镜头主题。
-3. `visual_strategy` 允许 AI 视频、图片动态、Remotion 卡片和混合方案之间的选择，但禁止无关文案与音频改动。
-4. `audio` 仅在独立音频轨实现后启用。
-5. `global` 必须生成完整新版本、记录明确授权、通过修订语义审查。
+1. 为每个 scope 定义输入 JSON Schema、允许字段、禁止字段和差异审查规则（已实现：subtitle/scene/global）。
+2. `scene` 要求 `scene_id`；允许该镜头、关联字幕和相邻转场，禁止改其他镜头主题（已实现）。
+3. `visual_strategy` 允许 AI 视频、图片动态、Remotion 卡片和混合方案之间的选择，但禁止无关文案与音频改动（已实现）。
+4. `audio` 已取消，不再规划（2026-08-04）。
+5. `global` 必须生成完整新版本、记录明确授权、通过修订语义审查（已实现）。
 
 ### 验收
 

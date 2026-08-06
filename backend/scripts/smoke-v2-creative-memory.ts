@@ -130,7 +130,49 @@ try {
   assert.equal(crossSessionNearDuplicate[0].status, 'succeeded')
   assert.equal(
     (await listCreativeMemories({ userId: 1 })).find((item) => item.id === crossSessionNearDuplicate[0].memoryId)?.status,
+    'active',
+    'a user preference repeated across sessions is behavior evidence and becomes active',
+  )
+
+  // An existing candidate that reappears in another session is promoted to
+  // active automatically (behavior-driven sedimentation).
+  const firstSession = await applyCreativeMemoryActions({
+    userId: 1,
+    workspaceSessionId: 'workspace_mem_a',
+    currentTurnId: 'turn_mem_a',
+    actions: [{
+      ref: 'mem_a',
+      operation: 'add',
+      scopeType: 'user',
+      statement: '长期偏好冷灰色调',
+      status: 'candidate',
+      origin: 'explicit',
+      sourceTurnIds: ['turn_mem_a'],
+    }],
+  })
+  assert.equal(
+    (await listCreativeMemories({ userId: 1 })).find((item) => item.id === firstSession[0].memoryId)?.status,
     'candidate',
+  )
+  const secondSession = await applyCreativeMemoryActions({
+    userId: 1,
+    workspaceSessionId: 'workspace_mem_b',
+    currentTurnId: 'turn_mem_b',
+    actions: [{
+      ref: 'mem_b',
+      operation: 'add',
+      scopeType: 'user',
+      statement: '长期偏好冷灰色调',
+      status: 'active',
+      origin: 'explicit',
+      sourceTurnIds: ['turn_mem_b'],
+    }],
+  })
+  assert.equal(secondSession[0].status, 'succeeded')
+  assert.equal(
+    (await listCreativeMemories({ userId: 1 })).find((item) => item.id === firstSession[0].memoryId)?.status,
+    'active',
+    'existing candidate must be promoted when it reappears in another session',
   )
 
   const inferredActive = await applyCreativeMemoryActions({
@@ -234,6 +276,55 @@ try {
     query: '字幕只保留关键信息',
   })
   assert.equal(afterDraftDeletion.active.some((item) => item.memory.id === draftCaption.id), false)
+
+  // A statement that is also recorded as this turn's requirement must not be
+  // silently promoted to an active user preference (double-write guard).
+  const duplicateOfRequirement = await applyCreativeMemoryActions({
+    userId: 1,
+    workspaceSessionId: 'workspace_memory_smoke',
+    currentTurnId: 'turn_duplicate_requirement',
+    requirementStatements: ['描写战锤40k世界大战的视频方案，至少出现4种种族角色，包含10个镜头'],
+    actions: [{
+      ref: 'dup_req',
+      operation: 'add',
+      scopeType: 'user',
+      statement: '描写战锤40k世界大战的视频方案，至少出现4种种族角色',
+      status: 'active',
+      origin: 'explicit',
+      sourceTurnIds: ['turn_duplicate_requirement'],
+    }],
+  })
+  assert.equal(duplicateOfRequirement[0].status, 'succeeded')
+  assert.equal(duplicateOfRequirement[0].reason, 'duplicate_of_requirement')
+  assert.equal(
+    (await listCreativeMemories({ userId: 1 })).find((item) => item.id === duplicateOfRequirement[0].memoryId)?.status,
+    'candidate',
+    'requirement double-write must degrade to candidate instead of active',
+  )
+
+  // A genuine transferable preference is not blocked just because this turn
+  // also records an unrelated requirement.
+  const unrelatedRequirement = await applyCreativeMemoryActions({
+    userId: 1,
+    workspaceSessionId: 'workspace_memory_smoke',
+    currentTurnId: 'turn_unrelated_requirement',
+    requirementStatements: ['描写战锤40k世界大战的视频方案，至少出现4种种族角色，包含10个镜头'],
+    actions: [{
+      ref: 'unrelated_mem',
+      operation: 'add',
+      scopeType: 'user',
+      statement: '标题使用白色粗体',
+      status: 'active',
+      origin: 'explicit',
+      sourceTurnIds: ['turn_unrelated_requirement'],
+    }],
+  })
+  assert.equal(unrelatedRequirement[0].reason, undefined)
+  assert.equal(
+    (await listCreativeMemories({ userId: 1 })).find((item) => item.id === unrelatedRequirement[0].memoryId)?.status,
+    'active',
+    'unrelated transferable preference must stay active',
+  )
 
   console.log('V2 creative memory smoke passed.')
 } finally {

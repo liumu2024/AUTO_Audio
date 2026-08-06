@@ -167,6 +167,7 @@ async function resolveTimelineSpec(input: {
               baseSpec: input.plannerInput.revisionBaseSpec,
               candidateSpec: llmPlanner.spec,
               scope: input.plannerInput.revisionScope,
+              sceneId: input.plannerInput.revisionSceneId,
             }),
           }
           await input.trace.writeJson('02-planning', 'timeline-scoped-candidate.json', llmPlanner.spec)
@@ -176,6 +177,8 @@ async function resolveTimelineSpec(input: {
           baseSpec: input.plannerInput.revisionBaseSpec,
           candidateSpec: llmPlanner.spec,
           confirmedContext: input.plannerInput.conversationSummary,
+          revisionScope: input.plannerInput.revisionScope,
+          revisionSceneId: input.plannerInput.revisionSceneId,
         })
         await input.trace.writeJson('02-planning', 'timeline-outcome-review.json', outcomeReview)
         if (!outcomeReview.pass) {
@@ -204,6 +207,7 @@ async function resolveTimelineSpec(input: {
                 baseSpec: input.plannerInput.revisionBaseSpec,
                 candidateSpec: llmPlanner.spec,
                 scope: input.plannerInput.revisionScope,
+                sceneId: input.plannerInput.revisionSceneId,
               }),
             }
             await input.trace.writeJson('02-planning', 'timeline-outcome-correction-scoped-candidate.json', llmPlanner.spec)
@@ -213,6 +217,8 @@ async function resolveTimelineSpec(input: {
             baseSpec: input.plannerInput.revisionBaseSpec,
             candidateSpec: llmPlanner.spec,
             confirmedContext: input.plannerInput.conversationSummary,
+            revisionScope: input.plannerInput.revisionScope,
+            revisionSceneId: input.plannerInput.revisionSceneId,
           })
           await input.trace.writeJson('02-planning', 'timeline-outcome-correction-review.json', outcomeReview)
           if (!outcomeReview.pass) {

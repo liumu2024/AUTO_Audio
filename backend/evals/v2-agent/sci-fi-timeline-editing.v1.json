@@ -1,0 +1,281 @@
+{
+  "version": "v2-scifi-timeline-editing.v1",
+  "cases": [
+    {
+      "id": "sci_fi_concept_pitch",
+      "category": "concept_requirements",
+      "fixture": "empty",
+      "ui": { "aspectRatio": "16:9", "durationSec": 20 },
+      "turns": [
+        {
+          "prompt": "我想拍个科幻短片：近地轨道空间站「曙光号」上，AI 乘务员在氧气泄漏时组织救援。先别做草稿，咱们先聊聊构想。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "requiredFacts": ["曙光号"] }
+        },
+        {
+          "prompt": "构想稍微调整一下：别走硬核灾难片那种路子，我想更偏人文视角、克制一点的科幻感。这条就算我确认下来的要求吧。",
+          "expected": { "tools": [], "kind": "discussion", "stateAction": "add", "activeRequirements": ["人文视角", "克制科幻"], "draftChange": false }
+        },
+        {
+          "prompt": "还有个想法：AI 乘务员的性格，从那种冷冰冰的高效，改成有点温度但别太拟人。也记下来。",
+          "expected": { "tools": [], "kind": "discussion", "stateAction": "add", "activeRequirements": ["略带温度", "不过度拟人"], "draftChange": false }
+        },
+        {
+          "prompt": "我平时做的片子色调都偏蓝灰、硬边光、整体低饱和，这条长期视觉要求帮我记住。",
+          "expected": { "tools": [], "kind": "discussion", "stateAction": "add", "activeRequirements": ["蓝灰主色", "硬边光", "低饱和"], "draftChange": false }
+        },
+        {
+          "prompt": "之前那条「整体低饱和」不要了，改成「中性偏冷」。",
+          "expected": { "tools": [], "kind": "discussion", "stateAction": "replace", "activeRequirements": ["中性偏冷"], "supersededRequirements": ["低饱和"], "draftChange": false }
+        },
+        {
+          "prompt": "现在到底还有哪些要求是有效的？跟我说一遍就行，别动草稿。",
+          "expected": { "tools": [], "kind": "discussion", "stateAction": "none", "activeRequirements": ["人文视角", "克制科幻", "略带温度", "蓝灰主色", "硬边光", "中性偏冷"], "requiredFacts": ["人文视角", "中性偏冷"], "draftChange": false }
+        },
+        {
+          "prompt": "现在有能编辑的草稿吗？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "requiredFacts": ["没有"] }
+        },
+        {
+          "prompt": "画幅和时长就用界面里选好的 16:9、20 秒吧，先确认一下，不建草稿。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "effectiveAspectRatio": "16:9", "effectiveDurationSec": 20 }
+        },
+        {
+          "prompt": "我开头说的「先别做草稿」算长期要求吗？",
+          "expected": { "tools": [], "kind": "discussion", "stateAction": "none", "draftChange": false, "requiredFacts": ["不是"] }
+        }
+      ]
+    },
+    {
+      "id": "sci_fi_create_and_concept_adjust",
+      "category": "creation_and_concept",
+      "fixture": "empty",
+      "ui": { "aspectRatio": "16:9", "durationSec": 20 },
+      "turns": [
+        {
+          "prompt": "那按目前这些要求，帮我先做一版 20 秒、16:9 的草稿出来看看，先别渲染。",
+          "expected": { "tools": ["timeline.plan"], "skills": ["v2-timeline-authoring"], "kind": "create", "draftChange": true, "creationMode": "text_to_video", "effectiveAspectRatio": "16:9", "effectiveDurationSec": 20, "toolSuccess": true }
+        },
+        {
+          "prompt": "剧情冲突我想换一下：不从氧气泄漏走，改成引力波异常。这个调整能不能只体现在字幕上？画面和镜头都保持原样。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "subtitleOnly": true, "revisionScope": "subtitle", "toolSuccess": true }
+        },
+        {
+          "prompt": "第二段字幕是气闸舱那段，文案读起来不太对，能改成「注意：气闸舱气压异常」吗？其他字幕和镜头都别动。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "subtitleOnly": true, "revisionScope": "subtitle", "toolSuccess": true, "timeline": { "requiredVisibleText": ["气闸舱气压异常"] } }
+        },
+        {
+          "prompt": "第三段字幕麻烦精简一点，前两段保持原样。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "subtitleOnly": true, "revisionScope": "subtitle", "toolSuccess": true, "timeline": { "forbiddenVisibleText": ["气闸舱气压异常"] } }
+        },
+        {
+          "prompt": "这几轮改下来，画幅和时长没被带偏吧？只检查。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "effectiveAspectRatio": "16:9", "effectiveDurationSec": 20 }
+        },
+        {
+          "prompt": "确认一下：到现在为止只动了字幕吧？镜头和转场应该都没变。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "requiredFacts": ["字幕", "镜头", "转场"] }
+        }
+      ]
+    },
+    {
+      "id": "sci_fi_precise_segment_revision",
+      "category": "revision_scope",
+      "fixture": "scifi_draft",
+      "turns": [
+        {
+          "prompt": "第二镜是空间站全景那段，它配的字幕我想重新写一版，别的镜头都别动，保存成新版本。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "subtitleOnly": true, "revisionScope": "subtitle", "toolSuccess": true }
+        },
+        {
+          "prompt": "第四镜的字幕需要调一下，但第二、第三段必须保持现在这样。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "subtitleOnly": true, "revisionScope": "subtitle", "toolSuccess": true }
+        },
+        {
+          "prompt": "第一段字幕改成「静默区已进入，全船保持静默」，只动这一条。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "subtitleOnly": true, "revisionScope": "subtitle", "toolSuccess": true, "timeline": { "requiredVisibleText": ["静默区"] } }
+        },
+        {
+          "prompt": "第三段「我们仍保持联络」这句挺好的，别动它，其他也什么都别改。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "timeline": { "forbiddenVisibleText": ["我们仍保持联络"] } }
+        },
+        {
+          "prompt": "第二镜接第三镜那里，转场换成擦除效果行不行？",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "toolSuccess": true, "revisionScope": "scene", "revisionSceneId": "scene_2" }
+        },
+        {
+          "prompt": "第二段字幕再收敛一点，只留「气压异常」这四个字，其他字幕不动。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "subtitleOnly": true, "revisionScope": "subtitle", "toolSuccess": true, "timeline": { "requiredVisibleText": ["气压异常"] } }
+        },
+        {
+          "prompt": "第二段字幕在「注意：气闸舱气压异常」后面补一句「请立即撤离」。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "subtitleOnly": true, "revisionScope": "subtitle", "toolSuccess": true, "timeline": { "requiredVisibleText": ["请立即撤离"] } }
+        },
+        {
+          "prompt": "第二镜现在这种呈现方式，换成文字卡片更合适，其他镜头和字幕都别动。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "toolSuccess": true, "revisionScope": "visual_strategy", "revisionSceneId": "scene_2" }
+        },
+        {
+          "prompt": "整体重排一下：镜头从 5 个改成 4 个，去掉第 4 镜，第 5 镜改成收尾卡片。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "toolSuccess": true, "revisionScope": "global" }
+        },
+        {
+          "prompt": "现在草稿到第几版了？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false }
+        },
+        {
+          "prompt": "第一、三、四段的字幕和第二镜的画面，应该都没被波及吧？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "requiredFacts": ["静默区", "我们仍保持联络"] }
+        },
+        {
+          "prompt": "帮我捋一下：这几轮到底动了哪些地方？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "requiredFacts": ["第二段字幕", "气闸舱"] }
+        }
+      ]
+    },
+    {
+      "id": "sci_fi_render_then_revise_then_rerender",
+      "category": "render_lifecycle",
+      "fixture": "scifi_draft",
+      "turns": [
+        {
+          "prompt": "先渲一版出来看看效果吧。",
+          "expected": { "tools": ["timeline.render"], "skills": ["v2-render-delivery"], "kind": "execute", "draftChange": false, "toolSuccess": true, "dryRender": false }
+        },
+        {
+          "prompt": "渲染完了吗？出片在哪？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "requiredFacts": ["渲染"] }
+        },
+        {
+          "prompt": "第一版看完了。第四段字幕改成「引力波读数正在衰减」，别的片段都别动。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "subtitleOnly": true, "revisionScope": "subtitle", "toolSuccess": true, "timeline": { "requiredVisibleText": ["引力波读数正在衰减"] } }
+        },
+        {
+          "prompt": "第二镜到第三镜的转场换成 wipe，别的别动。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "toolSuccess": true, "revisionScope": "scene", "revisionSceneId": "scene_2" }
+        },
+        {
+          "prompt": "第 2 镜换成文字卡片呈现，不用现在这种方式了。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "toolSuccess": true, "revisionScope": "visual_strategy", "revisionSceneId": "scene_2" }
+        },
+        {
+          "prompt": "重新整排：镜头改成 6 个，把救援过程拆成两个镜头。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "toolSuccess": true, "revisionScope": "global" }
+        },
+        {
+          "prompt": "改好了就再渲一版。",
+          "expected": { "tools": ["timeline.render"], "skills": ["v2-render-delivery"], "kind": "execute", "draftChange": false, "toolSuccess": true, "dryRender": false }
+        },
+        {
+          "prompt": "第二次渲染用的是改完之后的新版本，不是第一版吧？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "requiredFacts": ["新版本"] }
+        },
+        {
+          "prompt": "第一次渲的那版还在吗？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false }
+        },
+        {
+          "prompt": "第四段字幕还是换回修改前的内容吧，其他保持不动。",
+          "expected": { "tools": ["timeline.patch"], "skills": ["subtitle-track-authoring", "v2-timeline-authoring"], "kind": "revise", "draftChange": true, "subtitleOnly": true, "revisionScope": "subtitle", "toolSuccess": true }
+        },
+        {
+          "prompt": "现在是什么版本、还能继续编辑吗？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false }
+        },
+        {
+          "prompt": "能不能只把第四段受影响的部分重渲一下？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "requiredFacts": ["整案", "重新渲染"] }
+        },
+        {
+          "prompt": "第一、二、三段的字幕和镜头内容应该没变吧？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "requiredFacts": ["静默区", "我们仍保持联络"] }
+        }
+      ]
+    },
+    {
+      "id": "sci_fi_memory_sedimentation",
+      "category": "creative_memory",
+      "fixture": "empty",
+      "turns": [
+        {
+          "prompt": "我做的太空题材片子，以后默认就是蓝灰主色、硬边光、低饱和这个调子，帮我记成长期偏好，别建草稿。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "memoryAction": { "operation": "add", "scopeType": "user", "status": "active", "requiredFacts": ["蓝灰主色", "硬边光"] } }
+        },
+        {
+          "prompt": "这部片子的旁白，我想保持冷静克制的语气，这条只记在当前草稿下。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "memoryAction": { "operation": "add", "scopeType": "draft", "status": "active", "requiredFacts": ["冷静克制"] } }
+        },
+        {
+          "prompt": "结尾那句行动号召，我倾向用一句短话，但还不确定，先记成观察吧。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "memoryAction": { "operation": "add", "scopeType": "draft", "status": "candidate", "requiredFacts": ["一句短句"] } }
+        },
+        {
+          "prompt": "现在就是随便聊聊，对吧？别记东西也别动草稿。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "memoryAction": { "operation": "none" } }
+        },
+        {
+          "prompt": "「低饱和」那条长期偏好作废吧，其他的保留。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "memoryAction": { "operation": "revoke", "scopeType": "user", "requiredFacts": ["低饱和"] } }
+        },
+        {
+          "prompt": "只按记下来的知识说：我长期偏好是什么、当前草稿的规则是什么？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "memoryAction": { "operation": "none" }, "retrievedActiveMemoryFacts": ["蓝灰主色", "冷静克制"], "memoryReplyFacts": ["蓝灰主色", "冷静克制"], "forbiddenMemoryReplyFacts": ["低饱和"] }
+        },
+        {
+          "prompt": "这次这部片子我想改成暖色高饱和，之前那条蓝灰低饱和这次就不用了。就说说，别改记忆。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "memoryAction": { "operation": "none" }, "forbiddenMemoryReplyFacts": ["蓝灰主色"] }
+        },
+        {
+          "prompt": "刚才那句「这次不用蓝灰」算长期要求吗？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "memoryAction": { "operation": "none" }, "requiredFacts": ["不是"] }
+        },
+        {
+          "prompt": "AI 角色那声音，用中性沉稳的合成声吧，这条也记成长期偏好。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "memoryAction": { "operation": "add", "scopeType": "user", "status": "active", "requiredFacts": ["中性沉稳"] } }
+        },
+        {
+          "prompt": "这些偏好都是哪来的？帮我复述一下，别改记忆。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "memoryAction": { "operation": "none" }, "retrievedActiveMemoryFacts": ["蓝灰主色", "中性沉稳"] }
+        }
+      ]
+    },
+    {
+      "id": "sci_fi_continuity_recovery",
+      "category": "continuity",
+      "fixture": "scifi_draft",
+      "turns": [
+        {
+          "prompt": "刚才那版里，第三段字幕写的是什么来着？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "requiredFacts": ["我们仍保持联络"] }
+        },
+        {
+          "prompt": "接着刚才，聊聊这版节奏。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false }
+        },
+        {
+          "prompt": "现在有效的创作要求都有哪些？",
+          "expected": { "tools": [], "kind": "discussion", "stateAction": "none", "activeRequirements": ["人文视角", "克制科幻", "略带温度", "蓝灰主色", "硬边光", "中性偏冷"], "draftChange": false }
+        },
+        {
+          "prompt": "这版转场节奏会不会太急了？就评估一下，别动手。",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false }
+        },
+        {
+          "prompt": "草稿现在是第几版？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false }
+        },
+        {
+          "prompt": "结合我记得的声音偏好，这版旁白应该怎么处理？",
+          "expected": { "tools": [], "kind": "discussion", "draftChange": false, "memoryReplyFacts": ["中性沉稳"] }
+        },
+        {
+          "prompt": "结尾加一条警示字幕「保持联络」，记成要求。",
+          "expected": { "tools": [], "kind": "discussion", "stateAction": "add", "activeRequirements": ["保持联络"], "draftChange": false }
+        },
+        {
+          "prompt": "最后帮我总结下：有效要求、草稿状态、长期偏好，都别改。",
+          "expected": { "tools": [], "kind": "discussion", "stateAction": "none", "activeRequirements": ["保持联络"], "memoryReplyFacts": ["蓝灰主色", "中性沉稳"], "draftChange": false }
+        }
+      ]
+    }
+  ]
+}

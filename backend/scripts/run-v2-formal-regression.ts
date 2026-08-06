@@ -49,7 +49,13 @@ const commands: Array<{ id: string; script: string; args?: string[] }> = [
   { id: 'creative_memory_retrieval', script: 'scripts/smoke-v2-creative-memory-retrieval.ts' },
   { id: 'formal_datasets', script: 'scripts/smoke-v2-formal-evaluation-datasets.ts' },
   { id: 'director_action_isolation', script: 'scripts/smoke-v2-director-multiturn.ts' },
+  { id: 'director_tool_instruction', script: 'scripts/smoke-v2-director-tool-instruction.ts' },
   { id: 'evaluation_metrics', script: 'scripts/smoke-v2-agent-evaluation.ts' },
+  { id: 'sci_fi_scoped_edit', script: 'scripts/smoke-v2-scifi-scoped-edit.ts' },
+  { id: 'review_development_loop', script: 'scripts/smoke-v2-review-development-loop.ts' },
+  { id: 'public_material_chain', script: 'scripts/smoke-v2-public-material-chain.ts' },
+  { id: 'render_component_sandbox', script: 'scripts/smoke-v2-render-component-sandbox.ts' },
+  { id: 'render_custom_component', script: 'scripts/smoke-v2-render-custom-component.ts' },
 ]
 if (!skipRender) commands.push({ id: 'remotion_delivery', script: 'scripts/smoke-v2-evaluation-remotion-render.ts' })
 
@@ -97,6 +103,7 @@ if (!skipLive) {
   const evaluations = [
     { id: 'core', suite: 'core.v2', runs: 1 },
     { id: 'memory', suiteFile: memorySuiteFile, runs: 1 },
+    { id: 'sci_fi', suite: 'sci-fi-timeline-editing.v1', runs: 1 },
     { id: 'artifact', suite: 'artifact-requirements.v1', runs: 1 },
     { id: 'key_stability', suite: 'core.v2', runs: 3, cases: keyCases.join(',') },
   ]
@@ -152,6 +159,7 @@ const datasetFiles = [
   memorySuiteFile,
   path.resolve('evals/v2-agent/memory-retrieval.v1.json'),
   path.resolve('evals/v2-agent/memory-retrieval-hard.v1.json'),
+  path.resolve('evals/v2-agent/sci-fi-timeline-editing.v1.json'),
   path.resolve('evals/v2-agent/artifact-requirements.v1.json'),
   path.resolve('evals/v2-agent/human-review.v1.json'),
 ]

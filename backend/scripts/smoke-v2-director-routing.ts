@@ -39,6 +39,17 @@ assert.match(prompt, /targetRequirementId/)
 assert.doesNotMatch(prompt, /nextAction|executionEffect|conversationIntent|slotsPatch/)
 assert.match(prompt, /req_active/)
 assert.match(prompt, /req_old/)
+assert.doesNotMatch(prompt, /cmp_blur_dissolve/)
+
+const withComponents = buildDirectorModelPrompt({
+  prompt: '给第五段加一个粒子消散效果。',
+  context,
+  runtime: runtime(),
+  promotedComponents: [{ id: 'cmp_blur_dissolve', purpose: 'transition', description: '模糊溶解转场' }],
+})
+assert.match(withComponents, /renderedComponents/)
+assert.match(withComponents, /cmp_blur_dissolve/)
+assert.match(withComponents, /render\.author 创作组件/)
 
 const chat = parseDirectorModelDecision(JSON.stringify({
   replyDraft: '这版可以继续沿用中性低饱和。',

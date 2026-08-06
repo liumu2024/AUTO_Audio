@@ -4,6 +4,7 @@ import type { RemotionTimelineSpecV1 } from '../../shared/types/remotion-timelin
 import {
   buildV2TimelineFactDigest,
   buildV2TimelineOutcomeReviewPrompt,
+  describeV2TimelineSpecDiff,
   evaluateV2TimelineRevisionCommit,
   reviewV2TimelineRevisionOutcome,
 } from '../src/pipeline-v2/timeline-revision-outcome-review.js'
@@ -141,5 +142,119 @@ const captionRewriteReview = await reviewV2TimelineRevisionOutcome({
 })
 assert.equal(captionRewriteReview.pass, true)
 assert.notEqual(captionRewriteReview.candidateDigest.visible_text[0]?.text, base.overlays[0]?.text)
+
+// Scene-scope merge must preserve base transition order; candidate may update
+// in-scope content but cannot reorder the global transition sequence.
+const reorderedTransitionsCandidate: RemotionTimelineSpecV1 = {
+  ...base,
+  transitions: [
+    { ...base.transitions[1]!, type: 'flash' },
+    { ...base.transitions[0]! },
+  ],
+}
+const scopedSceneCandidate = applyV2TimelineRevisionScope({
+  baseSpec: base,
+  candidateSpec: reorderedTransitionsCandidate,
+  scope: 'scene',
+  sceneId: 'scene_2',
+})
+assert.deepEqual(
+  scopedSceneCandidate.transitions.map((item) => `${item.from_scene_id}->${item.to_scene_id}:${item.type}`),
+  ['scene_1->scene_2:fade', 'scene_2->scene_3:flash'],
+  'scene scope must keep base transition order while applying in-scope content updates',
+)
+
+// A style-only revision (caption background) is a real, deliverable change and
+// must not be rejected by the "no change" guard even though the digest omits
+// presentation fields.
+const styleOnlyCandidate: RemotionTimelineSpecV1 = {
+  ...base,
+  overlays: base.overlays.map((overlay, index) =>
+    index === 0 ? { ...overlay, background: 'rgba(0,0,0,0)' } : overlay),
+}
+const styleOnlyReview = await reviewV2TimelineRevisionOutcome({
+  prompt: '把字幕嵌入框设为透明，不影响背景画面。',
+  baseSpec: base,
+  candidateSpec: styleOnlyCandidate,
+  assess: async () => ({ pass: true, violations: [] }),
+})
+assert.equal(
+  styleOnlyReview.pass,
+  true,
+  'style-only caption change must be recognized as a real revision',
+)
+const stylePrompt = buildV2TimelineOutcomeReviewPrompt({
+  prompt: '把字幕嵌入框设为透明',
+  baseDigest: buildV2TimelineFactDigest(base),
+  candidateDigest: buildV2TimelineFactDigest(styleOnlyCandidate),
+  hasBase: true,
+  specDiff: describeV2TimelineSpecDiff(base, styleOnlyCandidate),
+})
+assert.match(stylePrompt, /Computed spec diff \(authoritative for field changes\)/)
+assert.match(stylePrompt, /overlay\.caption_1\.background/)
+
+// The review digest must project custom_render so the reviewer can see that a
+// sedimented component implements the requested effect even when the preset
+// transition type stays fade.
+const customTransitionBase: RemotionTimelineSpecV1 = {
+  ...base,
+  transitions: [{ id: 't_custom', from_scene_id: 'scene_1', to_scene_id: 'scene_2', type: 'fade', duration_sec: 0.4 }],
+}
+const customTransitionSpec: RemotionTimelineSpecV1 = {
+  ...customTransitionBase,
+  transitions: [{
+    id: 't_custom',
+    from_scene_id: 'scene_1',
+    to_scene_id: 'scene_2',
+    type: 'fade',
+    duration_sec: 0.4,
+    custom_render: { component_id: 'cmp_blur_dissolve', params: {} },
+  }],
+}
+assert.equal(
+  buildV2TimelineFactDigest(customTransitionSpec).transitions[0]?.custom_render_component_id,
+  'cmp_blur_dissolve',
+  'review digest must expose custom_render component id',
+)
+
+// A scene creative-intent change must re-derive that scene's generation prompt,
+// otherwise the edit never reaches the video-generation model.
+const generationBase: RemotionTimelineSpecV1 = {
+  ...base,
+  scenes: base.scenes.map((scene, index) =>
+    index === 1
+      ? {
+          ...scene,
+          type: 'ai_video',
+          creative_intent: { title: '专注陪伴', description: '旧场景描述' },
+        }
+      : scene),
+  material_jobs: [{
+    id: 'job_generate_scene_2',
+    scene_id: 'scene_2',
+    type: 'generate_video',
+    status: 'planned',
+    prompt: '旧生成提示词',
+    output_asset_id: 'generated_scene_2',
+  }],
+}
+const sceneIntentCandidate: RemotionTimelineSpecV1 = {
+  ...generationBase,
+  scenes: generationBase.scenes.map((scene, index) =>
+    index === 1
+      ? { ...scene, creative_intent: { title: '专注陪伴', description: '极限战士与圣血天使两种星际战士出场' } }
+      : scene),
+}
+const scopedSceneGeneration = applyV2TimelineRevisionScope({
+  baseSpec: generationBase,
+  candidateSpec: sceneIntentCandidate,
+  scope: 'scene',
+  sceneId: 'scene_2',
+})
+assert.equal(
+  scopedSceneGeneration.material_jobs[0]?.prompt,
+  '极限战士与圣血天使两种星际战士出场；镜头作用：proof；生成写实、连贯的视频画面，明确主体、环境、光线、动作和镜头运动',
+  'scene creative-intent revision must re-derive the generation prompt',
+)
 
 console.info('[smoke-v2-timeline-revision-outcome] OK')

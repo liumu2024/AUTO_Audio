@@ -1,0 +1,15 @@
+{
+  "version": "v2-review-rule-registry.v1",
+  "rules": [
+    { "name": "tool argument schema", "layer": "protocol", "reverseCase": "subtitle+sceneId 必须通过，global+sceneId 必须拒绝", "verification": "smoke-v2-agent-tool-skill-registry" },
+    { "name": "dispatcher scene target resolution", "layer": "protocol", "reverseCase": "未知 sceneId 返回友好 gate=dispatcher_target；scene/visual_strategy 无 sceneId 时回退选中镜头", "verification": "smoke-v2-scifi-scoped-edit" },
+    { "name": "revision scope filter", "layer": "invariant", "reverseCase": "越界字段（其他镜头/字幕/转场/音频）必须从候选丢弃", "verification": "smoke-v2-scifi-scoped-edit" },
+    { "name": "revision commit gate", "layer": "invariant", "reverseCase": "零差异候选必须拒绝，真实范围差异必须通过", "verification": "smoke-v2-scifi-scoped-edit" },
+    { "name": "semantic outcome review", "layer": "semantic", "reverseCase": "模型改写措辞但语义正确时不得判无关", "verification": "smoke-v2-timeline-revision-outcome" },
+    { "name": "delivery authorization", "layer": "invariant", "reverseCase": "交付只依赖本轮 execute 意图，不要求原文重复授权", "verification": "smoke-v2-director-session-lifecycle" },
+    { "name": "system field binding", "layer": "invariant", "reverseCase": "模型参数不得覆盖 userId/draftId/revision 等系统字段", "verification": "smoke-v2-agent-evaluation" },
+    { "name": "required-fact assertions", "layer": "semantic", "reverseCase": "“克制一点的科幻感”必须匹配“克制科幻”", "verification": "smoke-v2-agent-evaluation" },
+    { "name": "reply quality judge", "layer": "semantic", "reverseCase": "讨论草稿版本的问题不得判 off_topic", "verification": "smoke-v2-director-reply-quality-gate" }
+    ,{ "name": "generation input public URL normalization", "layer": "protocol", "reverseCase": "本地上传图片在规划前自动发布为可达 URL；已公网 URL 原样透传", "verification": "smoke-v2-public-material-chain" }
+  ]
+}

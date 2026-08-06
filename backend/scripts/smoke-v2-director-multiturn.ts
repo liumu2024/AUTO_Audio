@@ -207,6 +207,11 @@ try {
     String((executable.find((event) => event.type === 'assistant_reply') as { message: string }).message),
     /要求变更未通过校验.*渲染已完成/,
   )
+  assert.match(
+    String((executable.find((event) => event.type === 'assistant_reply') as { message: string }).message),
+    /我会提交当前已确认版本渲染/,
+    'tool turns must keep the model\'s natural reply instead of replacing it with templates',
+  )
   const unsaved = [] as Array<{ type: string; [key: string]: unknown }>
   for await (const event of streamDirectorAgentChat({
     prompt: '请记录语气自然',

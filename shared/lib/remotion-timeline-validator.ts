@@ -30,6 +30,23 @@ function finiteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
+function validateCustomRenderRef(
+  issues: RemotionTimelineValidationIssue[],
+  path: string,
+  value: unknown,
+  label: string,
+) {
+  if (value === undefined) return
+  if (!isRecord(value)) {
+    addIssue(issues, 'error', path, `${label} must be an object.`)
+    return
+  }
+  const ref = value as { component_id?: unknown }
+  if (typeof ref.component_id !== 'string' || !ref.component_id.trim()) {
+    addIssue(issues, 'error', `${path}.component_id`, `${label} requires a component_id.`)
+  }
+}
+
 function addIssue(
   issues: RemotionTimelineValidationIssue[],
   severity: RemotionTimelineValidationIssue['severity'],
@@ -209,6 +226,7 @@ export function validateRemotionTimelineSpec(value: unknown): RemotionTimelineVa
         addIssue(issues, 'error', `${path}.asset_id`, 'image_motion scenes must reference an image asset.')
       }
     }
+    validateCustomRenderRef(issues, `${path}.custom_render`, scene.custom_render, 'scene custom_render')
   })
 
   const sortedScenes = [...scenes].sort((a, b) => a.start_sec - b.start_sec)
@@ -251,6 +269,12 @@ export function validateRemotionTimelineSpec(value: unknown): RemotionTimelineVa
     }
     if (finiteNumber(transition.duration_sec) && transition.duration_sec > 1.5) {
       addIssue(issues, 'warning', `${path}.duration_sec`, 'long transitions can make scene timing feel loose.')
+    }
+    if (transition.custom_render !== undefined) {
+      if (!isRecord(transition.custom_render)) {
+        addIssue(issues, 'error', `${path}.custom_render`, 'transition custom_render must be an object.')
+      }
+      validateCustomRenderRef(issues, `${path}.custom_render`, transition.custom_render, 'transition custom_render')
     }
   })
 

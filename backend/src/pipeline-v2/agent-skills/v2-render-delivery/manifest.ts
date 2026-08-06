@@ -1,9 +1,9 @@
 export const manifest = {
   id: 'v2-render-delivery',
   version: '1.1.0',
-  card: '检查当前 V2 草稿、授权与交付条件后提交正式渲染。',
+  card: '超出预置集的效果（自定义滤镜、合成、动画、转场）：由导演模型自行生成沙箱化组件源码并通过 render.author 提交注册（不得要求用户提供源码），再在 timeline 的 custom_render 引用；检查当前 V2 草稿、授权与交付条件后提交正式渲染。',
   stage: 'delivery',
-  tools: ['timeline.render'],
+  tools: ['render.author', 'timeline.render'],
   dependencies: ['official.remotion-render'],
   prerequisites: ['当前 V2 草稿与修订版本', '本轮导演模型确认的交付意图'],
   requiredFacts: ['draftId', 'revision', '结构校验状态'],

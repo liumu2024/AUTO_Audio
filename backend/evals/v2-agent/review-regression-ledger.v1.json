@@ -1,0 +1,21 @@
+{
+  "version": "v2-review-regression-ledger.v1",
+  "source": "sci-fi-timeline-editing.v1 live run 2026-08-04T13-38-46-120Z (58 turns)",
+  "groups": [
+    { "rootCause": "backend_rule_too_strict", "turns": ["sci_fi_create_and_concept_adjust:3", "sci_fi_create_and_concept_adjust:4", "sci_fi_precise_segment_revision:1", "sci_fi_precise_segment_revision:6", "sci_fi_render_then_revise_then_rerender:3", "sci_fi_render_then_revise_then_rerender:10"], "fixType": "rule_relaxed", "status": "fixed_this_round", "verification": "smoke-v2-agent-tool-skill-registry;smoke-v2-scifi-scoped-edit" },
+    { "rootCause": "server_target_binding", "turns": ["sci_fi_create_and_concept_adjust:3"], "fixType": "server_binding", "status": "fixed_this_round", "verification": "smoke-v2-agent-tool-skill-registry" },
+    { "rootCause": "dataset_expectation", "turns": ["sci_fi_precise_segment_revision:2", "sci_fi_precise_segment_revision:3", "sci_fi_precise_segment_revision:7"], "fixType": "dataset", "status": "fixed_this_round", "verification": "smoke-v2-scifi-scoped-edit" },
+    { "rootCause": "eval_harness", "turns": ["sci_fi_precise_segment_revision:4"], "fixType": "eval_harness", "status": "fixed_this_round", "verification": "smoke-v2-agent-evaluation" },
+    { "rootCause": "eval_exact_match", "turns": ["sci_fi_concept_pitch:3", "sci_fi_concept_pitch:4", "sci_fi_concept_pitch:6", "sci_fi_continuity_recovery:3", "sci_fi_continuity_recovery:6", "sci_fi_continuity_recovery:8"], "fixType": "eval_semantic", "status": "fixed_this_round", "verification": "smoke-v2-agent-evaluation" },
+    { "rootCause": "judge_rubric", "turns": ["sci_fi_precise_segment_revision:11", "sci_fi_precise_segment_revision:12", "sci_fi_render_then_revise_then_rerender:12", "sci_fi_continuity_recovery:5"], "fixType": "judge_rubric", "status": "fixed_this_round", "verification": "smoke-v2-director-reply-quality-gate" },
+    { "rootCause": "recovery_semantics", "turns": ["sci_fi_continuity_recovery:2"], "fixType": "dataset", "status": "fixed_this_round", "verification": "smoke-v2-scifi-scoped-edit" },
+    { "rootCause": "model_reconfirm", "turns": ["sci_fi_precise_segment_revision:5", "sci_fi_precise_segment_revision:8"], "fixType": "prompt", "status": "needs_live_rerun", "verification": "live" },
+    { "rootCause": "model_intent_no_patch", "turns": ["sci_fi_create_and_concept_adjust:2"], "fixType": "prompt", "status": "needs_live_rerun", "verification": "live" },
+    { "rootCause": "model_scope_choice", "turns": ["sci_fi_render_then_revise_then_rerender:5"], "fixType": "prompt", "status": "needs_live_rerun", "verification": "live" },
+    { "rootCause": "model_requirement_memory_mix", "turns": ["sci_fi_concept_pitch:2"], "fixType": "prompt", "status": "needs_live_rerun", "verification": "live" },
+    { "rootCause": "model_memory_write", "turns": ["sci_fi_concept_pitch:5", "sci_fi_memory_sedimentation:2", "sci_fi_memory_sedimentation:3", "sci_fi_memory_sedimentation:5"], "fixType": "prompt", "status": "needs_live_rerun", "verification": "live" },
+    { "rootCause": "model_render_refusal", "turns": ["sci_fi_render_then_revise_then_rerender:1", "sci_fi_render_then_revise_then_rerender:7"], "fixType": "dataset", "status": "needs_real_media", "verification": "live" },
+    { "rootCause": "model_state_action_missing", "turns": ["sci_fi_continuity_recovery:7"], "fixType": "prompt", "status": "needs_live_rerun", "verification": "live" },
+    { "rootCause": "retrieval_limit", "turns": ["sci_fi_memory_sedimentation:6", "sci_fi_memory_sedimentation:10"], "fixType": "known_limit", "status": "deferred", "verification": "eval:v2:formal retrieval report" }
+  ]
+}

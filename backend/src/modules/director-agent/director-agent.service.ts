@@ -302,6 +302,12 @@ function toolOutcomeConfirmation(
   receipts: DirectorActionReceipt[],
   requests: Array<{ callId: string; arguments: Record<string, unknown> }>,
 ) {
+  const friendlyError = (summary: string) => {
+    if (summary.startsWith('invalid tool arguments: sceneId is only valid')) {
+      return '修订参数不合法：目标场景只能用于场景或视觉策略范围。'
+    }
+    return summary
+  }
   return results.map((result) => {
     const status = receipts.find((receipt) => receipt.callId === result.callId)?.status
     const instruction = requests.find((request) => request.callId === result.callId)?.arguments.instruction
@@ -310,7 +316,7 @@ function toolOutcomeConfirmation(
       : undefined
     if (status === 'skipped') return `已跳过 ${result.toolId}：${result.summary}`
     if (result.ok) return target ? `${result.summary} 已按本轮指令处理：${target}` : result.summary
-    return `未完成 ${target ?? result.toolId}：${result.summary}${result.recovery ? `；恢复建议：${result.recovery}` : ''}`
+    return `未完成 ${target ?? result.toolId}：${friendlyError(result.summary)}${result.recovery ? `；恢复建议：${result.recovery}` : ''}`
   }).join('；')
 }
 
@@ -346,19 +352,28 @@ function creativeMemoryConfirmation(
   actions: Array<{ ref: string; status?: 'active' | 'candidate' }>,
 ) {
   if (!receipts.length) return ''
+  const memoryErrorLabels: Record<string, string> = {
+    'Draft-scoped creative memory requires draftId.': '草稿级偏好需要先关联当前草稿。',
+    'Creative memory action must cite the current source turn.': '记忆动作缺少本轮引用，已拒绝。',
+    'Creative memory target was not recalled in this turn.': '目标偏好不在本轮召回中，已拒绝。',
+    'Creative memory target belongs to another draft.': '目标偏好属于其他草稿，已拒绝。',
+    'Creative memory target is missing or inactive.': '目标偏好不存在或已失效。',
+    'Creative memory statement must contain 1-500 characters.': '偏好内容需要 1-500 字。',
+  }
   const active = receipts.filter((receipt) =>
-    receipt.status === 'succeeded'
-    && actions.find((action) => action.ref === receipt.ref)?.status !== 'candidate',
-  ).length
+    receipt.status === 'succeeded' && receipt.effectiveStatus === 'active').length
   const candidates = receipts.filter((receipt) =>
-    receipt.status === 'succeeded'
-    && actions.find((action) => action.ref === receipt.ref)?.status === 'candidate',
-  ).length
+    receipt.status === 'succeeded' && receipt.effectiveStatus === 'candidate').length
+  const duplicates = receipts.filter((receipt) =>
+    receipt.status === 'succeeded' && receipt.reason === 'duplicate_of_requirement').length
   const failed = receipts.filter((receipt) => receipt.status === 'failed')
   return [
     active ? `已沉淀 ${active} 条创作偏好，可在“创作偏好”中查看或撤销` : '',
     candidates ? `另有 ${candidates} 条仅作为待观察候选，不会直接影响创作` : '',
-    failed.length ? `${failed.length} 条偏好未保存：${failed.map((item) => item.reason).filter(Boolean).join('；')}` : '',
+    duplicates ? `${duplicates} 条已作为当前项目要求记录，未重复沉淀为长期偏好` : '',
+    failed.length
+      ? `${failed.length} 条偏好未保存：${failed.map((item) => memoryErrorLabels[item.reason ?? ''] ?? item.reason).filter(Boolean).join('；')}`
+      : '',
   ].filter(Boolean).join('；')
 }
 
@@ -548,6 +563,10 @@ export async function* streamDirectorAgentChat(
       ...creativeMemoryRetrieval.candidate.map((item) => item.memory.id),
     ]),
     actions: routed.memoryActions,
+    requirementStatements: [
+      ...(requirementResult.changes.added ?? []).map((item) => item.statement),
+      ...(requirementResult.changes.replaced ?? []).map((item) => item.current.statement),
+    ],
   })
   actionReceipts.push(...memoryActionReceipts.map((receipt) => ({
     ref: receipt.ref,
@@ -677,6 +696,7 @@ export async function* streamDirectorAgentChat(
           callId: request.callId,
           toolId: request.toolId,
           ok: false,
+          gate: 'dependency',
           summary: `因依赖动作 ${failedDependency.ref} 未成功，本动作已跳过。`,
         }
       } else if (rejected || !stage) {
@@ -684,6 +704,7 @@ export async function* streamDirectorAgentChat(
           callId: request.callId,
           toolId: request.toolId,
           ok: false,
+          gate: 'registry',
           summary: rejected?.reason ?? '本轮 Skill/Tool 执行阶段无法建立。',
           recovery: '请让导演模型重新选择一致且可用的 Skill 与 Tool。',
         }
@@ -700,6 +721,10 @@ export async function* streamDirectorAgentChat(
           void (dependencies.dispatchTool ?? dispatchV2AgentTool)({
             stage,
             prompt: input.prompt,
+            requestInstruction:
+              typeof request.arguments?.instruction === 'string'
+                ? request.arguments.instruction
+                : undefined,
             userId,
             context: workspaceState.context,
             runtime: input.runtime,
@@ -782,6 +807,7 @@ export async function* streamDirectorAgentChat(
           status: receiptStatus,
           ok: result.ok,
           summary: result.summary,
+          gate: result.gate ?? null,
           output: result.output ?? null,
           draft: result.draft ? { id: result.draft.id, revision: result.draft.revision, trace_dir: result.draft.traceDir ?? null } : null,
           trace_dir: result.draft?.traceDir ?? result.output?.traceDir ?? null,
@@ -852,9 +878,15 @@ export async function* streamDirectorAgentChat(
   }
   const shouldReportToolOutcome = dispatchedToolCount > 0
     || (toolResults.length > 0 && routed.conversationIntent !== 'chat' && routed.conversationIntent !== 'clarify')
-  const modelAssistantMessage = shouldReportToolOutcome
+  const toolConfirmation = shouldReportToolOutcome
     ? toolOutcomeConfirmation(toolResults, actionReceipts, requestedTools)
-    : routed.result.assistantMessage
+    : ''
+  const assistantParts = [routed.result.assistantMessage, toolConfirmation].filter(Boolean)
+  const modelAssistantMessage = assistantParts.length > 1
+    ? assistantParts
+        .map((message) => message.replace(/[。！!？?；;]+$/u, ''))
+        .join('。')
+    : (assistantParts[0] ?? '')
   const requirementMessage = !stateAction
     ? ''
     : requirementResult.ok

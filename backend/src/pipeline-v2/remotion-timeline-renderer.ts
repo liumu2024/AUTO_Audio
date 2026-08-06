@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { copyFile, mkdir, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { assertValidRemotionTimelineSpec } from '../../../shared/lib/remotion-timeline-validator.js'
@@ -8,6 +8,10 @@ import type {
   RemotionTimelineAsset,
   RemotionTimelineSpecV1,
 } from '../../../shared/types/remotion-timeline-spec.v1.js'
+import {
+  markRenderSucceeded,
+  readRenderComponent,
+} from '../modules/render-components/component-registry.js'
 
 export interface V2TimelineRenderResult {
   propsPath: string
@@ -104,6 +108,51 @@ async function stageLocalAssetsForRemotion(input: {
   }
 }
 
+function referencedComponentIds(spec: RemotionTimelineSpecV1): Set<string> {
+  const referenced = new Set<string>()
+  for (const scene of spec.scenes) {
+    if (scene.custom_render?.component_id) referenced.add(scene.custom_render.component_id)
+  }
+  for (const transition of spec.transitions) {
+    if (transition.custom_render?.component_id) referenced.add(transition.custom_render.component_id)
+  }
+  return referenced
+}
+
+async function injectCustomComponents(input: {
+  spec: RemotionTimelineSpecV1
+  remotionRoot: string
+}): Promise<void> {
+  const customDir = path.join(input.remotionRoot, 'src', 'timeline', 'custom-components')
+  const referenced = referencedComponentIds(input.spec)
+
+  await mkdir(customDir, { recursive: true })
+  for (const file of (await readdir(customDir)).filter((name) => name !== 'index.ts')) {
+    await rm(path.join(customDir, file), { force: true })
+  }
+
+  const imports: string[] = []
+  const entries: string[] = []
+  for (const id of referenced) {
+    const component = await readRenderComponent(id)
+    if (!component) continue
+    const safeId = id.replace(/[^a-zA-Z0-9_-]/g, '_')
+    await writeFile(path.join(customDir, `${safeId}.js`), component.bundle, 'utf8')
+    imports.push(`import * as ${safeId} from './${safeId}.js'`)
+    entries.push(`  '${id}': ${safeId},`)
+  }
+  const registry = [
+    '/* eslint-disable */',
+    '// Regenerated before each render. Do not edit manually.',
+    ...imports,
+    'export const customComponentRegistry: Record<string, { default?: unknown }> = {',
+    ...entries,
+    '}',
+    '',
+  ].join('\n')
+  await writeFile(path.join(customDir, 'index.ts'), registry, 'utf8')
+}
+
 export async function renderV2RemotionTimeline(input: {
   spec: RemotionTimelineSpecV1
   remotionRoot?: string
@@ -115,6 +164,7 @@ export async function renderV2RemotionTimeline(input: {
   const outputDir = resolveFromCwd(input.outputDir)
   await mkdir(outputDir, { recursive: true })
   const renderSpec = await stageLocalAssetsForRemotion({ spec, remotionRoot })
+  await injectCustomComponents({ spec: renderSpec, remotionRoot })
 
   const propsPath = path.join(outputDir, 'remotion-timeline-props.json')
   const outputPath = path.join(outputDir, input.outputName ?? `${spec.task_id}.mp4`)
@@ -132,8 +182,16 @@ export async function renderV2RemotionTimeline(input: {
   const browserExecutable = findInstalledBrowser()
   if (browserExecutable) args.push('--browser-executable', browserExecutable)
 
-  const result = await runCommand(commandForNode(), args, remotionRoot)
+  let result
+  try {
+    result = await runCommand(commandForNode(), args, remotionRoot)
+  } finally {
+    await injectCustomComponents({ spec: { ...renderSpec, scenes: [], transitions: [] }, remotionRoot })
+  }
   const file = await stat(outputPath)
+  for (const id of referencedComponentIds(renderSpec)) {
+    await markRenderSucceeded(id)
+  }
   return {
     propsPath,
     outputPath,

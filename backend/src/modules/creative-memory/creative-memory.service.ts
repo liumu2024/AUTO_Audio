@@ -41,6 +41,7 @@ export interface CreativeMemoryActionReceipt {
   status: 'succeeded' | 'failed'
   memoryId?: string
   reason?: string
+  effectiveStatus?: 'active' | 'candidate'
 }
 
 export interface RankedCreativeMemory {
@@ -106,7 +107,7 @@ function tokens(value: string): string[] {
   return [...ascii, ...han]
 }
 
-function longestSharedHanPhrase(left: string, right: string) {
+export function longestSharedHanPhrase(left: string, right: string) {
   const runs = normalizedText(left).match(/[\p{Script=Han}]+/gu) ?? []
   let best = ''
   for (const run of runs) {
@@ -159,7 +160,7 @@ function assertStatement(value: string | undefined): string {
  * Server-side status guard: inferred knowledge never silently controls
  * creation, a previously negated preference needs re-confirmation, and a
  * user preference repeated across projects (near-duplicate from another
- * session) becomes a pending candidate instead of an active control.
+ * session) is behavior evidence and becomes an active control automatically.
  * ponytail: negation detection is exact normalized-match only; semantic
  * negation and real embedding similarity stay deferred until the corpus
  * needs them.
@@ -172,9 +173,11 @@ async function effectiveCreativeMemoryStatus(input: {
   origin: CreativeMemoryOrigin
   requestedStatus: 'active' | 'candidate'
   currentWorkspaceSessionId: string
+  duplicateOfRequirement?: boolean
 }): Promise<'active' | 'candidate'> {
   if (input.requestedStatus === 'candidate') return 'candidate'
   if (input.origin === 'inferred') return 'candidate'
+  if (input.duplicateOfRequirement) return 'candidate'
   const rows = await memories().findMany({ where: { userId: input.userId }, take: 500 })
   const normalized = normalizedText(input.statement)
   const sameScope = (item: DbMemory) =>
@@ -193,7 +196,7 @@ async function effectiveCreativeMemoryStatus(input: {
     && (normalizedText(item.statement) === normalized
       || longestSharedHanPhrase(item.statement, input.statement)),
   )) {
-    return 'candidate'
+    return 'active'
   }
   return 'active'
 }
@@ -226,7 +229,16 @@ export async function createCreativeMemory(input: {
       && item.draftId === (input.draftId ?? null)
       && item.status !== 'revoked'
       && normalizedText(item.statement) === normalizedText(statement))
-  if (existing) return record(existing)
+  if (existing) {
+    if (existing.status === 'candidate' && input.status === 'active') {
+      await memories().updateMany({
+        where: { id: existing.id, userId: input.userId },
+        data: { status: 'active', revokedAt: null },
+      })
+      return record({ ...existing, status: 'active', revokedAt: null })
+    }
+    return record(existing)
+  }
 
   return record(await memories().create({
     data: {
@@ -429,6 +441,7 @@ export async function applyCreativeMemoryActions(input: {
   currentDraftId?: string
   recalledMemoryIds?: Set<string>
   actions: CreativeMemoryAction[]
+  requirementStatements?: string[]
 }): Promise<CreativeMemoryActionReceipt[]> {
   const receipts: CreativeMemoryActionReceipt[] = []
   for (const action of input.actions) {
@@ -440,6 +453,8 @@ export async function applyCreativeMemoryActions(input: {
         const scopeType = action.scopeType ?? 'user'
         const statement = assertStatement(action.statement)
         const origin = action.origin ?? 'inferred'
+        const duplicateOfRequirement = (input.requirementStatements ?? []).some((requirement) =>
+          Boolean(longestSharedHanPhrase(statement, requirement)))
         const status = await effectiveCreativeMemoryStatus({
           userId: input.userId,
           scopeType,
@@ -448,6 +463,7 @@ export async function applyCreativeMemoryActions(input: {
           origin,
           requestedStatus: action.status ?? 'candidate',
           currentWorkspaceSessionId: input.workspaceSessionId,
+          duplicateOfRequirement,
         })
         const memory = await createCreativeMemory({
           userId: input.userId,
@@ -460,7 +476,14 @@ export async function applyCreativeMemoryActions(input: {
           sourceTurnIds: action.sourceTurnIds,
           sourceExcerpt: action.sourceExcerpt,
         })
-        receipts.push({ ref: action.ref, operation: action.operation, status: 'succeeded', memoryId: memory.id })
+        receipts.push({
+          ref: action.ref,
+          operation: action.operation,
+          status: 'succeeded',
+          memoryId: memory.id,
+          reason: duplicateOfRequirement ? 'duplicate_of_requirement' : undefined,
+          effectiveStatus: status,
+        })
         continue
       }
       if (!action.targetMemoryId) throw new Error('Creative memory targetMemoryId is required.')

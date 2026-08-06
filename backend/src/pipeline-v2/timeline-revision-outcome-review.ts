@@ -1,6 +1,7 @@
 import { env } from '../config/env.js'
 import { extractTextCandidate } from '../modules/agent-tools/structured-json-tool.js'
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
+import { VISUAL_STRATEGY_SCENE_FIELDS } from './timeline-revision-scope.js'
 
 export type V2TimelineRevisionViolationKind =
   | 'missing_requested_change'
@@ -32,7 +33,13 @@ export interface V2TimelineFactDigest {
     position: { x_pct: number; y_pct: number; width_pct?: number; max_lines?: number }
     animation?: string
   }>
-  transitions: Array<{ from_scene_id: string; to_scene_id: string; type: string; duration_sec: number }>
+  transitions: Array<{
+    from_scene_id: string
+    to_scene_id: string
+    type: string
+    duration_sec: number
+    custom_render_component_id?: string
+  }>
   audio: Array<{ start_sec: number; end_sec: number; volume?: number }>
   notes: string[]
 }
@@ -53,7 +60,7 @@ export interface V2TimelineRevisionOutcomeReview {
 
 export interface V2TimelineRevisionCommitDecision {
   ok: boolean
-  scope: 'global' | 'subtitle'
+  scope: 'global' | 'subtitle' | 'scene' | 'visual_strategy'
   violation?: { kind: 'missing_requested_change'; message: string }
 }
 
@@ -62,6 +69,95 @@ export class V2TimelineRevisionOutcomeError extends Error {
   constructor(readonly review: V2TimelineRevisionOutcomeReview) {
     super(`V2 revision outcome review failed: ${JSON.stringify(review.violations)}`)
     this.name = 'V2TimelineRevisionOutcomeError'
+  }
+}
+
+export interface V2TimelineSpecDiffSummary {
+  scenes: string[]
+  visibleText: string[]
+  transitions: string[]
+  audio: string[]
+  other: string[]
+  hasAudienceFacingChange: boolean
+}
+
+function describeFieldChanges(label: string, before: unknown, after: unknown): string[] {
+  if (
+    typeof before === 'object' && before !== null &&
+    typeof after === 'object' && after !== null &&
+    !Array.isArray(before) && !Array.isArray(after)
+  ) {
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)])
+    const lines: string[] = []
+    for (const key of keys) {
+      const b = (before as Record<string, unknown>)[key]
+      const a = (after as Record<string, unknown>)[key]
+      if (JSON.stringify(b) !== JSON.stringify(a)) {
+        lines.push(...describeFieldChanges(`${label}.${key}`, b, a))
+      }
+    }
+    return lines
+  }
+  return [`${label}: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`]
+}
+
+function diffKeyedArray<T extends object>(
+  base: T[],
+  candidate: T[],
+  keyOf: (item: T, index: number) => string,
+  label: string,
+): string[] {
+  const lines: string[] = []
+  const baseByKey = new Map(base.map((item, index) => [keyOf(item, index), item]))
+  const candidateByKey = new Map(candidate.map((item, index) => [keyOf(item, index), item]))
+  for (const [id, before] of baseByKey) {
+    const after = candidateByKey.get(id)
+    if (after === undefined) lines.push(`${label}.${id}: removed`)
+    else lines.push(...describeFieldChanges(`${label}.${id}`, before, after))
+  }
+  for (const id of candidateByKey.keys()) {
+    if (!baseByKey.has(id)) lines.push(`${label}.${id}: added`)
+  }
+  return lines
+}
+
+/**
+ * Computes the authoritative field-level diff between two timeline specs.
+ * Unlike the digest projection (which only carries selected semantic fields),
+ * this covers every field including presentation styles, so a caption
+ * background/opacity change is recognized as a real revision.
+ */
+export function describeV2TimelineSpecDiff(
+  base: RemotionTimelineSpecV1,
+  candidate: RemotionTimelineSpecV1,
+): V2TimelineSpecDiffSummary {
+  const scenes = diffKeyedArray(base.scenes, candidate.scenes, (scene) => scene.id, 'scene')
+  const visibleText = diffKeyedArray(base.overlays, candidate.overlays, (overlay) => overlay.id, 'overlay')
+  const transitions = diffKeyedArray(
+    base.transitions,
+    candidate.transitions,
+    (transition) => `${transition.from_scene_id}:${transition.to_scene_id}`,
+    'transition',
+  )
+  const baseOrder = base.transitions.map((item) => `${item.from_scene_id}:${item.to_scene_id}`)
+  const candidateOrder = candidate.transitions.map((item) => `${item.from_scene_id}:${item.to_scene_id}`)
+  if (JSON.stringify(baseOrder) !== JSON.stringify(candidateOrder)) {
+    transitions.push(`transitions order changed: [${candidateOrder.join(', ')}]`)
+  }
+  const audio = diffKeyedArray(base.audio ?? [], candidate.audio ?? [], (_clip, index) => String(index), 'audio')
+  const other = [
+    ...(JSON.stringify(base.canvas) !== JSON.stringify(candidate.canvas) ? ['canvas changed'] : []),
+    ...diffKeyedArray(base.material_jobs, candidate.material_jobs, (job) => job.id, 'material_job'),
+    ...(JSON.stringify(base.notes ?? []) !== JSON.stringify(candidate.notes ?? []) ? ['notes changed'] : []),
+  ]
+  return {
+    scenes,
+    visibleText,
+    transitions,
+    audio,
+    other,
+    hasAudienceFacingChange:
+      scenes.length > 0 || visibleText.length > 0 || transitions.length > 0 || audio.length > 0,
   }
 }
 
@@ -104,6 +200,7 @@ export function buildV2TimelineFactDigest(spec: RemotionTimelineSpecV1): V2Timel
       to_scene_id: transition.to_scene_id,
       type: transition.type,
       duration_sec: transition.duration_sec,
+      custom_render_component_id: transition.custom_render?.component_id,
     })),
     audio: (spec.audio ?? []).map((clip) => ({
       start_sec: clip.start_sec,
@@ -145,13 +242,6 @@ export function buildV2TimelineRevisionDiff(
   }
 }
 
-function hasAudienceFacingRevision(diff: ReturnType<typeof buildV2TimelineRevisionDiff>) {
-  const groups = [diff.scenes, diff.visible_text, diff.transitions]
-  return groups.some((group) =>
-    group.added.length > 0 || group.removed.length > 0 || group.changed.length > 0,
-  ) || diff.audio_changed
-}
-
 function emptyTimelineFactDigest(): V2TimelineFactDigest {
   return { scenes: [], visible_text: [], transitions: [], audio: [], notes: [] }
 }
@@ -163,23 +253,64 @@ function emptyTimelineFactDigest(): V2TimelineFactDigest {
 export function evaluateV2TimelineRevisionCommit(input: {
   baseSpec: RemotionTimelineSpecV1
   candidateSpec: RemotionTimelineSpecV1
-  scope: 'global' | 'subtitle'
+  scope: 'global' | 'subtitle' | 'scene' | 'visual_strategy'
+  sceneId?: string
 }): V2TimelineRevisionCommitDecision {
   const comparable = (spec: RemotionTimelineSpecV1) => input.scope === 'subtitle'
     ? {
         caption_tracks: spec.caption_tracks ?? [],
         overlays: spec.overlays.filter((overlay) => overlay.type === 'caption'),
       }
-    : {
-        canvas: spec.canvas,
-        assets: spec.assets,
-        scenes: spec.scenes,
-        transitions: spec.transitions,
-        overlays: spec.overlays,
-        material_jobs: spec.material_jobs,
-        audio: spec.audio ?? [],
-        render_policy: spec.render_policy,
-      }
+    : input.scope === 'scene'
+      ? (() => {
+          const sceneId = input.sceneId
+          if (!sceneId) throw new Error('Scene revision scope requires a sceneId.')
+          const captionTrackIds = new Set(
+            spec.overlays
+              .filter((overlay) => overlay.type === 'caption' && overlay.scene_id === sceneId && overlay.track_id)
+              .map((overlay) => overlay.track_id as string),
+          )
+          return {
+            scene: spec.scenes.find((scene) => scene.id === sceneId),
+            caption_tracks: (spec.caption_tracks ?? []).filter((track) => captionTrackIds.has(track.id)),
+            caption_overlays: spec.overlays.filter((overlay) =>
+              overlay.type === 'caption' && overlay.scene_id === sceneId),
+            transitions: spec.transitions.filter((transition) =>
+              transition.from_scene_id === sceneId || transition.to_scene_id === sceneId),
+          }
+        })()
+      : input.scope === 'visual_strategy'
+        ? (() => {
+            const sceneId = input.sceneId
+            if (!sceneId) throw new Error('Visual strategy revision scope requires a sceneId.')
+            const scene = spec.scenes.find((candidate) => candidate.id === sceneId)
+            return {
+              scene: scene
+                ? VISUAL_STRATEGY_SCENE_FIELDS.reduce(
+                    (acc, field) => ({
+                      ...acc,
+                      [field]: (scene as unknown as Record<string, unknown>)[field],
+                    }),
+                    {} as Record<string, unknown>,
+                  )
+                : null,
+              material_jobs: spec.material_jobs.filter((job) => job.scene_id === sceneId),
+            }
+          })()
+        : input.scope === 'global'
+          ? {
+            canvas: spec.canvas,
+            assets: spec.assets,
+            scenes: spec.scenes,
+            transitions: spec.transitions,
+            overlays: spec.overlays,
+            material_jobs: spec.material_jobs,
+            audio: spec.audio ?? [],
+            render_policy: spec.render_policy,
+          }
+          : (() => {
+              throw new Error(`Unsupported revision scope: ${String(input.scope)}`)
+            })()
   if (JSON.stringify(comparable(input.baseSpec)) !== JSON.stringify(comparable(input.candidateSpec))) {
     return { ok: true, scope: input.scope }
   }
@@ -229,8 +360,11 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
   prompt: string
   baseDigest: V2TimelineFactDigest
   candidateDigest: V2TimelineFactDigest
+  specDiff?: V2TimelineSpecDiffSummary
   confirmedContext?: string
   hasBase: boolean
+  revisionScope?: string
+  revisionSceneId?: string
 }) {
   return [
     'You are the V2 timeline revision outcome reviewer.',
@@ -248,6 +382,21 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
     `Base timeline facts: ${input.hasBase ? JSON.stringify(input.baseDigest) : 'No prior timeline; judge whether the initial plan fulfils the request.'}`,
     `Candidate timeline facts: ${JSON.stringify(input.candidateDigest)}`,
     `Observed diff: ${JSON.stringify(buildV2TimelineRevisionDiff(input.baseDigest, input.candidateDigest))}`,
+    ...(input.specDiff
+      ? [
+          `Computed spec diff (authoritative for field changes): ${[
+            ...input.specDiff.scenes,
+            ...input.specDiff.visibleText,
+            ...input.specDiff.transitions,
+            ...input.specDiff.audio,
+            ...input.specDiff.other,
+          ].join('\n')}`,
+          'Field and presentation changes are computed by the program above. Evaluate only whether those changes satisfy the user request semantically; do not demand changes that the computed diff does not contain.',
+        ]
+      : []),
+    ...(input.revisionScope
+      ? [`Tool-authorized revision boundary: scope=${input.revisionScope}${input.revisionSceneId ? `, scene_id=${input.revisionSceneId}` : ''}. Any change outside this boundary is an unrelated change.`]
+      : []),
   ].join('\n')
 }
 
@@ -312,6 +461,8 @@ export async function reviewV2TimelineRevisionOutcome(input: {
   baseSpec?: RemotionTimelineSpecV1
   candidateSpec: RemotionTimelineSpecV1
   confirmedContext?: string
+  revisionScope?: string
+  revisionSceneId?: string
   assess?: (input: {
     prompt: string
     baseDigest: V2TimelineFactDigest
@@ -320,10 +471,10 @@ export async function reviewV2TimelineRevisionOutcome(input: {
 }): Promise<V2TimelineRevisionOutcomeReview> {
   const baseDigest = input.baseSpec ? buildV2TimelineFactDigest(input.baseSpec) : emptyTimelineFactDigest()
   const candidateDigest = buildV2TimelineFactDigest(input.candidateSpec)
-  if (
-    input.baseSpec &&
-    !hasAudienceFacingRevision(buildV2TimelineRevisionDiff(baseDigest, candidateDigest))
-  ) {
+  const specDiff = input.baseSpec
+    ? describeV2TimelineSpecDiff(input.baseSpec, input.candidateSpec)
+    : undefined
+  if (input.baseSpec && !(specDiff?.hasAudienceFacingChange ?? false)) {
     return {
       pass: false,
       baseDigest,
@@ -345,8 +496,13 @@ export async function reviewV2TimelineRevisionOutcome(input: {
     prompt: input.prompt,
     baseDigest,
     candidateDigest,
+    specDiff: input.baseSpec
+      ? describeV2TimelineSpecDiff(input.baseSpec, input.candidateSpec)
+      : undefined,
     confirmedContext: input.confirmedContext,
     hasBase: Boolean(input.baseSpec),
+    revisionScope: input.revisionScope,
+    revisionSceneId: input.revisionSceneId,
   })
   const requested = env.directorAgentStructuredOutputMode === 'auto'
   let raw: unknown

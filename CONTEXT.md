@@ -22,3 +22,8 @@
 - **Creative memory**: A persisted creative preference in `creative_memories`, scoped to a user or a V2 draft, with `active` / `candidate` / `revoked` states and an explicit/inferred origin; it reaches planning only as a labeled suggestion, never as an invisible rule.
 - **Memory candidate**: A pending-confirmation creative preference that does not control creation until the user adopts it.
 - **Confirmed requirement**: A workspace-session requirement ledger entry (`confirmedRequirements`) that stays valid until a later turn replaces or revokes it; it outranks recalled memories but not the current user input.
+
+## Engineering principles
+
+- **Generalize, never special-case**: Every modification must be a general capability (contract-driven: types, registry schema, scope seams, gates), not a one-off adjustment for a specific scenario, fixture, or test case. Tests and datasets are instances of the general capability, never the reason a code path exists; production code must not contain scenario literals (scene ids, prompt texts, task ids) or test-only branches.
+- **Review development loop**: Every live/eval failure must be registered in `backend/evals/v2-agent/review-regression-ledger.v1.json`, root-caused, then fixed at the correct layer (invariant hard / protocol permissive / semantic judged by a model). Every protocol/semantic rule must carry a reverse-use-case smoke, and backend rejections must carry an attributable `gate` so "rule problem vs model problem" is decidable.

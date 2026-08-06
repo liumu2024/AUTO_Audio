@@ -1,4 +1,9 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+process.env.RENDER_COMPONENTS_DIR = mkdtempSync(path.join(os.tmpdir(), 'render-components-registry-'))
 
 import { createDefaultDirectorSlots } from '../../shared/lib/director-understanding.js'
 import { validateRemotionTimelineSpec } from '../../shared/lib/remotion-timeline-validator.js'
@@ -19,7 +24,7 @@ import { dispatchV2AgentTool } from '../src/pipeline-v2/agent-tools/dispatcher.j
 import { buildV2TimelinePlannerPrompt } from '../src/pipeline-v2/remotion-timeline-llm-planner.js'
 
 assert.deepEqual(listV2AgentToolCards().map((tool) => tool.id), [
-  'sample.analyze', 'material.inspect', 'timeline.plan', 'timeline.patch', 'timeline.render',
+  'sample.analyze', 'material.inspect', 'timeline.plan', 'timeline.patch', 'timeline.render', 'render.author',
 ])
 assert.equal(findV2AgentTool('sample.analyze')?.requiresExplicitAuthorization, false)
 assert.equal(findV2AgentTool('timeline.plan')?.requiresExplicitAuthorization, false)
@@ -54,6 +59,27 @@ assert.equal(validateV2AgentToolRequest({ callId: 'render_bad_001', toolId: 'tim
 assert.equal(validateV2AgentToolRequest({ callId: 'sample_bad_001', toolId: 'sample.analyze', skillId: 'sample-reference-analysis', arguments: { sampleId: 'foreign' }, requestedMode: 'preview' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'render_bad_002', toolId: 'timeline.render', skillId: 'v2-render-delivery', arguments: { draftId: 'foreign', revision: 99 }, requestedMode: 'execute' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_bad_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'subtitle', targetIds: ['caption_1'] }, requestedMode: 'preview' }).ok, false)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_scene_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'scene', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, true)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_scene_002', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'scene' }, requestedMode: 'preview' }).ok, true)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_global_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'global' }, requestedMode: 'preview' }).ok, true)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_bad_002', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'subtitle', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, true)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_vs_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'visual_strategy', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, true)
+assert.equal(validateV2AgentToolRequest({
+  callId: 'author_001',
+  toolId: 'render.author',
+  skillId: 'v2-render-delivery',
+  arguments: { source: 'export default function C() { return null }' },
+  requestedMode: 'preview',
+}).ok, true)
+assert.equal(validateV2AgentToolRequest({
+  callId: 'author_bad_001',
+  toolId: 'render.author',
+  skillId: 'v2-render-delivery',
+  arguments: {},
+  requestedMode: 'preview',
+}).ok, false)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_vs_002', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'visual_strategy' }, requestedMode: 'preview' }).ok, true)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_bad_003', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'global', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, false)
 assert.ok(listV2AgentToolCards().find((tool) => tool.id === 'timeline.patch')?.inputSchema)
 
 const callIdContext = {
@@ -197,6 +223,67 @@ const duplicateResult = await dispatchV2AgentTool({
 assert.equal(duplicateResult.ok, false)
 assert.match(duplicateResult.summary, /重复/)
 
+const validAuthorSource = `
+import { AbsoluteFill } from 'remotion'
+export default function CustomScene(props) {
+  return <AbsoluteFill style={{ background: props.params?.color ?? '#09090b' }} />
+}
+`
+const authorStage = {
+  stage: 'authoring' as const,
+  primarySkill: { id: 'v2-render-delivery' },
+  toolRequest: {
+    callId: 'author_ok_001',
+    ref: 'author_ok',
+    toolId: 'render.author',
+    skillId: 'v2-render-delivery',
+    arguments: { source: validAuthorSource, description: 'custom scene' },
+    requestedMode: 'preview',
+    dependsOn: [],
+  },
+  references: [],
+}
+const authorResult = await dispatchV2AgentTool({
+  stage: authorStage,
+  prompt: '注册一个自定义场景组件',
+  userId: 1,
+  context: duplicateContext,
+  runtime: {
+    backendEnabled: true, sampleUrl: '', isSampleParsed: false,
+    hasVisualMaterial: false, materialCount: 0,
+  },
+  workspace: {
+    ...createDirectorWorkspaceState({ context: duplicateContext }),
+  },
+})
+assert.equal(authorResult.ok, true)
+assert.equal(typeof authorResult.output?.componentId, 'string')
+
+const maliciousAuthorStage = {
+  ...authorStage,
+  toolRequest: {
+    ...authorStage.toolRequest,
+    callId: 'author_bad_002',
+    arguments: { source: `export default function Bad() { fetch('https://example.com') }` },
+  },
+}
+const maliciousAuthorResult = await dispatchV2AgentTool({
+  stage: maliciousAuthorStage,
+  prompt: '注册一个恶意组件',
+  userId: 1,
+  context: duplicateContext,
+  runtime: {
+    backendEnabled: true, sampleUrl: '', isSampleParsed: false,
+    hasVisualMaterial: false, materialCount: 0,
+  },
+  workspace: {
+    ...createDirectorWorkspaceState({ context: duplicateContext }),
+  },
+})
+assert.equal(maliciousAuthorResult.ok, false)
+assert.equal(maliciousAuthorResult.gate, 'component_sandbox')
+assert.match(maliciousAuthorResult.summary, /审计未通过/)
+
 assert.equal(evaluateV2AgentToolReadiness({
   toolId: 'timeline.render', context: duplicateContext,
   runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: false, materialCount: 0 },
@@ -245,3 +332,4 @@ invalid.overlays[1].start_sec = 1
 assert.equal(validateRemotionTimelineSpec(invalid).ok, false)
 
 console.log('V2 agent tool/skill registry smoke passed.')
+rmSync(process.env.RENDER_COMPONENTS_DIR!, { recursive: true, force: true })

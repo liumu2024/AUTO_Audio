@@ -1,6 +1,7 @@
 import { Video } from '@remotion/media'
 import { AbsoluteFill, Img, interpolate, staticFile, useCurrentFrame, useVideoConfig } from 'remotion'
-import type { CSSProperties } from 'react'
+import { Component, createElement } from 'react'
+import type { ComponentType, CSSProperties, ReactNode } from 'react'
 
 import type {
   RemotionImageMotion,
@@ -8,6 +9,22 @@ import type {
   RemotionTimelineFit,
   RemotionTimelineScene,
 } from '../../../shared/types/remotion-timeline-spec.v1'
+import { customComponentRegistry } from './custom-components/index'
+
+class SafeCustomRender extends Component<
+  { render: () => ReactNode; fallback: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.render()
+  }
+}
 
 function assetById(assets: RemotionTimelineAsset[], id: string | undefined) {
   if (!id) return undefined
@@ -271,6 +288,24 @@ export function SceneRenderer({
   scene: RemotionTimelineScene
   assets: RemotionTimelineAsset[]
 }) {
+  if (scene.custom_render) {
+    const module = customComponentRegistry[scene.custom_render.component_id]
+    const Component = module?.default as
+      | ComponentType<{ params?: unknown; scene: RemotionTimelineScene; assets: RemotionTimelineAsset[] }>
+      | undefined
+    if (Component) {
+      return (
+        <SafeCustomRender
+          fallback={<CardScene scene={scene} />}
+          render={() => createElement(Component, {
+            params: scene.custom_render?.params,
+            scene,
+            assets,
+          })}
+        />
+      )
+    }
+  }
   if (scene.type === 'user_video' || scene.type === 'ai_video') {
     return <VideoScene scene={scene} assets={assets} />
   }

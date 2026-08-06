@@ -2,6 +2,14 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import {
   createCreativeMemory,
   deleteCreativeMemory,
   listCreativeMemories,
@@ -26,6 +34,7 @@ export function CreativePreferencesView() {
   const [searchResult, setSearchResult] = useState<CreativeMemorySearchResult | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [editing, setEditing] = useState<{ id: string; statement: string } | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -195,10 +204,7 @@ export function CreativePreferencesView() {
                     size="sm"
                     variant="ghost"
                     disabled={saving}
-                    onClick={() => {
-                      const next = window.prompt('修改创作偏好', memory.statement)?.trim()
-                      if (next && next !== memory.statement) void mutate(() => updateCreativeMemory({ id: memory.id, statement: next }))
-                    }}
+                    onClick={() => setEditing({ id: memory.id, statement: memory.statement })}
                   >编辑</Button>
                   <Button
                     size="sm"
@@ -217,6 +223,39 @@ export function CreativePreferencesView() {
           )}
         </div>
       </div>
+      <Dialog
+        open={editing !== null}
+        onOpenChange={(open) => { if (!open) setEditing(null) }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>修改创作偏好</DialogTitle>
+          </DialogHeader>
+          <Input
+            value={editing?.statement ?? ''}
+            onChange={(event) => setEditing((current) =>
+              current ? { ...current, statement: event.target.value } : current)}
+          />
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              disabled={saving}
+              onClick={() => setEditing(null)}
+            >取消</Button>
+            <Button
+              disabled={saving || !editing?.statement.trim()}
+              onClick={() => {
+                const target = editing
+                if (!target || !target.statement.trim() || target.statement.trim() === target.statement) return
+                void mutate(async () => {
+                  await updateCreativeMemory({ id: target.id, statement: target.statement.trim() })
+                  setEditing(null)
+                })
+              }}
+            >保存</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }

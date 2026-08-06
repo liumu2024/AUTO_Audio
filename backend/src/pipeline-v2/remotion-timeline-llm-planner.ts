@@ -46,14 +46,14 @@ const TimelineJsonSchema = {
       type: 'array', items: {
         type: 'object', required: ['id', 'type', 'start_sec', 'duration_sec'],
         properties: {
-          id: { type: 'string' }, type: { type: 'string', enum: ['user_video', 'ai_video', 'image_motion', 'remotion_card', 'caption_scene', 'data_viz'] }, start_sec: { type: 'number' }, duration_sec: { type: 'number' }, asset_id: { type: 'string' }, fit: { type: 'string', enum: ['cover', 'contain'] }, background: { type: 'string' }, title: { type: 'string' }, subtitle: { type: 'string' }, body: { type: 'string' }, accent_color: { type: 'string' }, motion: { type: 'string', enum: ['none', 'slow_zoom_in', 'slow_zoom_out', 'pan_left', 'pan_right'] }, visual_role: { type: 'string', enum: ['hook', 'proof', 'feature', 'transition', 'cta'] }, creative_intent: { type: 'object', properties: { title: { type: 'string' }, description: { type: 'string' }, material_label: { type: 'string' } } }, note: { type: 'string' },
+          id: { type: 'string' }, type: { type: 'string', enum: ['user_video', 'ai_video', 'image_motion', 'remotion_card', 'caption_scene', 'data_viz'] }, start_sec: { type: 'number' }, duration_sec: { type: 'number' }, asset_id: { type: 'string' }, fit: { type: 'string', enum: ['cover', 'contain'] }, background: { type: 'string' }, title: { type: 'string' }, subtitle: { type: 'string' }, body: { type: 'string' }, accent_color: { type: 'string' }, motion: { type: 'string', enum: ['none', 'slow_zoom_in', 'slow_zoom_out', 'pan_left', 'pan_right'] }, visual_role: { type: 'string', enum: ['hook', 'proof', 'feature', 'transition', 'cta'] }, creative_intent: { type: 'object', properties: { title: { type: 'string' }, description: { type: 'string' }, material_label: { type: 'string' } } }, note: { type: 'string' }, custom_render: { type: 'object', required: ['component_id'], properties: { component_id: { type: 'string' }, params: { type: 'object' } } },
         },
       },
     },
     transitions: {
       type: 'array', items: {
         type: 'object', required: ['id', 'from_scene_id', 'to_scene_id', 'type', 'duration_sec'],
-        properties: { id: { type: 'string' }, from_scene_id: { type: 'string' }, to_scene_id: { type: 'string' }, type: { type: 'string', enum: ['cut', 'fade', 'slide', 'wipe', 'light_flash'] }, duration_sec: { type: 'number' }, direction: { type: 'string', enum: ['from-left', 'from-right', 'from-top', 'from-bottom'] } },
+        properties: { id: { type: 'string' }, from_scene_id: { type: 'string' }, to_scene_id: { type: 'string' }, type: { type: 'string', enum: ['cut', 'fade', 'slide', 'wipe', 'light_flash'] }, duration_sec: { type: 'number' }, direction: { type: 'string', enum: ['from-left', 'from-right', 'from-top', 'from-bottom'] }, custom_render: { type: 'object', required: ['component_id'], properties: { component_id: { type: 'string' }, params: { type: 'object' } } } },
       },
     },
     overlays: {
@@ -82,7 +82,7 @@ const TimelineJsonSchema = {
     },
     render_policy: {
       type: 'object', required: ['renderer', 'allow_custom_component'],
-      properties: { renderer: { type: 'string', const: 'remotion_timeline' }, allow_custom_component: { type: 'boolean', const: false }, fallback_renderer: { type: 'string', enum: ['overlay_compose'] } },
+      properties: { renderer: { type: 'string', const: 'remotion_timeline' }, allow_custom_component: { type: 'boolean' }, fallback_renderer: { type: 'string', enum: ['overlay_compose'] } },
     },
     notes: { type: 'array', items: { type: 'string' } },
   },
@@ -289,7 +289,21 @@ export function buildV2TimelinePlannerPrompt(
     '- When the user asks for original subtitles from themes or keywords, create audience-facing copy yourself; do not repeat the instruction text. If the user asks for a line limit or placement, express it with caption track defaults and overlay geometry/max_lines while preserving or creating appropriate copy.',
     '- A narrow revision such as audio strategy, transition, subtitle layout, or one selected scene must not replace unrelated subject matter, visual intent, confirmed captions, or sample-use boundaries.',
     '- The selected revision item identifies the user\'s current focus, not an instruction to ignore the rest of the timeline.',
-    '- render_policy.allow_custom_component must be false.',
+    '- revision_scope is the tool-authorized boundary: subtitle changes captions only; scene changes only the scene with revision_scene_id plus its caption overlays/track and transitions adjacent to it; visual_strategy changes only the visual strategy fields (type/fit/motion/background/asset binding) of the scene with revision_scene_id and that scene\'s material jobs, keeping captions, audio, transitions and other scenes unchanged; global allows a full rewrite only when the user explicitly requests a broader change.',
+    '- render_policy.allow_custom_component must be true when and only when the plan references a sedimented render component through custom_render; otherwise false.',
+    '- When the user requests an effect (filter, compositing, animation, transition) outside the preset set and the instruction explicitly names a sedimented component id, reference it with custom_render { component_id, params } on the target scene or transition. Do not invent component ids that are not explicitly given; do not output React/Remotion code here (components are authored separately through render.author).',
+    ...(input.componentHints?.length
+      ? [
+          `System-confirmed effect mappings (componentHints): ${JSON.stringify(input.componentHints)}`,
+          '- When the user requests an effect and a componentHints entry corresponds, reference that component_id with custom_render on the target scene or transition.',
+        ]
+      : []),
+    ...(input.availableComponents?.length
+      ? [
+          `Available sedimented render components: ${JSON.stringify(input.availableComponents)}`,
+          '- When no hint matches but an available component clearly fits the requested effect, you may reference it via custom_render. Never invent component ids.',
+        ]
+      : []),
     '- Avoid unnecessary generated video jobs, but do not hide user images just to keep the plan short.',
     '- If multiple image materials are provided and the user does not request a smaller scene count, promote each visual image to a main scene up to 12 scenes.',
     '- If the user explicitly requests a scene count, output exactly that many scenes unless it would violate the schema.',
@@ -329,6 +343,8 @@ export function buildV2TimelinePlannerPrompt(
         conversation_summary: input.conversationSummary ?? null,
         planning_context: input.planningContext ?? null,
         revision_context: input.revisionContext ?? null,
+        revision_scope: input.revisionScope ?? null,
+        revision_scene_id: input.revisionSceneId ?? null,
         agent_skill_context: input.agentSkillContext ?? null,
         agent_tool_context: input.agentToolContext ?? null,
         main_video_asset_id: example.assets.find((asset) => asset.id === 'main_video_asset')?.id ?? null,

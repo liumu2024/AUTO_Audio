@@ -29,10 +29,21 @@ const timelinePlanArgumentsSchema = z.object({
   instruction: z.string().trim().min(1).max(4_000).optional(),
 }).strict()
 const timelinePatchArgumentsSchema = z.object({
-  scope: z.literal('subtitle'),
+  scope: z.enum(['subtitle', 'scene', 'visual_strategy', 'global']),
+  sceneId: z.string().trim().min(1).max(200).optional(),
   instruction: z.string().trim().min(1).max(4_000).optional(),
-}).strict()
+}).strict().superRefine((value, context) => {
+  if (value.scope === 'global' && value.sceneId) {
+    context.addIssue({ code: 'custom', path: ['sceneId'], message: 'sceneId is only valid for subtitle, scene or visual_strategy scope.' })
+  }
+})
 const timelineRenderArgumentsSchema = emptyArgumentsSchema
+const renderAuthorArgumentsSchema = z.object({
+  componentId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/).optional(),
+  source: z.string().min(1).max(40_000),
+  description: z.string().max(500).optional(),
+  purpose: z.enum(['scene', 'transition']).optional(),
+}).strict()
 
 function jsonSchema(schema: z.ZodType) {
   return z.toJSONSchema(schema, { target: 'draft-7' }) as Record<string, unknown>
@@ -45,6 +56,7 @@ const materialInspectInputSchema = jsonSchema(materialInspectArgumentsSchema)
 const timelinePlanInputSchema = jsonSchema(timelinePlanArgumentsSchema)
 const timelinePatchInputSchema = jsonSchema(timelinePatchArgumentsSchema)
 const timelineRenderInputSchema = jsonSchema(timelineRenderArgumentsSchema)
+const renderAuthorInputSchema = jsonSchema(renderAuthorArgumentsSchema)
 
 const toolArgumentSchemas: Record<string, z.ZodType<Record<string, unknown>>> = {
   'sample.analyze': sampleAnalyzeArgumentsSchema,
@@ -52,6 +64,7 @@ const toolArgumentSchemas: Record<string, z.ZodType<Record<string, unknown>>> = 
   'timeline.plan': timelinePlanArgumentsSchema,
   'timeline.patch': timelinePatchArgumentsSchema,
   'timeline.render': timelineRenderArgumentsSchema,
+  'render.author': renderAuthorArgumentsSchema,
 }
 
 export interface V2AgentToolReadiness {
@@ -123,14 +136,13 @@ export const V2_AGENT_TOOLS: readonly V2AgentToolDefinition[] = [
   { id: 'sample.analyze', name: '分析样例', summary: '读取用户明确选择的样例，提取可复用的结构、节奏和风格事实。', status: 'available', effect: 'read', cost: 'low', skills: ['sample-reference-analysis'], inputSchema: sampleAnalyzeInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '确认样例有效后重试，或继续无样例规划。' },
   { id: 'material.inspect', name: '检查素材', summary: '检查已上传的 V2 候选素材与可用角色。', status: 'available', effect: 'read', cost: 'none', skills: ['v2-timeline-authoring'], inputSchema: materialInspectInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '补充可用素材或继续文生视频。' },
   { id: 'timeline.plan', name: '创建方案', summary: '根据当前 V2 输入创建完整可编辑时间线草稿。', status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'sample-reference-analysis'], inputSchema: timelinePlanInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保留当前会话事实，修正要求后重新规划。' },
-  { id: 'timeline.patch', name: '局部修订', summary: '按 V2 范围修订已有草稿；当前只开放字幕范围。', status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'subtitle-track-authoring'], inputSchema: timelinePatchInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保持基础版本，缩小或澄清修订范围后重试。' },
+  { id: 'timeline.patch', name: '局部修订', summary: '按 V2 范围修订已有草稿：字幕（subtitle）、单镜头与相邻转场（scene）、单镜头视觉策略（visual_strategy）、整案重写（global）。', status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'subtitle-track-authoring'], inputSchema: timelinePatchInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保持基础版本，缩小或澄清修订范围后重试。' },
   { id: 'timeline.render', name: '正式渲染', summary: '按已保存 V2 版本执行素材解析与 Remotion 交付。', status: 'available', effect: 'delivery', cost: 'external', skills: ['v2-render-delivery'], inputSchema: timelineRenderInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '保留草稿与失败原因，修复后由用户重新确认。' },
   { id: 'audio.plan', name: '规划音频', summary: '未来独立音频轨规划接口。', status: 'planned', effect: 'draft', cost: 'low', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },
   { id: 'audio.generate_tts', name: '生成旁白', summary: '未来 TTS 旁白生成接口。', status: 'planned', effect: 'delivery', cost: 'external', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },
   { id: 'audio.align', name: '对齐旁白', summary: '未来字幕型旁白时序对齐接口。', status: 'planned', effect: 'draft', cost: 'low', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },
   { id: 'audio.mix', name: '混音', summary: '未来项目级音频混音接口。', status: 'planned', effect: 'delivery', cost: 'external', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },
-  { id: 'component.sandbox_preview', name: '沙箱组件预览', summary: '未来受限 Remotion 组件沙箱接口。', status: 'disabled', effect: 'draft', cost: 'low', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前固定渲染器不支持自定义组件。' },
-  { id: 'component.promote', name: '沉淀组件', summary: '未来审核通过的组件提升接口。', status: 'disabled', effect: 'draft', cost: 'low', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前固定渲染器不支持自定义组件。' },
+  { id: 'render.author', name: '注册渲染组件', summary: '由导演模型根据设计意图自行生成一段沙箱化的 React/Remotion 渲染组件源码并提交注册（不是要求用户提供源码）；审计通过后注册，可在 timeline 的 scene/transition custom_render 中引用。', status: 'available', effect: 'draft', cost: 'low', skills: ['v2-render-delivery'], inputSchema: renderAuthorInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '按审计提示修正源码（import 白名单、禁止 IO/eval/动态 import、必须默认导出函数组件）后重试。' },
 ]
 
 export function findV2AgentTool(id: string) {

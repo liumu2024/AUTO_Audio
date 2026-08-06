@@ -173,3 +173,43 @@ export async function publishUploadedAsset(
 
   return result
 }
+
+const uploadsDir = path.resolve(process.cwd(), 'uploads')
+const publishedUploadUrlCache = new Map<string, string>()
+
+/**
+ * Makes a material URL externally reachable for generation providers.
+ * Already-reachable URLs pass through unchanged; local upload paths are
+ * published through the configured asset publisher (cached by source URL).
+ * Generic across providers: local + reachable PUBLIC_UPLOAD_BASE_URL, or
+ * ASSET_PUBLISHER_PROVIDER=tos, both satisfy the same contract.
+ */
+export async function ensureExternallyReachableUploadUrl(url: string): Promise<string> {
+  const access = classifyExternalUrlAccess(url)
+  if (access.ok) return access.normalizedUrl ?? url
+
+  const cached = publishedUploadUrlCache.get(url)
+  if (cached) return cached
+
+  const filename = path.basename((url.split('?')[0] ?? url).replace(/\\/g, '/'))
+  const localPath = path.isAbsolute(url)
+    ? url
+    : path.join(uploadsDir, filename)
+  const publication = await publishUploadedAsset(
+    {
+      path: localPath,
+      filename,
+      originalname: filename,
+      mimetype: 'application/octet-stream',
+      size: 0,
+    } as Express.Multer.File,
+    { requirePublicUrl: true },
+  )
+  if (!publication.externallyReachable || !publication.publicUrl) {
+    throw new Error(
+      `素材无法发布为外部可达 URL：${publication.error ?? ''}请配置 PUBLIC_UPLOAD_BASE_URL（或 PUBLIC_BASE_URL）为可达地址，或 ASSET_PUBLISHER_PROVIDER=tos + TOS_*。`,
+    )
+  }
+  publishedUploadUrlCache.set(url, publication.publicUrl)
+  return publication.publicUrl
+}

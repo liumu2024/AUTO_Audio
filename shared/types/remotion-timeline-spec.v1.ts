@@ -64,6 +64,8 @@ export interface RemotionTimelineScene {
   /** Editor-only shot plan; never rendered as a caption. */
   creative_intent?: RemotionTimelineSceneCreativeIntent
   note?: string
+  /** Model-authored sandboxed render override; takes precedence over type. */
+  custom_render?: RemotionCustomRenderRef
 }
 
 export type RemotionTimelineTransitionType =
@@ -86,6 +88,19 @@ export interface RemotionTimelineTransition {
   type: RemotionTimelineTransitionType
   duration_sec: number
   direction?: RemotionTimelineTransitionDirection
+  /** Model-authored sandboxed transition override (single presentation component). */
+  custom_render?: RemotionTransitionCustomRender
+}
+
+/** Reference to a sandboxed, model-authored render component. */
+export interface RemotionCustomRenderRef {
+  component_id: string
+  params?: Record<string, unknown>
+}
+
+export interface RemotionTransitionCustomRender {
+  component_id: string
+  params?: Record<string, unknown>
 }
 
 export type RemotionTimelineOverlayType =

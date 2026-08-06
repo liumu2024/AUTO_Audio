@@ -19,7 +19,7 @@ import { evaluateV2AgentToolReadiness } from '../pipeline-v2/agent-tools/registr
 import { createV2TimelineDraftRepository } from '../pipeline-v2/timeline-draft-repository.js'
 import { evaluateDirectorReplyQuality } from '../../scripts/v2-director-reply-quality-gate.js'
 
-type Fixture = 'empty' | 'draft' | 'material' | 'sample'
+type Fixture = 'empty' | 'draft' | 'material' | 'sample' | 'scifi_draft'
 type ExpectedKind = 'create' | 'discussion' | 'revise' | 'execute'
 
 interface ExpectedTurn {
@@ -54,6 +54,8 @@ interface ExpectedTurn {
   effectiveAspectRatio?: string
   effectiveDurationSec?: number
   subtitleOnly?: boolean
+  revisionScope?: 'subtitle' | 'scene' | 'visual_strategy' | 'global'
+  revisionSceneId?: string
   toolSuccess?: boolean
   dryRender?: boolean
   timeline?: {
@@ -374,6 +376,124 @@ function fixtureSpec(taskId: string): RemotionTimelineSpecV1 {
   }
 }
 
+function fixtureScifiSpec(taskId: string): RemotionTimelineSpecV1 {
+  return {
+    schema_version: 'remotion_timeline_spec.v1',
+    task_id: taskId,
+    canvas: { width: 1920, height: 1080, fps: 30, duration_sec: 20 },
+    assets: [],
+    scenes: [
+      {
+        id: 'scene_1',
+        type: 'remotion_card',
+        start_sec: 0,
+        duration_sec: 4,
+        title: '空间站全景',
+        body: '曙光号进入静默区。',
+        visual_role: 'hook',
+        creative_intent: { description: '建立太空孤寂感。' },
+      },
+      {
+        id: 'scene_2',
+        type: 'remotion_card',
+        start_sec: 4,
+        duration_sec: 4,
+        title: '气闸舱',
+        body: '气压异常告警。',
+        visual_role: 'feature',
+        creative_intent: { description: '气闸舱异常与 AI 乘务员判断。' },
+      },
+      {
+        id: 'scene_3',
+        type: 'remotion_card',
+        start_sec: 8,
+        duration_sec: 4,
+        title: '控制台',
+        body: '保持联络。',
+        visual_role: 'proof',
+        creative_intent: { description: '确认仍在联络。' },
+      },
+      {
+        id: 'scene_4',
+        type: 'remotion_card',
+        start_sec: 12,
+        duration_sec: 4,
+        title: '引力波监测',
+        body: '读数衰减。',
+        visual_role: 'feature',
+        creative_intent: { description: '引力波异常升级。' },
+      },
+      {
+        id: 'scene_5',
+        type: 'remotion_card',
+        start_sec: 16,
+        duration_sec: 4,
+        title: '收束',
+        body: '保持联络。',
+        visual_role: 'cta',
+        creative_intent: { description: '克制收尾。' },
+      },
+    ],
+    transitions: [1, 2, 3, 4].map((index) => ({
+      id: `transition_${index}`,
+      from_scene_id: `scene_${index}`,
+      to_scene_id: `scene_${index + 1}`,
+      type: 'fade',
+      duration_sec: 0.3,
+    })),
+    overlays: [
+      {
+        id: 'cap_1',
+        type: 'caption',
+        scene_id: 'scene_1',
+        start_sec: 0.3,
+        end_sec: 3.7,
+        x_pct: 50,
+        y_pct: 82,
+        width_pct: 78,
+        text: '三小时后，曙光号进入静默区',
+      },
+      {
+        id: 'cap_2',
+        type: 'caption',
+        scene_id: 'scene_2',
+        start_sec: 4.3,
+        end_sec: 7.7,
+        x_pct: 50,
+        y_pct: 82,
+        width_pct: 78,
+        text: '注意：气闸舱气压异常',
+      },
+      {
+        id: 'cap_3',
+        type: 'caption',
+        scene_id: 'scene_3',
+        start_sec: 8.3,
+        end_sec: 11.7,
+        x_pct: 50,
+        y_pct: 82,
+        width_pct: 78,
+        text: '我们仍保持联络',
+      },
+      {
+        id: 'cap_4',
+        type: 'caption',
+        scene_id: 'scene_4',
+        start_sec: 12.3,
+        end_sec: 15.7,
+        x_pct: 50,
+        y_pct: 82,
+        width_pct: 78,
+        text: '引力波读数正在衰减',
+      },
+    ],
+    material_jobs: [],
+    audio: [],
+    render_policy: { renderer: 'remotion_timeline', allow_custom_component: false },
+    notes: ['科幻评测草稿；画面保持蓝灰硬边光。'],
+  }
+}
+
 function timelineFacts(spec: RemotionTimelineSpecV1, revision: number) {
   return {
     revision,
@@ -450,9 +570,11 @@ async function createFixture(
       },
     }
   }
-  if (evaluationCase.fixture !== 'draft') return { context }
+  if (evaluationCase.fixture !== 'draft' && evaluationCase.fixture !== 'scifi_draft') return { context }
 
-  const spec = fixtureSpec(`fixture_${fixtureNonce}`)
+  const spec = evaluationCase.fixture === 'scifi_draft'
+    ? fixtureScifiSpec(`fixture_${fixtureNonce}`)
+    : fixtureSpec(`fixture_${fixtureNonce}`)
   if (evaluationCase.category === 'context') {
     spec.canvas.duration_sec = 12
     spec.scenes = spec.scenes.map((scene, index) => ({
@@ -470,7 +592,7 @@ async function createFixture(
     userId,
     plannerInput: {
       taskId: spec.task_id,
-      prompt: '智能门锁广告评测基础草稿',
+      prompt: 'V2 时间线评测基础草稿',
       creationMode: 'text_to_video',
       durationSec: 15,
       plannerMode: 'deterministic',
@@ -551,7 +673,7 @@ async function checkPlannerRequirements(
   const recalled = Array.isArray(planningContext?.recalledCreativeMemories)
     ? planningContext.recalledCreativeMemories.map(String)
     : []
-  const contains = (fact: string) => active.some((statement) => includesFact(statement, fact))
+  const contains = (fact: string) => active.some((statement) => includesFactSemantic(statement, fact))
   const failures: string[] = []
   let passed = 0
   for (const fact of expectedActive) {
@@ -563,7 +685,7 @@ async function checkPlannerRequirements(
     else failures.push(`Planner 输入仍包含失效要求：${fact}`)
   }
   for (const fact of expectedMemories) {
-    if (recalled.some((statement) => includesFact(statement, fact))) passed += 1
+    if (recalled.some((statement) => includesFactSemantic(statement, fact))) passed += 1
     else failures.push(`Planner 输入缺少召回的长期创作知识：${fact}`)
   }
   return { checks, passed, failures }
@@ -783,7 +905,7 @@ function checkMemoryEvaluation(input: {
         request.operation === expected.operation
         && (expected.scopeType === undefined || request.scopeType === expected.scopeType)
         && (expected.status === undefined || request.status === expected.status)
-        && expectedFacts.every((fact) => includesFact(request.statement ?? '', fact))
+        && expectedFacts.every((fact) => includesFactSemantic(request.statement ?? '', fact))
       ))
     : undefined
   const expectedWrite = expected !== undefined && expected.operation !== 'none'
@@ -807,14 +929,14 @@ function checkMemoryEvaluation(input: {
     })),
   ]
   const retrievalPassed = retrievalChecks.filter((check) => (
-    check.statements.some((statement) => includesFact(statement, check.fact)) === check.present
+    check.statements.some((statement) => includesFactSemantic(statement, check.fact)) === check.present
   )).length
   const applicationChecks = [
     ...(input.expected.memoryReplyFacts ?? []).map((fact) => ({ fact, present: true })),
     ...(input.expected.forbiddenMemoryReplyFacts ?? []).map((fact) => ({ fact, present: false })),
   ]
   const applicationPassed = applicationChecks.filter((check) => (
-    includesFact(input.assistantReply, check.fact) === check.present
+    includesFactSemantic(input.assistantReply, check.fact) === check.present
   )).length
   const retrieved = [...input.active, ...input.candidate]
   const crossScopeMemoryLeak = retrieved.some((item) => (
@@ -1241,6 +1363,33 @@ function includesFact(value: string, fact: string) {
   return normalize(value).includes(normalize(fact))
 }
 
+function semanticTokens(value: string): string[] {
+  const normalized = value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, '')
+  const ascii = normalized.match(/[a-z0-9]+/g) ?? []
+  const hanRuns = normalized.match(/[\p{Script=Han}]+/gu) ?? []
+  const han = hanRuns.flatMap((run) => {
+    const chars = [...run]
+    if (chars.length < 2) return chars
+    return chars.slice(0, -1).map((char, index) => `${char}${chars[index + 1]}`)
+  })
+  return [...ascii, ...han]
+}
+
+/**
+ * Semantic contains for Chinese/English facts: exact substring passes, and a
+ * fact is considered present when at least half of its bigram/word tokens
+ * appear in the value. Used for required-fact assertions so model phrasing
+ * differences ("克制一点的科幻感") do not fail an exact-phrase check.
+ */
+function includesFactSemantic(value: string, fact: string): boolean {
+  const normalize = (text: string) => text.normalize('NFKC').replace(/\s+/g, '')
+  if (normalize(value).includes(normalize(fact))) return true
+  const valueTokens = new Set(semanticTokens(value))
+  const factTokens = semanticTokens(fact)
+  if (!factTokens.length) return false
+  return factTokens.filter((token) => valueTokens.has(token)).length / factTokens.length >= 0.5
+}
+
 function stateActionPassed(
   expected: ExpectedTurn['stateAction'],
   turnResult: Record<string, unknown>,
@@ -1330,7 +1479,11 @@ export async function runV2AgentEvaluation(input: {
           prompt: testTurn.prompt,
           context,
           runtime: turnRuntime,
-        }, { dispatchTool: dryDispatcher(testTurn) })) {
+        }, {
+          dispatchTool: testTurn.expected.dryRender
+            ? dryDispatcher(testTurn)
+            : dispatchV2AgentTool,
+        })) {
           events.push(event)
         }
         const agentLatencyMs = Date.now() - started
@@ -1416,6 +1569,12 @@ export async function runV2AgentEvaluation(input: {
         const modelToolRequests = (Array.isArray(turnResult.tool_requests)
           ? turnResult.tool_requests
           : []) as Array<{ arguments?: Record<string, unknown> }>
+        const scopeAligned = testTurn.expected.revisionScope === undefined
+          || modelToolRequests.some((request) => (
+              request.arguments?.scope === testTurn.expected.revisionScope
+              && (testTurn.expected.revisionSceneId === undefined
+                || request.arguments?.sceneId === testTurn.expected.revisionSceneId)
+            ))
         const systemKeys = new Set(['sampleId', 'materialIds', 'draftId', 'revision', 'targetIds', 'projectId', 'userId'])
         const systemResourceOverride = modelToolRequests.some((request) => (
           Object.keys(request.arguments ?? {}).some((key) => systemKeys.has(key))
@@ -1454,7 +1613,7 @@ export async function runV2AgentEvaluation(input: {
         const timelineValid = testTurn.expected.draftChange === true
           ? Boolean(afterSpec && validateRemotionTimelineSpec(afterSpec).ok)
           : undefined
-        const timelineRequirements = checkTimelineRequirements(afterSpec, testTurn.expected.timeline)
+        const timelineRequirements = checkTimelineRequirements(afterSpec ?? currentSpec, testTurn.expected.timeline)
         const plannerRequirements = await checkPlannerRequirements(
           draftEvent?.type === 'tool_result' ? draftEvent.draft?.traceDir : undefined,
           testTurn.expected.plannerActiveRequirements,
@@ -1493,6 +1652,11 @@ export async function runV2AgentEvaluation(input: {
         }
         if (testTurn.expected.subtitleOnly && !subtitleScopePreserved) {
           failures.push('字幕修订越出字幕范围或没有产生字幕差异')
+        }
+        if (testTurn.expected.revisionScope && !scopeAligned) {
+          failures.push(
+            `修订范围 ${modelToolRequests.map((request) => String(request.arguments?.scope)).join(',') || '未指定'} 与预期 ${testTurn.expected.revisionScope} 不一致`,
+          )
         }
         if (!toolOutcomeAligned) failures.push('Tool 成功状态与预期不一致')
         if (!creationModeAligned) {
@@ -1554,7 +1718,7 @@ export async function runV2AgentEvaluation(input: {
         const requirements = workspaceEvent.state.confirmedRequirements
         const validRequirement = (statement: string, status: 'active' | 'superseded' | 'revoked') => {
           const item = requirements.find((candidate) => (
-            includesFact(candidate.statement, statement) && candidate.status === status
+            includesFactSemantic(candidate.statement, statement) && candidate.status === status
           ))
           return Boolean(
             item?.id
@@ -1577,7 +1741,7 @@ export async function runV2AgentEvaluation(input: {
         }
         const requiredFacts = testTurn.expected.requiredFacts ?? []
         const conversationRecallChecksPassed = requiredFacts.filter(
-          (fact) => includesFact(assistantReply, fact),
+          (fact) => includesFactSemantic(assistantReply, fact),
         ).length
 
         const jsonRepair = await exists(
