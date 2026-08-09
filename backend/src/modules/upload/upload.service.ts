@@ -3,6 +3,8 @@ import { createReadStream } from 'node:fs'
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
+import { env } from '../../config/env.js'
+
 const UPLOAD_DIR = path.resolve(process.cwd(), 'uploads')
 const UPLOAD_INDEX_FILE = path.join(UPLOAD_DIR, '.upload-index.json')
 
@@ -54,6 +56,36 @@ async function existingFile(filePath: string | undefined): Promise<string | unde
   } catch {
     return undefined
   }
+}
+
+export async function resolveUploadedAssetPath(value: string): Promise<string | undefined> {
+  let pathname = value.trim()
+  try {
+    const url = new URL(pathname)
+    const allowedOrigins = [env.publicBaseUrl, env.publicAssetBaseUrl]
+      .map((item) => {
+        try {
+          return new URL(item).origin
+        } catch {
+          return undefined
+        }
+      })
+      .filter((item): item is string => Boolean(item))
+    if (!allowedOrigins.includes(url.origin)) return undefined
+    pathname = url.pathname
+  } catch {
+    // Relative /uploads URLs are valid inputs here.
+  }
+  const parts = pathname.replace(/\\/g, '/').split('/').filter(Boolean)
+  if (parts.length !== 2 || parts[0] !== 'uploads') return undefined
+  let filename: string
+  try {
+    filename = decodeURIComponent(parts[1]!)
+  } catch {
+    return undefined
+  }
+  if (!filename || path.basename(filename) !== filename || filename.startsWith('.')) return undefined
+  return existingFile(path.join(await ensureUploadDir(), filename))
 }
 
 async function findExistingUploadByHash(input: {

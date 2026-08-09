@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 
+import { validateRemotionTimelineSpec } from '../../shared/lib/remotion-timeline-validator.js'
 import type { RemotionTimelineSpecV1 } from '../../shared/types/remotion-timeline-spec.v1.js'
 import {
   buildV2TimelineFactDigest,
@@ -8,6 +9,7 @@ import {
   evaluateV2TimelineRevisionCommit,
   reviewV2TimelineRevisionOutcome,
 } from '../src/pipeline-v2/timeline-revision-outcome-review.js'
+import { bindRenderComponentDisplayNames } from '../src/modules/render-components/component-registry.js'
 import { applyV2TimelineRevisionScope } from '../src/pipeline-v2/timeline-revision-scope.js'
 
 const base: RemotionTimelineSpecV1 = {
@@ -30,7 +32,7 @@ const base: RemotionTimelineSpecV1 = {
   ],
   material_jobs: [],
   audio: [],
-  render_policy: { renderer: 'remotion_timeline', allow_custom_component: false },
+  render_policy: { renderer: 'remotion_timeline' },
   notes: ['产品主题：Luma 智能桌面灯；蓝紫夜光与暖色桌面氛围。'],
 }
 
@@ -211,11 +213,44 @@ const customTransitionSpec: RemotionTimelineSpecV1 = {
     custom_render: { component_id: 'cmp_blur_dissolve', params: {} },
   }],
 }
+const scopedCustomTransitionSpec = applyV2TimelineRevisionScope({
+  baseSpec: customTransitionBase,
+  candidateSpec: customTransitionSpec,
+  scope: 'transition',
+  transitionIds: ['t_custom'],
+})
+assert.equal(
+  validateRemotionTimelineSpec(scopedCustomTransitionSpec).ok,
+  true,
+  'a scoped transition revision may add custom_render without a second policy flag',
+)
 assert.equal(
   buildV2TimelineFactDigest(customTransitionSpec).transitions[0]?.custom_render_component_id,
   'cmp_blur_dissolve',
   'review digest must expose custom_render component id',
 )
+const customTransitionPrompt = buildV2TimelineOutcomeReviewPrompt({
+  prompt: 'Use the registered blur dissolve transition.',
+  baseDigest: buildV2TimelineFactDigest(customTransitionBase),
+  candidateDigest: buildV2TimelineFactDigest(customTransitionSpec),
+  hasBase: true,
+  availableComponents: [{
+    id: 'cmp_blur_dissolve',
+    purpose: 'transition',
+    displayName: '模糊溶解',
+    effectSummary: 'Blur dissolve transition implemented by the registered custom component.',
+  }],
+})
+assert.match(customTransitionPrompt, /custom component defines the effective transition/i)
+assert.match(customTransitionPrompt, /Blur dissolve transition implemented by the registered custom component/)
+assert.match(customTransitionPrompt, /"fallback_preset":"fade"/)
+const labeledCustomTransitionSpec = bindRenderComponentDisplayNames(customTransitionSpec, [{
+  id: 'cmp_blur_dissolve',
+  purpose: 'transition',
+  displayName: '模糊溶解',
+  effectSummary: 'Blur dissolve transition implemented by the registered custom component.',
+}])
+assert.equal(labeledCustomTransitionSpec.transitions[0]?.custom_render?.display_name, '模糊溶解')
 
 // A scene creative-intent change must re-derive that scene's generation prompt,
 // otherwise the edit never reaches the video-generation model.

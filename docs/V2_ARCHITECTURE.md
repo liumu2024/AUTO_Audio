@@ -72,6 +72,8 @@ LLM planner 不能输出 React、HTML、CSS、FFmpeg 命令或自由组件代码
 
 ```text
 generate_video job
+  -> resolve input_asset_id from the reviewed timeline
+  -> publish that image only when this job actually executes
   -> ark-seedance adapter submit task
   -> poll task status
   -> download video
@@ -79,7 +81,9 @@ generate_video job
   -> attach as RemotionTimeline asset
 ```
 
-外部模型要访问本地上传素材时，`PUBLIC_ASSET_BASE_URL` 必须是公网 HTTPS 地址或对象存储/CDN 地址。localhost、内网地址、file URL 都会在提交前被拦截。
+Director 与 Planner 共用同一条 Ark 图片输入适配：公网图片直接作为 `input_image`，服务端本地上传则临时转为 Ark Files `file_id`。Seedance 的接口只接受图片 URL，因此复用同一时间线素材身份，但在具体 `generate_video` job 执行时才把 `input_asset_id` 绑定为公网 URL；未被生成任务使用的图片不会因公网发布配置而阻断规划。
+
+外部模型要访问本地上传素材时，`PUBLIC_ASSET_BASE_URL` 必须是公网 HTTPS 地址或对象存储/CDN 地址。localhost、内网地址、file URL 都会在 Seedance 任务提交前被拦截。
 
 ## Trace 顺序
 

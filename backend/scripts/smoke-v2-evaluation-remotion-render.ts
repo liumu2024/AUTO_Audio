@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 import { createRemotionTimelineFixture } from '../../shared/lib/remotion-timeline-fixtures.js'
@@ -8,7 +9,22 @@ import { generateEvaluationMediaFixtures } from '../src/evaluation-v2/evaluation
 import { createStaticMaterialGenerationAdapter } from '../src/pipeline-v2/material-generation-adapter.js'
 import { runV2RemotionTimeline } from '../src/pipeline-v2/remotion-timeline-service.js'
 
-const fixtureDir = path.resolve('tmp', 'v2-agent-evaluation-media')
+const fixtureDir = mkdtempSync(path.join(os.tmpdir(), 'v2-agent-evaluation-media-'))
+const renderDirs: string[] = []
+const taskIds: string[] = []
+const cleanup = () => {
+  rmSync(fixtureDir, { recursive: true, force: true })
+  for (const dir of renderDirs) rmSync(dir, { recursive: true, force: true })
+  const traceRoot = path.resolve('tmp', 'v2-traces', 'tasks')
+  if (existsSync(traceRoot)) {
+    for (const entry of readdirSync(traceRoot, { withFileTypes: true })) {
+      if (entry.isDirectory() && taskIds.some((taskId) => entry.name.startsWith(`${taskId}__run_`))) {
+        rmSync(path.join(traceRoot, entry.name), { recursive: true, force: true })
+      }
+    }
+  }
+}
+process.once('exit', cleanup)
 const media = await generateEvaluationMediaFixtures(fixtureDir)
 const stamp = Date.now()
 
@@ -33,6 +49,8 @@ const scenarios = [
 const results = []
 for (const scenario of scenarios) {
   const taskId = `v2_eval_render_${scenario.id}_${stamp}`
+  taskIds.push(taskId)
+  renderDirs.push(path.resolve('v2-renders', taskId))
   const spec = createRemotionTimelineFixture({
     taskId,
     mainVideoSrc: scenario.video,
@@ -100,6 +118,8 @@ for (const scenario of scenarios) {
 let corruptFailure = ''
 try {
   const taskId = `v2_eval_render_corrupt_${stamp}`
+  taskIds.push(taskId)
+  renderDirs.push(path.resolve('v2-renders', taskId))
   const spec = createRemotionTimelineFixture({
     taskId,
     mainVideoSrc: media.corrupt,
@@ -132,3 +152,4 @@ console.log(JSON.stringify({
   mediaGenerationCalled: false,
   remotionRenderCalled: true,
 }, null, 2))
+cleanup()

@@ -45,6 +45,7 @@ const preparedMemory = await writeMemoryDecisionSuite({
 const tsxCli = path.resolve('node_modules/tsx/dist/cli.mjs')
 const commands: Array<{ id: string; script: string; args?: string[] }> = [
   { id: 'structured_protocol', script: 'scripts/smoke-v2-structured-model-protocol.ts' },
+  { id: 'agent_tool_protocol', script: 'scripts/smoke-v2-agent-tool-skill-registry.ts' },
   { id: 'creative_memory_state', script: 'scripts/smoke-v2-creative-memory.ts' },
   { id: 'creative_memory_retrieval', script: 'scripts/smoke-v2-creative-memory-retrieval.ts' },
   { id: 'formal_datasets', script: 'scripts/smoke-v2-formal-evaluation-datasets.ts' },
@@ -55,9 +56,15 @@ const commands: Array<{ id: string; script: string; args?: string[] }> = [
   { id: 'review_development_loop', script: 'scripts/smoke-v2-review-development-loop.ts' },
   { id: 'public_material_chain', script: 'scripts/smoke-v2-public-material-chain.ts' },
   { id: 'render_component_sandbox', script: 'scripts/smoke-v2-render-component-sandbox.ts' },
+  { id: 'timeline_draft_persistence', script: 'scripts/smoke-v2-timeline-draft-history.ts' },
   { id: 'render_custom_component', script: 'scripts/smoke-v2-render-custom-component.ts' },
 ]
-if (!skipRender) commands.push({ id: 'remotion_delivery', script: 'scripts/smoke-v2-evaluation-remotion-render.ts' })
+if (!skipRender) {
+  commands.push(
+    { id: 'render_component_authoring', script: 'scripts/smoke-v2-render-component-authoring-agent.ts' },
+    { id: 'remotion_delivery', script: 'scripts/smoke-v2-evaluation-remotion-render.ts' },
+  )
+}
 
 const commandResults = commands.map((command) => {
   const started = Date.now()
@@ -93,6 +100,7 @@ const retrievalHard = await evaluateCreativeMemoryRetrieval({
 })
 
 const liveReports: Array<{ id: string; reportFile: string }> = []
+let componentAuthoringLive: Record<string, unknown> | null = null
 if (!skipLive) {
   const keyCases = [
     'requirement_lifecycle', 'current_input_overrides_history', 'text_only_creation',
@@ -125,6 +133,25 @@ if (!skipLive) {
     }
     liveReports.push({ id: evaluation.id, reportFile })
   }
+  const componentTarget = path.join(outputDir, 'component-authoring-live')
+  const componentStarted = Date.now()
+  const componentResult = spawnSync(process.execPath, [
+    tsxCli,
+    'scripts/live-v2-render-component-authoring.ts',
+    '--output', componentTarget,
+    '--reuse-runs', '3',
+  ], { cwd: process.cwd(), encoding: 'utf8', timeout: 3_600_000 })
+  commandResults.push({
+    id: 'live_render_component_authoring',
+    ok: componentResult.status === 0,
+    status: componentResult.status,
+    durationMs: Date.now() - componentStarted,
+    stdout: componentResult.stdout?.trim() ?? '',
+    stderr: componentResult.stderr?.trim() ?? '',
+  })
+  try {
+    componentAuthoringLive = JSON.parse(await readFile(path.join(componentTarget, 'report.json'), 'utf8')) as Record<string, unknown>
+  } catch { /* failed before producing a report */ }
 }
 
 const reports = await Promise.all(liveReports.map(async (item) => ({
@@ -193,6 +220,7 @@ const formal = {
   retrieval,
   retrievalHard,
   render: renderDetails,
+  componentAuthoring: componentAuthoringLive,
   keyStabilityPassed,
   confidenceIntervals95: summary ? {
     deterministicPassRate: wilson(summary.deterministicPassed, summary.turns),

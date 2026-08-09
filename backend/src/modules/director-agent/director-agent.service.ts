@@ -65,6 +65,11 @@ function directorTimelineFacts(input: {
       animation: text.animation,
     })),
     transitions: digest.transitions.map((transition) => ({
+      id: transition.id,
+      fromSceneId: transition.from_scene_id,
+      toSceneId: transition.to_scene_id,
+      fromSceneIndex: digest.scenes.findIndex((scene) => scene.id === transition.from_scene_id) + 1,
+      toSceneIndex: digest.scenes.findIndex((scene) => scene.id === transition.to_scene_id) + 1,
       type: transition.type,
       durationSec: transition.duration_sec,
     })),
@@ -400,6 +405,16 @@ export async function* streamDirectorAgentChat(
   let workspaceState = persisted
     ? applyDirectorWorkspacePatch(before, runtimeObservationPatch(input))
     : before
+  const persistedTimelineRevision = workspaceState.draftId && workspaceState.baseRevision
+    ? await timelineDrafts.getRevision(workspaceState.draftId, workspaceState.baseRevision, userId)
+    : null
+  workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+    context: {
+      timelineFacts: persistedTimelineRevision
+        ? directorTimelineFacts({ revision: persistedTimelineRevision.revision, spec: persistedTimelineRevision.spec })
+        : null,
+    },
+  })
   workspaceState = applyDirectorWorkspacePatch(workspaceState, {
     context: {
       conversationSummary: JSON.stringify(compactDirectorWorkspaceContext(workspaceState)),
@@ -511,6 +526,7 @@ export async function* streamDirectorAgentChat(
     },
     protocol_error: routed.protocolError ?? null,
     fallback_reason: routed.fallbackReason ?? null,
+    image_input_warnings: routed.imageInputWarnings ?? [],
     structured_output: routed.structuredOutput ?? null,
     effective_v2_creation_mode: effectiveV2CreationMode(workspaceState.context),
   })
@@ -734,6 +750,16 @@ export async function* streamDirectorAgentChat(
             recalledCreativeMemories: creativeMemoryRetrieval.active.map(
               (item) => item.memory.statement,
             ),
+            authorizedDraftComponentIds: request.dependsOn.flatMap((ref) => {
+              const dependencyRequest = requestedTools.find((item) => item.ref === ref)
+              const dependencyResult = dependencyRequest
+                ? toolResults.find((item) => item.callId === dependencyRequest.callId && item.ok)
+                : undefined
+              const componentId = dependencyResult?.toolId === 'render.author'
+                ? dependencyResult.output?.componentId
+                : undefined
+              return typeof componentId === 'string' ? [componentId] : []
+            }),
             onProgress: (event) => {
               progressQueue.push(event)
               wakeProgress?.()
@@ -881,12 +907,9 @@ export async function* streamDirectorAgentChat(
   const toolConfirmation = shouldReportToolOutcome
     ? toolOutcomeConfirmation(toolResults, actionReceipts, requestedTools)
     : ''
-  const assistantParts = [routed.result.assistantMessage, toolConfirmation].filter(Boolean)
-  const modelAssistantMessage = assistantParts.length > 1
-    ? assistantParts
-        .map((message) => message.replace(/[。！!？?；;]+$/u, ''))
-        .join('。')
-    : (assistantParts[0] ?? '')
+  const modelAssistantMessage = shouldReportToolOutcome
+    ? toolConfirmation
+    : routed.result.assistantMessage
   const requirementMessage = !stateAction
     ? ''
     : requirementResult.ok

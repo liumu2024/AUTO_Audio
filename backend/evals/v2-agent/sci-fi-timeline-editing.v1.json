@@ -276,6 +276,29 @@
           "expected": { "tools": [], "kind": "discussion", "stateAction": "none", "activeRequirements": ["保持联络"], "memoryReplyFacts": ["蓝灰主色", "中性沉稳"], "draftChange": false }
         }
       ]
+    },
+    {
+      "id": "sci_fi_multi_transition_revision",
+      "category": "timeline_editing",
+      "fixture": "scifi_draft",
+      "turns": [
+        {
+          "prompt": "把第4和第5镜头之间的转场改成擦除，第2和第3镜头之间改成硬切，立即修改草稿，不要渲染。",
+          "expected": {
+            "tools": ["timeline.patch"],
+            "skills": ["v2-timeline-authoring"],
+            "kind": "revise",
+            "draftChange": true,
+            "toolSuccess": true,
+            "revisionScope": "transition",
+            "revisionTargetCount": 2,
+            "timeline": {
+              "transitionCount": 4,
+              "requiredTransitionTypes": ["wipe", "cut"]
+            }
+          }
+        }
+      ]
     }
   ]
 }

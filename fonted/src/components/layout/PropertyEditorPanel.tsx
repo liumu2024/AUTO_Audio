@@ -2,6 +2,7 @@ import { SlidersHorizontal } from 'lucide-react'
 
 import { V2SamplePropertyInspector } from '@/components/layout/V2SamplePropertyInspector'
 import { Textarea } from '@/components/ui/textarea'
+import { v2TransitionDisplayText } from '@/lib/v2-timeline-ui'
 import {
   buildV2PlanPresentation,
   resolveV2PlanSceneIdFromClip,
@@ -115,7 +116,7 @@ function SceneFacts({
         label="镜头衔接"
         value={
           scene.transitionAfter
-            ? `${transitionLabel(scene.transitionAfter.type)} · ${scene.transitionAfter.duration_sec}s`
+            ? v2TransitionDisplayText(scene.transitionAfter)
             : '直接结束或硬切到下一镜头'
         }
       />
@@ -232,14 +233,4 @@ function backgroundLabel(background: string | undefined) {
   if (alpha <= 0.02) return '背景：透明'
   if (alpha < 1) return `背景：半透明(${Math.round(alpha * 100)}%)`
   return '背景：实底'
-}
-
-function transitionLabel(type: NonNullable<V2PlanScenePresentation['transitionAfter']>['type']) {
-  return {
-    cut: '硬切',
-    fade: '淡化',
-    slide: '滑动',
-    wipe: '擦除',
-    light_flash: '闪光',
-  }[type]
 }

@@ -13,7 +13,7 @@ import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 export function MigrationCanvas() {
   const sampleSession = useV2TimelineStore((state) => state.sampleSession)
   const spec = useV2TimelineStore((state) => state.spec)
-  const result = useV2TimelineStore((state) => state.result)
+  const renderedOutputUrl = useV2TimelineStore((state) => state.renderedOutputUrl)
   const timelineMode = useEditorStore((state) => state.timelineMode)
   const sampleRef = useRef<HTMLVideoElement>(null)
   const generatedRef = useRef<HTMLVideoElement>(null)
@@ -27,7 +27,7 @@ export function MigrationCanvas() {
     timelineMode,
     hasSample: Boolean(sampleSession),
     hasSpec: Boolean(spec?.scenes.length),
-    hasRenderedOutput: Boolean(result?.outputUrl),
+    hasRenderedOutput: Boolean(renderedOutputUrl),
   })
   if (surface === 'sample_analysis' && sampleSession) {
     return <div className="flex h-full min-h-0 w-full p-4"><V2SamplePlayer ref={sampleRef} session={sampleSession} onTimeUpdate={() => handleTimeUpdate('sample')} onEnded={handleEnded} onLoadedMetadata={handleLoadedMetadata} onSeek={seekTo} onTogglePlay={togglePlayPause} /></div>

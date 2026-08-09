@@ -41,7 +41,7 @@ Each Tool exception is converted to a structured failed result with recovery gui
 
 ## Official Remotion references
 
-`official.remotion-captions` and `official.remotion-render` are controlled, read-only references for V2 skills. `official.remotion-markup` and `official.remotion-best-practices` are maintainer-only. None authorizes arbitrary JSX, package installation, or custom component execution; `allow_custom_component=false` remains enforced.
+`official.remotion-captions` and `official.remotion-render` are controlled, read-only references for V2 skills. `official.remotion-markup` and `official.remotion-best-practices` are maintainer-only. These references do not authorize arbitrary JSX or package installation. Custom components enter the timeline only through `render.author` audit, preview, promotion, and server-side reference validation.
 
 ## Trace evidence
 

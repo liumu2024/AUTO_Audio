@@ -28,6 +28,13 @@ assert.equal(report.summary.scene_count, 3)
 assert.equal(report.summary.transition_count, 2)
 assert.equal(report.summary.overlay_count, 3)
 assert.equal(spec.render_policy.renderer, 'remotion_timeline')
-assert.equal(spec.render_policy.allow_custom_component, false)
+
+const unknownRenderPolicySpec = structuredClone(spec) as unknown as {
+  render_policy: Record<string, unknown>
+}
+unknownRenderPolicySpec.render_policy.obsolete_policy_flag = true
+const unknownRenderPolicyReport = validateRemotionTimelineSpec(unknownRenderPolicySpec)
+assert.equal(unknownRenderPolicyReport.ok, false)
+assert.match(unknownRenderPolicyReport.issues.map((issue) => issue.path).join(','), /obsolete_policy_flag/)
 
 console.info('[smoke-v2-remotion-timeline-spec] OK')

@@ -3,6 +3,7 @@ import { AbsoluteFill, Img, interpolate, staticFile, useCurrentFrame, useVideoCo
 import { Component, createElement } from 'react'
 import type { ComponentType, CSSProperties, ReactNode } from 'react'
 
+import type { CustomSceneProps } from '../../../shared/types/remotion-custom-component'
 import type {
   RemotionImageMotion,
   RemotionTimelineAsset,
@@ -291,7 +292,7 @@ export function SceneRenderer({
   if (scene.custom_render) {
     const module = customComponentRegistry[scene.custom_render.component_id]
     const Component = module?.default as
-      | ComponentType<{ params?: unknown; scene: RemotionTimelineScene; assets: RemotionTimelineAsset[] }>
+      | ComponentType<CustomSceneProps>
       | undefined
     if (Component) {
       return (

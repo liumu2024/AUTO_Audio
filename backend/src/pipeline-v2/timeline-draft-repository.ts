@@ -3,6 +3,11 @@ import { randomUUID } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
+import {
+  bindRegisteredRenderComponentDisplayNames,
+  timelineRenderComponentReferences,
+  validateRenderComponentReferences,
+} from '../modules/render-components/component-registry.js'
 import type { V2PlannerInput } from './v2-input.js'
 import { prisma } from '../shared/prisma.service.js'
 
@@ -81,6 +86,23 @@ export class V2TimelineRevisionConflictError extends Error {
   ) {
     super(`V2 timeline draft revision conflict: expected ${expectedRevision}, actual ${actualRevision}.`)
   }
+}
+
+export class V2TimelineComponentReferenceError extends Error {
+  constructor(readonly issues: string[]) {
+    super(`Invalid timeline component reference: ${issues.join('; ')}`)
+  }
+}
+
+async function assertTimelineComponentReferences(
+  spec: RemotionTimelineSpecV1,
+  allowedDraftIds: ReadonlySet<string>,
+): Promise<void> {
+  const issues = await validateRenderComponentReferences(
+    timelineRenderComponentReferences(spec),
+    allowedDraftIds,
+  )
+  if (issues.length) throw new V2TimelineComponentReferenceError(issues)
 }
 
 function asJson(value: unknown): Prisma.InputJsonValue {
@@ -168,6 +190,7 @@ export interface CreateV2TimelineDraftInput {
   plannerSource: string
   review: unknown
   traceDir: string
+  authorizedDraftComponentIds?: readonly string[]
 }
 
 export interface SaveV2TimelineDraftInput {
@@ -180,6 +203,7 @@ export interface SaveV2TimelineDraftInput {
   plannerSource?: string
   review?: unknown
   traceDir?: string
+  authorizedDraftComponentIds?: readonly string[]
 }
 
 export interface V2TimelineDraftRepository {
@@ -237,6 +261,11 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
 
   return {
     async createDraft(input) {
+      await assertTimelineComponentReferences(
+        input.spec,
+        new Set(input.authorizedDraftComponentIds),
+      )
+      const spec = await bindRegisteredRenderComponentDisplayNames(input.spec)
       const id = `v2_draft_${randomUUID()}`
       const draft = await prisma.v2TimelineDraft.create({
         data: {
@@ -245,7 +274,7 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
           revision: 1,
           creationMode: input.plannerInput.creationMode ?? 'text_to_video',
           plannerInputJson: asJson(input.plannerInput),
-          specJson: asJson(input.spec),
+          specJson: asJson(spec),
           plannerSource: input.plannerSource,
           reviewJson: asJson(input.review),
           traceDir: input.traceDir,
@@ -257,7 +286,7 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
           draftId: id,
           revision: 1,
           kind: 'preview',
-          specJson: asJson(input.spec),
+          specJson: asJson(spec),
           plannerSource: input.plannerSource,
           reviewJson: asJson(input.review),
           traceDir: input.traceDir,
@@ -306,13 +335,22 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
           current.revision,
         )
       }
+      const currentSpec = current.specJson as unknown as RemotionTimelineSpecV1
+      await assertTimelineComponentReferences(
+        input.spec,
+        new Set([
+          ...timelineRenderComponentReferences(currentSpec).map((reference) => reference.id),
+          ...(input.authorizedDraftComponentIds ?? []),
+        ]),
+      )
+      const spec = await bindRegisteredRenderComponentDisplayNames(input.spec)
 
       const nextRevision = input.baseRevision + 1
       const updated = await prisma.v2TimelineDraft.updateMany({
         where: { id: input.draftId, userId: input.userId, revision: input.baseRevision },
         data: {
           revision: nextRevision,
-          specJson: asJson(input.spec),
+          specJson: asJson(spec),
           ...(input.plannerInput ? { plannerInputJson: asJson(input.plannerInput) } : {}),
           ...(input.plannerSource !== undefined ? { plannerSource: input.plannerSource } : {}),
           ...(input.review !== undefined ? { reviewJson: asJson(input.review) } : {}),
@@ -335,7 +373,7 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
           draftId: input.draftId,
           revision: nextRevision,
           kind: input.kind,
-          specJson: asJson(input.spec),
+          specJson: asJson(spec),
           plannerSource: input.plannerSource ?? current.plannerSource,
           reviewJson: asJson(input.review ?? current.reviewJson),
           traceDir: input.traceDir ?? current.traceDir,

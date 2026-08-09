@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
+import { validateRemotionTimelineSpec } from '../../shared/lib/remotion-timeline-validator.js'
+
 const dataDir = mkdtempSync(path.join(os.tmpdir(), 'v2-scifi-scoped-edit-'))
 process.env.DPL304_LOCAL_MODE = 'true'
 process.env.DPL304_LOCAL_DATA_DIR = dataDir
+process.env.RENDER_COMPONENTS_DIR = path.join(dataDir, 'render-components')
 
 try {
   // 0. Dataset shape gate: the sci-fi suite must contain at least 50 turns.
@@ -53,7 +57,7 @@ try {
       { id: 'job_2', scene_id: 'scene_4', type: 'use_user_material', status: 'planned', material_id: 'mat_station' },
     ],
     audio: [],
-    render_policy: { type: 'remotion_timeline', allow_custom_component: false },
+    render_policy: { type: 'remotion_timeline' },
     notes: ['sci-fi draft'],
   }
 
@@ -73,6 +77,9 @@ try {
   const { applyV2TimelineRevisionScope } = await import(
     '../src/pipeline-v2/timeline-revision-scope.js'
   )
+  const { applyV2TimelineHardRequirements } = await import(
+    '../src/pipeline-v2/hard-requirements.js'
+  )
   const scoped = applyV2TimelineRevisionScope({ baseSpec: base, candidateSpec: candidate, scope: 'subtitle' })
 
   // 3. Partial-modification guarantee: only caption facts changed.
@@ -89,6 +96,119 @@ try {
     'caption overlays must come from the candidate',
   )
   assert.equal(scoped.caption_tracks.find((track) => track.scene_id === 'scene_2')?.lines[0], '注意：气压异常')
+
+  // A scene-targeted subtitle revision must preserve every non-target object,
+  // regardless of whether the target is the first, middle, or final scene.
+  for (const targetIndex of [0, 2, 4]) {
+    const sceneIds = base.scenes.map(() => `scene_${randomUUID()}`)
+    const sceneIdByOldId = new Map(base.scenes.map((scene, index) => [scene.id, sceneIds[index]!]))
+    const isolatedBase = {
+      ...structuredClone(base),
+      task_id: `subtitle_scope_${randomUUID()}`,
+      scenes: base.scenes.map((scene, index) => ({ ...scene, id: sceneIds[index]! })),
+      transitions: base.transitions.map((transition) => ({
+        ...transition,
+        id: `transition_${randomUUID()}`,
+        from_scene_id: sceneIdByOldId.get(transition.from_scene_id)!,
+        to_scene_id: sceneIdByOldId.get(transition.to_scene_id)!,
+      })),
+      overlays: base.overlays.map((overlay) => ({
+        ...overlay,
+        id: `caption_${randomUUID()}`,
+        scene_id: sceneIdByOldId.get(overlay.scene_id!)!,
+      })),
+      caption_tracks: base.caption_tracks.map((track) => ({
+        ...track,
+        id: `track_${randomUUID()}`,
+        scene_id: sceneIdByOldId.get(track.scene_id)!,
+      })),
+      material_jobs: base.material_jobs.map((job) => ({
+        ...job,
+        id: `job_${randomUUID()}`,
+        scene_id: sceneIdByOldId.get(job.scene_id)!,
+      })),
+    }
+    const targetSceneId = sceneIds[targetIndex]!
+    const requestedText = `target_${randomUUID()}`
+    const isolatedCandidate = structuredClone(isolatedBase)
+    isolatedCandidate.scenes = isolatedCandidate.scenes.map((scene) => ({
+      ...scene,
+      creative_intent: `unrelated_${scene.id}`,
+    }))
+    isolatedCandidate.overlays = isolatedCandidate.overlays.map((overlay) => ({
+      ...overlay,
+      text: overlay.scene_id === targetSceneId ? requestedText : `unrelated_${overlay.id}`,
+    }))
+    if (!isolatedCandidate.overlays.some((overlay) => overlay.scene_id === targetSceneId)) {
+      const targetScene = isolatedCandidate.scenes[targetIndex]!
+      isolatedCandidate.overlays.push({
+        id: `caption_${randomUUID()}`,
+        type: 'caption',
+        scene_id: targetSceneId,
+        text: requestedText,
+        start_sec: targetScene.start_sec,
+        end_sec: targetScene.end_sec,
+      })
+    }
+
+    const isolated = applyV2TimelineRevisionScope({
+      baseSpec: isolatedBase,
+      candidateSpec: isolatedCandidate,
+      scope: 'subtitle',
+      sceneId: targetSceneId,
+    })
+    assert.deepEqual(isolated.scenes, isolatedBase.scenes)
+    assert.deepEqual(isolated.transitions, isolatedBase.transitions)
+    assert.deepEqual(isolated.material_jobs, isolatedBase.material_jobs)
+    assert.deepEqual(
+      isolated.overlays.filter((overlay) => overlay.scene_id !== targetSceneId),
+      isolatedBase.overlays.filter((overlay) => overlay.scene_id !== targetSceneId),
+      `subtitle target at index ${targetIndex} must not move or rewrite another scene's text`,
+    )
+    assert.equal(
+      isolated.overlays.find((overlay) => overlay.scene_id === targetSceneId)?.text,
+      requestedText,
+    )
+
+    const checked = applyV2TimelineHardRequirements({
+      spec: isolated,
+      requirements: {
+        schema_version: 'v2_timeline_hard_requirements.v1',
+        required_captions: [requestedText],
+        use_all_visual_materials: false,
+      },
+      synthesizeMissing: false,
+    })
+    assert.deepEqual(checked, isolated, 'revision hard requirements must validate without rebuilding overlays')
+  }
+
+  const sharedTrackBase = structuredClone(base)
+  sharedTrackBase.caption_tracks = [{
+    id: `shared_track_${randomUUID()}`,
+    font_size: 42,
+  }]
+  sharedTrackBase.overlays = sharedTrackBase.overlays.map((overlay, index) =>
+    index < 2 ? { ...overlay, track_id: sharedTrackBase.caption_tracks[0]!.id } : overlay)
+  const sharedTrackCandidate = structuredClone(sharedTrackBase)
+  sharedTrackCandidate.caption_tracks[0] = {
+    ...sharedTrackCandidate.caption_tracks[0]!,
+    font_size: 12,
+  }
+  sharedTrackCandidate.overlays[0] = {
+    ...sharedTrackCandidate.overlays[0]!,
+    text: `target_${randomUUID()}`,
+  }
+  const sharedTrackScoped = applyV2TimelineRevisionScope({
+    baseSpec: sharedTrackBase,
+    candidateSpec: sharedTrackCandidate,
+    scope: 'subtitle',
+    sceneId: sharedTrackBase.overlays[0]!.scene_id,
+  })
+  assert.deepEqual(
+    sharedTrackScoped.caption_tracks,
+    sharedTrackBase.caption_tracks,
+    'a target subtitle must not mutate a style track shared by another scene',
+  )
 
   // 4. No-diff gate: an unchanged candidate is rejected; a real caption change passes.
   const { evaluateV2TimelineRevisionCommit } = await import(
@@ -218,6 +338,106 @@ try {
     'zero visual-strategy diff must be rejected',
   )
 
+  // 4e. transition scope may update multiple explicit transition objects in
+  // one revision while preserving every scene and non-target transition.
+  const transitionBase = structuredClone(base)
+  transitionBase.transitions = transitionBase.transitions.map((transition) => ({
+    ...transition,
+    id: `transition_${randomUUID()}`,
+  }))
+  const targetTransitionIds = [transitionBase.transitions[0]!.id, transitionBase.transitions[2]!.id]
+  const unrelatedTransitionId = transitionBase.transitions[1]!.id
+  const firstTargetBase = transitionBase.transitions[0]!
+  const transitionCandidate = structuredClone(transitionBase)
+  transitionCandidate.transitions = transitionCandidate.transitions.map((transition) =>
+    transition.id === targetTransitionIds[0]
+      ? {
+          ...transition,
+          from_scene_id: transitionBase.scenes.at(-2)!.id,
+          to_scene_id: transitionBase.scenes.at(-1)!.id,
+          type: 'wipe',
+        }
+      : transition.id === targetTransitionIds[1]
+        ? { ...transition, type: 'light_flash' }
+        : transition.id === unrelatedTransitionId
+          ? { ...transition, type: 'slide' }
+          : transition)
+  const transitionScoped = applyV2TimelineRevisionScope({
+    baseSpec: transitionBase,
+    candidateSpec: transitionCandidate,
+    scope: 'transition',
+    transitionIds: targetTransitionIds,
+  })
+  assert.equal(transitionScoped.transitions.find((item) => item.id === targetTransitionIds[0])?.type, 'wipe')
+  assert.equal(transitionScoped.transitions.find((item) => item.id === targetTransitionIds[1])?.type, 'light_flash')
+  assert.equal(
+    transitionScoped.transitions.find((item) => item.id === targetTransitionIds[0])?.from_scene_id,
+    firstTargetBase.from_scene_id,
+    'transition scope must preserve the server-owned source scene',
+  )
+  assert.equal(
+    transitionScoped.transitions.find((item) => item.id === targetTransitionIds[0])?.to_scene_id,
+    firstTargetBase.to_scene_id,
+    'transition scope must preserve the server-owned destination scene',
+  )
+  assert.equal(transitionScoped.transitions.find((item) => item.id === unrelatedTransitionId)?.type, 'fade')
+  assert.deepEqual(transitionScoped.scenes, transitionBase.scenes)
+  assert.deepEqual(transitionScoped.overlays, transitionBase.overlays)
+  assert.deepEqual(transitionScoped.material_jobs, transitionBase.material_jobs)
+  assert.equal(
+    evaluateV2TimelineRevisionCommit({
+      baseSpec: transitionBase,
+      candidateSpec: transitionScoped,
+      scope: 'transition',
+      transitionIds: targetTransitionIds,
+    }).ok,
+    true,
+  )
+
+  // 4f. The shared preset contract accepts blur without a natural-language
+  // capability gate in the dispatcher.
+  const blurTransitionSpec = {
+    schema_version: 'remotion_timeline_spec.v1' as const,
+    task_id: `blur_${randomUUID()}`,
+    canvas: { width: 360, height: 640, fps: 12, duration_sec: 2 },
+    assets: [],
+    scenes: [
+      { id: 'scene_blur_a', type: 'remotion_card', start_sec: 0, duration_sec: 1, title: 'a' },
+      { id: 'scene_blur_b', type: 'remotion_card', start_sec: 1, duration_sec: 1, title: 'b' },
+    ],
+    transitions: [{
+      id: 'transition_blur',
+      from_scene_id: 'scene_blur_a',
+      to_scene_id: 'scene_blur_b',
+      type: 'blur' as const,
+      duration_sec: 0.5,
+    }],
+    overlays: [],
+    material_jobs: [],
+    audio: [],
+    render_policy: { renderer: 'remotion_timeline' },
+  }
+  assert.equal(validateRemotionTimelineSpec(blurTransitionSpec).ok, true)
+
+  const receiptComponentId = `cmp_receipt_${randomUUID().slice(0, 8)}`
+  const { registerRenderComponent } = await import('../src/modules/render-components/component-registry.js')
+  await registerRenderComponent({
+    id: receiptComponentId,
+    purpose: 'scene',
+    displayName: '回执归因组件',
+    effectSummary: 'render receipt attribution fixture',
+    effectBrief: 'render receipt attribution fixture',
+    acceptanceCriteria: ['fixture renders'],
+    source: "export default function ReceiptFixture() { return <div style={{background: '#111', height: '100%', width: '100%'}} /> }",
+  })
+  const renderFailureSpec = {
+    ...blurTransitionSpec,
+    scenes: blurTransitionSpec.scenes.map((scene, index) => index === 0
+      ? { ...scene, custom_render: { component_id: receiptComponentId, params: {} } }
+      : scene),
+  }
+  assert.equal(validateRemotionTimelineSpec(renderFailureSpec).ok, true)
+
   // 5. Revision immutability and render-run binding through the draft repository.
   const { createV2TimelineDraftRepository } = await import(
     '../src/pipeline-v2/timeline-draft-repository.js'
@@ -231,6 +451,125 @@ try {
     review: {},
     traceDir: 'tmp/v2-traces/tasks/sci_fi',
   })
+  const { dispatchV2AgentTool } = await import('../src/pipeline-v2/agent-tools/dispatcher.js')
+  const staleTransition = await dispatchV2AgentTool({
+    stage: {
+      primarySkill: { id: 'v2-timeline-authoring' },
+      references: [],
+      toolRequest: {
+        ref: 'stale_transition',
+        callId: `stale_transition_${randomUUID()}`,
+        toolId: 'timeline.patch',
+        skillId: 'v2-timeline-authoring',
+        arguments: { scope: 'transition', transitionIds: [`missing_${randomUUID()}`] },
+        requestedMode: 'preview',
+        dependsOn: [],
+      },
+    } as never,
+    prompt: '修改一个不存在的转场',
+    userId: 7,
+    context: {
+      materials: [], userIntent: {},
+      slots: { aspectRatio: '16:9', durationSec: 20, styleIntensity: 'medium' },
+    },
+    runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false },
+    workspace: {
+      version: 1, context: { materials: [], userIntent: {}, slots: { aspectRatio: '16:9', durationSec: 20, styleIntensity: 'medium' } },
+      draftId: created.id, baseRevision: created.revision, confirmedRequirements: [], recentTurns: [], rollingSummary: '', recentToolCallIds: [],
+    } as never,
+  })
+  assert.equal(staleTransition.ok, false)
+  assert.equal(staleTransition.gate, 'dispatcher_target')
+
+  const renderFailureDraftInput = {
+    userId: 7,
+    plannerInput: { taskId: 'render_failure', prompt: 'render failure', creationMode: 'text_to_video', plannerMode: 'deterministic', allowPlannerFallback: true } as never,
+    spec: renderFailureSpec,
+    plannerSource: 'deterministic',
+    review: {},
+  }
+  await assert.rejects(
+    drafts.createDraft(renderFailureDraftInput),
+    /not authorized/,
+    'a persisted draft cannot self-authorize a newly referenced draft component',
+  )
+  const initialRenderFailureDraft = await drafts.createDraft({
+    ...renderFailureDraftInput,
+    authorizedDraftComponentIds: [receiptComponentId],
+  })
+  const unrelatedComponentId = `cmp_unrelated_${randomUUID().slice(0, 8)}`
+  await registerRenderComponent({
+    id: unrelatedComponentId,
+    purpose: 'scene',
+    displayName: '无关测试组件',
+    effectSummary: 'unrelated fixture',
+    effectBrief: 'unrelated fixture',
+    acceptanceCriteria: ['fixture renders'],
+    source: "export default function UnrelatedFixture() { return <div style={{height: '100%', width: '100%'}} /> }",
+  })
+  await assert.rejects(
+    drafts.saveDraft({
+      draftId: initialRenderFailureDraft.id,
+      userId: 7,
+      baseRevision: initialRenderFailureDraft.revision,
+      spec: {
+        ...renderFailureSpec,
+        scenes: renderFailureSpec.scenes.map((scene, index) => index === 0
+          ? { ...scene, custom_render: { component_id: unrelatedComponentId, params: {} } }
+          : scene),
+      },
+      kind: 'user_edit',
+    }),
+    /not authorized/,
+    'a revision cannot self-authorize an unrelated draft component',
+  )
+  const renderFailureDraft = await drafts.saveDraft({
+    draftId: initialRenderFailureDraft.id,
+    userId: 7,
+    baseRevision: initialRenderFailureDraft.revision,
+    spec: { ...renderFailureSpec, notes: ['existing draft component remains bound'] },
+    kind: 'user_edit',
+  })
+  assert.equal(renderFailureDraft.revision, 2, 'a revision may retain a draft component already bound by its base')
+  const previousBrowserExecutable = process.env.REMOTION_BROWSER_EXECUTABLE
+  process.env.REMOTION_BROWSER_EXECUTABLE = path.join(dataDir, 'missing-browser.exe')
+  try {
+    const failedRender = await dispatchV2AgentTool({
+      stage: {
+        primarySkill: { id: 'v2-render-delivery' },
+        references: [],
+        toolRequest: {
+          ref: 'render_failure', callId: `render_failure_${randomUUID()}`, toolId: 'timeline.render',
+          skillId: 'v2-render-delivery', arguments: {}, requestedMode: 'execute', dependsOn: [],
+        },
+      } as never,
+      prompt: '渲染当前草稿',
+      userId: 7,
+      context: {
+        materials: [], userIntent: {},
+        slots: { aspectRatio: '9:16', durationSec: 2, styleIntensity: 'medium' },
+      },
+      runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false },
+      workspace: {
+        version: 1,
+        context: { materials: [], userIntent: {}, slots: { aspectRatio: '9:16', durationSec: 2, styleIntensity: 'medium' } },
+        draftId: renderFailureDraft.id, baseRevision: renderFailureDraft.revision,
+        confirmedRequirements: [], recentTurns: [], rollingSummary: '', recentToolCallIds: [],
+      } as never,
+      authorization: { granted: true, evidence: 'test' },
+    })
+    assert.equal(failedRender.ok, false)
+    assert.equal(failedRender.gate, 'render_failed')
+    assert.equal(failedRender.output?.phase, 'remotion_render')
+    assert.deepEqual(
+      failedRender.output?.componentIds,
+      [],
+      'browser failures must not implicate referenced custom components without direct error evidence',
+    )
+  } finally {
+    if (previousBrowserExecutable === undefined) delete process.env.REMOTION_BROWSER_EXECUTABLE
+    else process.env.REMOTION_BROWSER_EXECUTABLE = previousBrowserExecutable
+  }
   const revision1 = await drafts.getRevision(created.id, 1, 7)
   assert.ok(revision1, 'revision 1 must exist')
   assert.deepEqual(revision1.spec, base)

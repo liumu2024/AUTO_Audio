@@ -54,8 +54,9 @@ interface ExpectedTurn {
   effectiveAspectRatio?: string
   effectiveDurationSec?: number
   subtitleOnly?: boolean
-  revisionScope?: 'subtitle' | 'scene' | 'visual_strategy' | 'global'
+  revisionScope?: 'subtitle' | 'scene' | 'visual_strategy' | 'transition' | 'global'
   revisionSceneId?: string
+  revisionTargetCount?: number
   toolSuccess?: boolean
   dryRender?: boolean
   timeline?: {
@@ -371,7 +372,7 @@ function fixtureSpec(taskId: string): RemotionTimelineSpecV1 {
     ],
     material_jobs: [],
     audio: [],
-    render_policy: { renderer: 'remotion_timeline', allow_custom_component: false },
+    render_policy: { renderer: 'remotion_timeline' },
     notes: ['智能门锁广告；不得展示具体住址；不使用恐吓式文案。'],
   }
 }
@@ -489,7 +490,7 @@ function fixtureScifiSpec(taskId: string): RemotionTimelineSpecV1 {
     ],
     material_jobs: [],
     audio: [],
-    render_policy: { renderer: 'remotion_timeline', allow_custom_component: false },
+    render_policy: { renderer: 'remotion_timeline' },
     notes: ['科幻评测草稿；画面保持蓝灰硬边光。'],
   }
 }
@@ -516,6 +517,11 @@ function timelineFacts(spec: RemotionTimelineSpecV1, revision: number) {
         animation: overlay.animation,
       })),
     transitions: spec.transitions.map((transition) => ({
+      id: transition.id,
+      fromSceneId: transition.from_scene_id,
+      toSceneId: transition.to_scene_id,
+      fromSceneIndex: spec.scenes.findIndex((scene) => scene.id === transition.from_scene_id) + 1,
+      toSceneIndex: spec.scenes.findIndex((scene) => scene.id === transition.to_scene_id) + 1,
       type: transition.type,
       durationSec: transition.duration_sec,
     })),
@@ -1574,6 +1580,9 @@ export async function runV2AgentEvaluation(input: {
               request.arguments?.scope === testTurn.expected.revisionScope
               && (testTurn.expected.revisionSceneId === undefined
                 || request.arguments?.sceneId === testTurn.expected.revisionSceneId)
+              && (testTurn.expected.revisionTargetCount === undefined
+                || (Array.isArray(request.arguments?.transitionIds)
+                  && request.arguments.transitionIds.length === testTurn.expected.revisionTargetCount))
             ))
         const systemKeys = new Set(['sampleId', 'materialIds', 'draftId', 'revision', 'targetIds', 'projectId', 'userId'])
         const systemResourceOverride = modelToolRequests.some((request) => (

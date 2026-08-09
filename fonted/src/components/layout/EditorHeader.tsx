@@ -1,4 +1,4 @@
-import { Clapperboard, Save } from 'lucide-react'
+import { Clapperboard, FilePlus2, Save } from 'lucide-react'
 import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -8,7 +8,10 @@ import {
   saveV2DirectorTimelineDraft,
   v2MaterialsFromAttachments,
 } from '@/services/director/v2DirectorTimeline'
+import { startNewV2DraftWorkspace } from '@/services/director/v2DirectorDraftWorkspace'
+import { rememberActiveDirectorWorkspaceSessionId } from '@/services/director/workspaceSessionLifecycle'
 import { useCreationStore } from '@/stores/creationStore'
+import { useDirectorChatStore } from '@/stores/directorChatStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { useTaskStore } from '@/stores/taskStore'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
@@ -21,8 +24,20 @@ export function EditorHeader() {
   const backendReady = useTaskStore((s) => s.backendReady)
   const isTaskRunning = useTaskStore((s) => s.isTaskRunning)
   const copilotLoading = useTaskStore((s) => s.copilotLoading)
+  const isDirectorSending = useDirectorChatStore((s) => s.isSending)
+  const isAnalyzing = useCreationStore((s) => s.isAnalyzing)
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
+
+  const handleNewDraft = () => {
+    if (saving || exporting || isTaskRunning || copilotLoading || isDirectorSending || isAnalyzing) return
+    if (v2HasLocalEdits && !window.confirm('当前草稿有未保存修改，仍要新建草稿吗？')) return
+    rememberActiveDirectorWorkspaceSessionId(
+      window.sessionStorage,
+      `v2_director_${crypto.randomUUID()}`,
+    )
+    startNewV2DraftWorkspace()
+  }
 
   const saveCurrentWork = async (): Promise<boolean> => {
     const taskStore = useTaskStore.getState()
@@ -91,6 +106,8 @@ export function EditorHeader() {
     saving || exporting || !v2Spec
   const exportDisabled =
     saving || exporting || isTaskRunning || copilotLoading || !activeTaskId || !v2Spec
+  const newDraftDisabled =
+    saving || exporting || isTaskRunning || copilotLoading || isDirectorSending || isAnalyzing
 
   return (
     <header className="relative flex h-14 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-950 px-4">
@@ -110,6 +127,17 @@ export function EditorHeader() {
       </div>
 
       <div className="flex items-center gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          type="button"
+          disabled={newDraftDisabled}
+          onClick={handleNewDraft}
+          title="保留历史草稿并开始新的创作"
+        >
+          <FilePlus2 className="h-3.5 w-3.5" />
+          新建草稿
+        </Button>
         <Button
           variant="secondary"
           size="sm"

@@ -16,7 +16,7 @@ try {
   const { streamDirectorAgentChat } = await import('../src/modules/director-agent/director-agent.service.js')
   const {
     listRenderComponents,
-    markRenderSucceeded,
+    promoteRenderComponent,
     registerRenderComponent,
   } = await import('../src/modules/render-components/component-registry.js')
   const { listCreativeMemories } = await import('../src/modules/creative-memory/creative-memory.service.js')
@@ -38,9 +38,19 @@ export default function BlurDissolve({ children, progress, direction }) {
     id: 'cmp_blur_dissolve',
     source: blurSource,
     purpose: 'transition',
-    description: '模糊溶解过渡：前一镜头模糊消失、后一镜头清晰显现',
+    displayName: '模糊溶解',
+    effectSummary: '模糊溶解过渡：前一镜头模糊消失、后一镜头清晰显现',
+    effectBrief: '模糊溶解过渡',
+    acceptanceCriteria: ['前一镜头模糊消失', '后一镜头清晰显现'],
   })
-  await markRenderSucceeded('cmp_blur_dissolve')
+  await promoteRenderComponent({
+    id: 'cmp_blur_dissolve',
+    previewEvidence: {
+      verdict: 'passed', frameCount: 5, summary: 'pre-seeded verified fixture',
+      criteria: [{ criterion: '前一镜头模糊消失', passed: true, evidence: 'fixture' }],
+      reviewedAt: new Date().toISOString(),
+    },
+  })
 
   const baseContext = {
     materials: [],
@@ -167,7 +177,7 @@ export default function BlurDissolve({ children, progress, direction }) {
       id: item.id,
       status: item.status,
       purpose: item.purpose,
-      description: item.description,
+      effectSummary: item.effectSummary,
     })),
   }
 

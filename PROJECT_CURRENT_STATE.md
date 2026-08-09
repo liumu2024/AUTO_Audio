@@ -237,7 +237,7 @@ V2 run 链路：
 - `overlays`：字幕、标题、标签、图片角标、光效等覆盖层。
 - `material_jobs`：素材复用、视频生成、请求用户素材等任务。
 - `audio`：音频轨道。
-- `render_policy`：当前固定为 `remotion_timeline`，且 `allow_custom_component` 为 `false`。
+- `render_policy`：当前渲染器固定为 `remotion_timeline`。
 - `notes`：Planner 说明。
 
 当前 scene 类型：
@@ -392,9 +392,9 @@ Remotion 当前不负责：
 - 生成复杂人物、真实场景或电影级镜头。
 - 自由解释抽象视觉描述。
 
-V2 当前选择的是“固定渲染器 + 严格 JSON”模式，而不是每次让模型自由写 Remotion 组件。`render_policy.allow_custom_component` 目前固定为 `false`。这有利于稳定性、可编辑性和安全性，但也限制了视觉复杂度。
+V2 使用“固定渲染器 + 严格 JSON”模式。缺少合适预设或已注册组件时，`render.author` 可按需生成组件，但必须经过源码审计、编译、试渲染、视觉验收和服务端注册，Director 与 Planner 不能直接写入 React 源码或伪造组件 ID。
 
-`official-skills/` 中已经放入 Remotion 官方 skills。后续如果重新开放“模型写 Remotion 代码”，应当作为独立沙箱能力，而不是直接进入主渲染链路。
+`official-skills/` 中已经放入 Remotion 官方 skills。编码 Agent 只在 `render.author` 内使用受控知识和沙箱，不直接进入普通时间线规划链路。
 
 ## 11. Trace 和可观测性
 
@@ -548,9 +548,9 @@ V2 trace 默认写入（2026-08-04 起统一根目录与分层，旧目录与运
 
 ### 15.3 素材理解不足
 
-- 当前图片素材主要作为资产进入 timeline，缺少真实的多模态图片内容分析。
+- Director 和 Planner 已通过同一 Ark 图片输入适配读取图片像素；目前仍缺少可复用的持久化图片分析结果和真实业务集上的理解质量验证。
 - 同类图片、重复图片、相似图片的聚类和使用策略仍不成熟。
-- 仅靠文件名、标签和简单 heuristic 难以支撑高质量镜头规划。
+- 图片内容虽然已进入模型上下文，但高质量镜头规划仍需通过真实素材场景验证。
 
 ### 15.4 方案展示不足
 
@@ -1154,8 +1154,7 @@ Content-Type: application/json
     "overlays": [],
     "material_jobs": [],
     "render_policy": {
-      "renderer": "remotion_timeline",
-      "allow_custom_component": false
+      "renderer": "remotion_timeline"
     }
   }
 }
@@ -1224,7 +1223,6 @@ Content-Type: application/json
   ],
   "render_policy": {
     "renderer": "remotion_timeline",
-    "allow_custom_component": false,
     "fallback_renderer": "overlay_compose"
   }
 }
@@ -1239,14 +1237,14 @@ Content-Type: application/json
   "type": "generate_video",
   "status": "planned",
   "prompt": "黄昏城市街头，孤独、安静、电影感，缓慢推镜 --duration 5",
-  "input_image_url": "https://example.com/reference.png",
+  "input_asset_id": "reference_image_asset",
   "output_asset_id": "generated_scene_001",
   "provider": "ark_seedance",
   "fallback_kind": "blank_card"
 }
 ```
 
-纯文生视频时，`input_image_url` 可以为空，但是否成功取决于 provider 能力：
+纯文生视频时不填写 `input_asset_id`，但是否成功取决于 provider 能力：
 
 ```json
 {
@@ -1284,7 +1282,7 @@ Content-Type: application/json
 | 纯文生视频 | 代码层允许 text-only submit | Seedance 实际能力未完全验证 | 用真实 API 跑 `text_to_video`。 |
 | 图生视频 | 已有 Ark Seedance adapter | 本地图片必须公网可访问 | 完善 asset publisher 和失败提示。 |
 | 素材去重 | 上传 hash 去重已存在 | 相似图片未聚类，重复命名仍可能干扰用户理解 | 增加素材库可视化和相似度分析。 |
-| 素材理解 | 仍偏弱 | Planner 可能只按文件名或顺序使用素材 | 接入多模态图片/视频分析。 |
+| 素材理解 | Director/Planner 已读取图片像素 | 真实素材上的理解与使用质量尚未系统验证 | 用冻结图片集评估内容理解、素材选择和生成依据。 |
 | 样例理解 | V2 有独立 sample understanding | 输出质量取决于理解模型 | 增加关键帧/镜头级 trace 和评价。 |
 | Planner | 有 LLM 和确定性兜底 | 用户可读方案仍不够清楚 | 拆成“用户方案草稿”和“严格 spec”两层。 |
 | 硬约束 | 已支持字幕抽取和检查 | 其他硬要求结构化不足 | 扩展时长、画幅、素材覆盖、禁用项等要求。 |

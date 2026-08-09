@@ -1,5 +1,6 @@
 import type { V2SampleUnderstandingResult } from '../../../shared/types/v2-sample-understanding.js'
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
+import type { RenderComponentSummary } from '../modules/render-components/component-registry.js'
 import type { V2TimelineRevisionContext } from './timeline-revision-context.js'
 import type { V2TimelineRevisionScope } from './timeline-revision-scope.js'
 
@@ -62,13 +63,13 @@ export interface V2PlannerInput {
   revisionScope?: V2TimelineRevisionScope
   /** Tool-authorized target scene for the scene revision scope. */
   revisionSceneId?: string
+  /** Tool-authorized target transitions for the transition revision scope. */
+  revisionTransitionIds?: string[]
   /** Server-resolved instructions and normalized arguments for this Agent stage. */
   agentSkillContext?: V2AgentSkillContext
   agentToolContext?: V2AgentToolContext
-  /** System-confirmed effect->component mappings for this request. */
-  componentHints?: Array<{ component_id: string; purpose?: 'scene' | 'transition'; matched_text: string }>
-  /** All promoted (sedimented) render components available for reference. */
-  availableComponents?: Array<{ id: string; purpose?: 'scene' | 'transition'; description: string }>
+  /** Server-confirmed render components available for reference. */
+  availableComponents?: RenderComponentSummary[]
   materials?: V2PlannerMaterialInput[]
   durationSec?: number
   plannerMode?: 'deterministic' | 'llm'

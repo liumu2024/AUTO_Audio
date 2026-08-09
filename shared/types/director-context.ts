@@ -15,6 +15,7 @@ export type DirectorAspectRatio = '9:16' | '16:9' | '1:1' | '4:3'
 
 /** 对话层识别的用户意图（比 goal 更细，含澄清/未知） */
 export type DirectorConversationIntent =
+  | 'chat'
   | 'analyze_sample'
   | 'analyze_materials'
   | 'revise_timeline'
@@ -220,7 +221,15 @@ export interface DirectorTimelineFacts {
     maxLines?: number
     animation?: string
   }>
-  transitions: Array<{ type: string; durationSec: number }>
+  transitions: Array<{
+    id: string
+    fromSceneId: string
+    toSceneId: string
+    fromSceneIndex: number
+    toSceneIndex: number
+    type: string
+    durationSec: number
+  }>
   audioClipCount: number
   notes: string[]
 }

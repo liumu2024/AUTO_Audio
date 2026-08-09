@@ -52,21 +52,18 @@ assert.match(activeRequirementPrompt, /activeRequirements is authoritative/)
 assert.match(activeRequirementPrompt, /品牌表达可靠但不冰冷/)
 assert.match(activeRequirementPrompt, /current request and activeRequirements take priority/)
 
-const hintedPrompt = buildV2TimelinePlannerPrompt({
+const availableComponentPrompt = buildV2TimelinePlannerPrompt({
   taskId: 'component_hint_context',
   prompt: '第二三镜头间使用模糊溶解过渡',
-  componentHints: [{ component_id: 'cmp_blur_dissolve', purpose: 'transition', matched_text: '模糊溶解过渡' }],
-  availableComponents: [{ id: 'cmp_blur_dissolve', purpose: 'transition', description: '模糊溶解过渡：前一镜头模糊消失' }],
+  availableComponents: [{ id: 'cmp_blur_dissolve', purpose: 'transition', displayName: '模糊溶解', effectSummary: '模糊溶解过渡：前一镜头模糊消失' }],
 })
-assert.match(hintedPrompt, /componentHints/)
-assert.match(hintedPrompt, /cmp_blur_dissolve/)
-assert.match(hintedPrompt, /Available sedimented render components/)
-assert.match(hintedPrompt, /custom_render/)
+assert.match(availableComponentPrompt, /cmp_blur_dissolve/)
+assert.match(availableComponentPrompt, /Available server-confirmed render components/)
+assert.match(availableComponentPrompt, /custom_render/)
 
 const validation = validateRemotionTimelineSpec(spec)
 assert.equal(validation.ok, true, JSON.stringify(validation.issues, null, 2))
 assert.equal(spec.scenes.length, 3)
-assert.equal(spec.render_policy.allow_custom_component, false)
 
 const malformedAudioSpec = { ...spec, audio: {} } as unknown as typeof spec
 const malformedAudioValidation = validateRemotionTimelineSpec(malformedAudioSpec)

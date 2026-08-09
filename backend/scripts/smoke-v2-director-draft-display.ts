@@ -6,13 +6,17 @@ import {
   buildV2PlanSceneCards,
   resolveV2PlanSceneIdFromClip,
   resolveV2CanvasSurface,
+  startNewV2DraftWorkspace,
 } from '../../fonted/src/services/director/v2DirectorDraftWorkspace.js'
+import { useDirectorChatStore } from '../../fonted/src/stores/directorChatStore.js'
+import { useDirectorContextStore } from '../../fonted/src/stores/directorContextStore.js'
 import { useEditorStore } from '../../fonted/src/stores/editorStore.js'
 import { usePlaybackStore } from '../../fonted/src/stores/playbackStore.js'
 import { useTaskStore } from '../../fonted/src/stores/taskStore.js'
 import { useV2TimelineStore } from '../../fonted/src/stores/v2TimelineStore.js'
 import type { RemotionTimelineSpecV1 } from '../../shared/types/remotion-timeline-spec.v1.js'
 import { useCreationStore } from '../../fonted/src/stores/creationStore.js'
+import { v2TransitionDisplayText } from '../../fonted/src/lib/v2-timeline-ui.js'
 
 const spec: RemotionTimelineSpecV1 = {
   schema_version: 'remotion_timeline_spec.v1',
@@ -98,7 +102,6 @@ const spec: RemotionTimelineSpecV1 = {
   material_jobs: [],
   render_policy: {
     renderer: 'remotion_timeline',
-    allow_custom_component: false,
   },
 }
 
@@ -143,10 +146,73 @@ assert.equal(presentation.scenes[0]?.visibleTexts[0]?.maxLinesSource, 'track_def
 assert.equal(presentation.scenes[0]?.visibleTexts[0]?.enterAnimation, 'fade')
 assert.equal(presentation.scenes[0]?.visibleTexts[1]?.enterAnimation, 'slide_up_fade')
 assert.equal(presentation.scenes[0]?.transitionAfter?.type, 'fade')
+assert.equal(v2TransitionDisplayText({
+  id: 'transition_slide',
+  from_scene_id: 'scene_1',
+  to_scene_id: 'scene_2',
+  type: 'slide',
+  duration_sec: 0.3,
+  direction: 'from-left',
+}), '滑动 · 0.3秒 · 从左侧')
+const customPresentation = buildV2PlanPresentation({
+  ...spec,
+  transitions: spec.transitions.map((transition) => ({
+    ...transition,
+    direction: 'from-left',
+    custom_render: { component_id: 'cmp_custom_transition', display_name: '圆形渐变' },
+  })),
+})
+assert.equal(
+  customPresentation.scenes[0]?.transitionAfter?.custom_render?.component_id,
+  'cmp_custom_transition',
+)
+assert.equal(
+  v2TransitionDisplayText(customPresentation.scenes[0]!.transitionAfter!),
+  '圆形渐变 · 0.3秒',
+)
 assert.equal(presentation.scenes[1]?.visibleTexts.length, 1)
 assert.equal(presentation.scenes[1]?.visibleTexts[0]?.maxLines, undefined)
 assert.equal(presentation.scenes[1]?.visibleTexts[0]?.maxLinesSource, undefined)
 assert.equal(resolveV2PlanSceneIdFromClip(spec, 'v2-overlay-caption_1'), 'scene_1')
 assert.equal(resolveV2PlanSceneIdFromClip(spec, 'v2-transition-transition_1'), 'scene_1')
+
+useCreationStore.setState({
+  sampleUrl: 'http://localhost:3001/uploads/sample.mp4',
+  sampleName: 'sample.mp4',
+  inputText: 'continue the old draft',
+  attachments: [{
+    id: 'att_old', name: 'old.png', type: 'image',
+    url: 'http://localhost:3001/uploads/old.png', source: 'upload',
+  }],
+  pendingAttachmentIds: ['att_old'],
+  showSampleInInputTray: true,
+  isSampleParsed: true,
+})
+useDirectorContextStore.getState().setMaterials([{
+  id: 'old', name: 'old.png', type: 'image', url: 'http://localhost:3001/uploads/old.png',
+}])
+useDirectorChatStore.getState().addUserMessage({ content: 'old conversation' })
+useTaskStore.getState().startTask('old task', 'old_task')
+usePlaybackStore.getState().setPlaying(true)
+usePlaybackStore.getState().seek(4)
+
+startNewV2DraftWorkspace()
+
+assert.equal(useV2TimelineStore.getState().draftId, null)
+assert.equal(useV2TimelineStore.getState().spec, null)
+assert.equal(useCreationStore.getState().sampleUrl, '')
+assert.equal(useCreationStore.getState().attachments.length, 0)
+assert.equal(useCreationStore.getState().inputText, '')
+assert.equal(useDirectorContextStore.getState().context.materials.length, 0)
+assert.equal(useDirectorChatStore.getState().messages.length, 1)
+assert.equal(useTaskStore.getState().activeTaskId, null)
+assert.equal(useTaskStore.getState().isTaskRunning, false)
+assert.equal(useTaskStore.getState().lastPrompt, null)
+assert.equal(useEditorStore.getState().timelineMode, 'sample')
+assert.equal(useEditorStore.getState().generationEditEnabled, false)
+assert.equal(useEditorStore.getState().sidebarTab, 'config')
+assert.equal(useEditorStore.getState().sidebarSubView, 'main')
+assert.equal(usePlaybackStore.getState().isPlaying, false)
+assert.equal(usePlaybackStore.getState().currentTime, 0)
 
 console.log('V2 Director draft display smoke passed.')

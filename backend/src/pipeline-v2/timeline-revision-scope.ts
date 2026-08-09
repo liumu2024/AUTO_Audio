@@ -3,7 +3,7 @@ import type {
   RemotionTimelineSpecV1,
 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 
-export type V2TimelineRevisionScope = 'subtitle' | 'scene' | 'visual_strategy' | 'global'
+export type V2TimelineRevisionScope = 'subtitle' | 'scene' | 'visual_strategy' | 'transition' | 'global'
 
 /** Scene fields the visual_strategy scope may override. */
 export const VISUAL_STRATEGY_SCENE_FIELDS = ['type', 'fit', 'motion', 'background', 'asset_id'] as const
@@ -79,8 +79,36 @@ export function applyV2TimelineRevisionScope(input: {
   candidateSpec: RemotionTimelineSpecV1
   scope: V2TimelineRevisionScope
   sceneId?: string
+  transitionIds?: string[]
 }): RemotionTimelineSpecV1 {
   if (input.scope === 'subtitle') {
+    if (input.sceneId) {
+      const targetTrackIds = new Set([
+        ...input.baseSpec.overlays,
+        ...input.candidateSpec.overlays,
+      ].filter((overlay) =>
+        overlay.type === 'caption' && overlay.scene_id === input.sceneId && overlay.track_id)
+        .map((overlay) => overlay.track_id as string))
+      const protectedTrackIds = new Set(input.baseSpec.overlays
+        .filter((overlay) =>
+          overlay.type === 'caption' && overlay.scene_id !== input.sceneId && overlay.track_id)
+        .map((overlay) => overlay.track_id as string))
+      return {
+        ...input.baseSpec,
+        caption_tracks: mergeScopedArray({
+          base: input.baseSpec.caption_tracks ?? [],
+          candidate: input.candidateSpec.caption_tracks ?? [],
+          isInScope: (track) => targetTrackIds.has(track.id) && !protectedTrackIds.has(track.id),
+          key: (track) => track.id,
+        }),
+        overlays: mergeScopedArray({
+          base: input.baseSpec.overlays,
+          candidate: input.candidateSpec.overlays,
+          isInScope: (overlay) => overlay.type === 'caption' && overlay.scene_id === input.sceneId,
+          key: (overlay) => overlay.id,
+        }),
+      }
+    }
     return {
       ...input.baseSpec,
       caption_tracks: input.candidateSpec.caption_tracks ?? input.baseSpec.caption_tracks,
@@ -144,6 +172,25 @@ export function applyV2TimelineRevisionScope(input: {
         candidate: input.candidateSpec.material_jobs,
         isInScope: (job) => job.scene_id === sceneId,
         key: (job) => job.id,
+      }),
+    }
+  }
+  if (input.scope === 'transition') {
+    const transitionIds = new Set(input.transitionIds)
+    if (transitionIds.size === 0) throw new Error('Transition revision scope requires transitionIds.')
+    const candidateById = new Map(input.candidateSpec.transitions.map((transition) => [transition.id, transition]))
+    return {
+      ...input.baseSpec,
+      transitions: input.baseSpec.transitions.map((transition) => {
+        const candidate = transitionIds.has(transition.id) ? candidateById.get(transition.id) : undefined
+        return candidate
+          ? {
+              ...candidate,
+              id: transition.id,
+              from_scene_id: transition.from_scene_id,
+              to_scene_id: transition.to_scene_id,
+            }
+          : transition
       }),
     }
   }

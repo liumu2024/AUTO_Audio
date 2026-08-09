@@ -10,6 +10,34 @@ assert.equal(editorHeader.includes('useRenderPlanStore'), false)
 assert.equal(editorHeader.includes('patchTaskRenderPlan'), false)
 assert.equal(editorHeader.includes('patchTaskStructure'), false)
 assert.match(editorHeader, /saveV2DirectorTimelineDraft/)
+assert.match(editorHeader, /useDirectorChatStore\(\(s\) => s\.isSending\)/)
+assert.match(editorHeader, /newDraftDisabled[\s\S]*isDirectorSending[\s\S]*isAnalyzing/)
+
+const directorChatPanel = source('fonted/src/components/sidebar/DirectorChatPanel.tsx')
+assert.match(
+  directorChatPanel,
+  /const requestWorkspaceSessionId = browserWorkspaceSessionId\(\)[\s\S]*workspaceSessionId: requestWorkspaceSessionId/,
+)
+assert.match(
+  directorChatPanel,
+  /browserWorkspaceSessionId\(\) !== requestWorkspaceSessionId[\s\S]*return/,
+)
+assert.match(
+  directorChatPanel,
+  /if \(browserWorkspaceSessionId\(\) !== workspaceSessionId\) return/,
+)
+
+const chatInput = source('fonted/src/components/sidebar/ChatInput.tsx')
+assert.match(chatInput, /const draft = useCreationStore\(\(s\) => s\.inputText\)/)
+assert.match(chatInput, /const setDraft = useCreationStore\(\(s\) => s\.setInputText\)/)
+assert.match(
+  chatInput,
+  /const uploadWorkspaceSessionId = browserWorkspaceSessionId\(\)[\s\S]*await addFromFileWithHash\(file\)[\s\S]*browserWorkspaceSessionId\(\) !== uploadWorkspaceSessionId[\s\S]*continue/,
+)
+assert.match(
+  directorChatPanel,
+  /const uploadWorkspaceSessionId = browserWorkspaceSessionId\(\)[\s\S]*await useMaterialLibraryStore\.getState\(\)\.addFromFileWithHash\(file\)[\s\S]*browserWorkspaceSessionId\(\) !== uploadWorkspaceSessionId[\s\S]*continue/,
+)
 
 const timelinePanel = source('fonted/src/components/layout/TimelinePanel.tsx')
 assert.equal(timelinePanel.includes('useRenderPlanStore'), false)

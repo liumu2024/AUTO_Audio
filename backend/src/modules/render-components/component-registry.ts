@@ -1,28 +1,45 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { build } from 'esbuild'
 
+import type { RemotionTimelineSpecV1 } from '../../../../shared/types/remotion-timeline-spec.v1.js'
 import { auditRenderComponentSource, componentIdValid } from './component-sandbox.js'
-import { longestSharedHanPhrase } from '../creative-memory/creative-memory.service.js'
 
 export interface RenderComponentManifest {
   schema_version: 'render_component.v1'
   id: string
   status: 'draft' | 'promoted' | 'disabled'
-  description: string
+  displayName: string
+  effectSummary: string
+  effectBrief: string
+  acceptanceCriteria: string[]
+  sourceHash: string
   hash: string
   source_path: string
   bundle_path: string
   createdAt: string
-  purpose?: 'scene' | 'transition'
+  purpose: 'scene' | 'transition'
   renderedTimes: number
   failedRenders: number
   sourceWorkspaceSessionId?: string
-  sourcePrompt?: string
+  previewEvidence?: {
+    verdict: 'passed'
+    frameCount: number
+    summary: string
+    criteria: Array<{ criterion: string; passed: boolean; evidence: string }>
+    reviewedAt: string
+  }
   promotedAt?: string
   version: number
+}
+
+export interface RenderComponentSummary {
+  id: string
+  purpose: 'scene' | 'transition'
+  displayName: string
+  effectSummary: string
 }
 
 export interface RegisteredRenderComponent {
@@ -35,23 +52,31 @@ export interface RegisteredRenderComponent {
 const EXTERNAL_PACKAGES = ['react', 'remotion', '@remotion/transitions', '@remotion/media']
 
 export function renderComponentsRoot(cwd = process.cwd()): string {
-  return path.resolve(cwd, process.env.RENDER_COMPONENTS_DIR ?? 'tmp/render-components')
+  const configured = process.env.RENDER_COMPONENTS_DIR?.trim()
+  if (configured) return path.resolve(cwd, configured)
+  const localDataDir = process.env.DPL304_LOCAL_DATA_DIR?.trim()
+  return path.resolve(cwd, localDataDir ? path.join(localDataDir, 'render-components') : 'data/render-components')
 }
 
 export async function registerRenderComponent(input: {
   id: string
   source: string
-  description?: string
-  purpose?: 'scene' | 'transition'
+  displayName: string
+  effectSummary: string
+  effectBrief: string
+  acceptanceCriteria: string[]
+  purpose: 'scene' | 'transition'
   sourceWorkspaceSessionId?: string
-  sourcePrompt?: string
 }): Promise<RegisteredRenderComponent> {
   if (!componentIdValid(input.id)) throw new Error(`Invalid component id: ${input.id}`)
+  const displayName = input.displayName.trim()
+  if (!displayName) throw new Error('Component display name is required.')
   const audit = auditRenderComponentSource(input.source)
   if (!audit.ok) throw new Error(`Component audit failed: ${audit.issues.join('; ')}`)
 
+  const sourceHash = createHash('sha256').update(input.source).digest('hex')
+
   const dir = path.join(renderComponentsRoot(), input.id)
-  await mkdir(dir, { recursive: true })
   const result = await build({
     stdin: {
       contents: input.source,
@@ -73,14 +98,16 @@ export async function registerRenderComponent(input: {
 
   const sourcePath = path.join(dir, 'source.tsx')
   const bundlePath = path.join(dir, 'bundle.js')
-  await writeFile(sourcePath, input.source, 'utf8')
-  await writeFile(bundlePath, bundle, 'utf8')
   const manifest: RenderComponentManifest = {
     schema_version: 'render_component.v1',
     id: input.id,
     status: 'draft',
-    description: input.description?.trim().slice(0, 500) ?? '',
+    displayName: displayName.slice(0, 80),
+    effectSummary: input.effectSummary.trim().slice(0, 500),
+    effectBrief: input.effectBrief.trim().slice(0, 2_000),
+    acceptanceCriteria: input.acceptanceCriteria.map((item) => item.trim().slice(0, 500)),
     purpose: input.purpose,
+    sourceHash,
     hash: createHash('sha256').update(bundle).digest('hex').slice(0, 16),
     source_path: sourcePath,
     bundle_path: bundlePath,
@@ -88,10 +115,17 @@ export async function registerRenderComponent(input: {
     renderedTimes: 0,
     failedRenders: 0,
     sourceWorkspaceSessionId: input.sourceWorkspaceSessionId,
-    sourcePrompt: input.sourcePrompt?.trim().slice(0, 1000),
     version: 1,
   }
-  await writeFile(path.join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+  try {
+    await mkdir(dir, { recursive: true })
+    await writeFile(sourcePath, input.source, 'utf8')
+    await writeFile(bundlePath, bundle, 'utf8')
+    await writeFile(path.join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true })
+    throw error
+  }
   return { id: input.id, source: input.source, bundle, manifest }
 }
 
@@ -130,9 +164,8 @@ export async function listRenderComponents(): Promise<RenderComponentManifest[]>
 }
 
 /**
- * Behavior-driven sedimentation: a successful render is the verification.
- * The first successful render automatically promotes a draft component to a
- * reusable asset. No user or model confirmation is required.
+ * Records ordinary render success without changing lifecycle status. Only the
+ * authoring service may promote a draft after visual acceptance.
  */
 export async function markRenderSucceeded(id: string): Promise<RenderComponentManifest | null> {
   if (!componentIdValid(id)) return null
@@ -144,14 +177,74 @@ export async function markRenderSucceeded(id: string): Promise<RenderComponentMa
     const next: RenderComponentManifest = {
       ...manifest,
       renderedTimes,
-      status: manifest.status === 'draft' ? 'promoted' : manifest.status,
-      promotedAt: manifest.status === 'draft' ? (manifest.promotedAt ?? new Date().toISOString()) : manifest.promotedAt,
+      status: manifest.status,
+      promotedAt: manifest.promotedAt,
     }
     await writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
     return next
   } catch {
     return null
   }
+}
+
+export async function setRenderComponentDisplayName(
+  id: string,
+  displayName: string,
+): Promise<RenderComponentManifest | null> {
+  if (!componentIdValid(id)) return null
+  const name = displayName.trim()
+  if (!name) throw new Error('Component display name is required.')
+  const manifestPath = path.join(renderComponentsRoot(), id, 'manifest.json')
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as RenderComponentManifest
+    if (manifest.status === 'disabled') return null
+    const next = { ...manifest, displayName: name.slice(0, 80) }
+    await writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
+    return next
+  } catch {
+    return null
+  }
+}
+
+export async function promoteRenderComponent(input: {
+  id: string
+  previewEvidence: NonNullable<RenderComponentManifest['previewEvidence']>
+}): Promise<RenderComponentManifest | null> {
+  if (!componentIdValid(input.id)) return null
+  const manifestPath = path.join(renderComponentsRoot(), input.id, 'manifest.json')
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as RenderComponentManifest
+    if (manifest.status !== 'draft') return manifest.status === 'promoted' ? manifest : null
+    const next: RenderComponentManifest = {
+      ...manifest,
+      status: 'promoted',
+      renderedTimes: (manifest.renderedTimes ?? 0) + 1,
+      previewEvidence: input.previewEvidence,
+      promotedAt: new Date().toISOString(),
+    }
+    await writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
+    return next
+  } catch {
+    return null
+  }
+}
+
+export async function removeDraftRenderComponent(id: string): Promise<boolean> {
+  const component = await readRenderComponent(id)
+  if (!component || component.manifest.status !== 'draft') return false
+  await rm(path.join(renderComponentsRoot(), id), { recursive: true, force: true })
+  return true
+}
+
+export async function findPromotedRenderComponentBySource(input: {
+  source: string
+  purpose: 'scene' | 'transition'
+}): Promise<RegisteredRenderComponent | null> {
+  const sourceHash = createHash('sha256').update(input.source).digest('hex')
+  const manifest = (await listRenderComponents()).find(
+    (item) => item.status === 'promoted' && item.sourceHash === sourceHash && item.purpose === input.purpose,
+  )
+  return manifest ? readRenderComponent(manifest.id) : null
 }
 
 /** Negative feedback: a failed render demotes the component's rank. */
@@ -176,39 +269,92 @@ function componentBehaviorScore(manifest: RenderComponentManifest): number {
 }
 
 export async function listPromotedComponents(): Promise<
-  Array<{ id: string; purpose?: 'scene' | 'transition'; description: string }>
+  RenderComponentSummary[]
 > {
   const manifests = await listRenderComponents()
   return manifests
-    .filter((item) => item.status === 'promoted')
+    .filter((item) => item.status === 'promoted' && (item.purpose === 'scene' || item.purpose === 'transition'))
     .sort((a, b) => componentBehaviorScore(b) - componentBehaviorScore(a))
     .slice(0, 20)
-    .map((item) => ({ id: item.id, purpose: item.purpose, description: item.description }))
+    .map((item) => ({
+      id: item.id,
+      purpose: item.purpose,
+      displayName: item.displayName,
+      effectSummary: item.effectSummary,
+    }))
 }
 
-export interface PromotedComponentHint {
-  component_id: string
-  purpose?: 'scene' | 'transition'
-  matched_text: string
+export function bindRenderComponentDisplayNames(
+  spec: RemotionTimelineSpecV1,
+  components: readonly RenderComponentSummary[],
+): RemotionTimelineSpecV1 {
+  const byId = new Map(components.map((component) => [component.id, component]))
+  const bind = <T extends { component_id: string; display_name?: string }>(
+    reference: T | undefined,
+    purpose: RenderComponentSummary['purpose'],
+  ): T | undefined => {
+    if (!reference) return undefined
+    const component = byId.get(reference.component_id)
+    return component?.purpose === purpose
+      ? { ...reference, display_name: component.displayName }
+      : reference
+  }
+  return {
+    ...spec,
+    scenes: spec.scenes.map((scene) => scene.custom_render
+      ? { ...scene, custom_render: bind(scene.custom_render, 'scene') }
+      : scene),
+    transitions: spec.transitions.map((transition) => transition.custom_render
+      ? { ...transition, custom_render: bind(transition.custom_render, 'transition') }
+      : transition),
+  }
 }
 
-/**
- * System-side mapping: a request/instruction sharing a >=4 char Chinese phrase
- * with a promoted component description resolves to that component
- * deterministically, so small models do not have to infer the mapping.
- */
-export async function matchPromotedComponents(texts: string[]): Promise<PromotedComponentHint[]> {
-  const promoted = await listPromotedComponents()
-  const hints: PromotedComponentHint[] = []
-  for (const component of promoted) {
-    const matched = texts.find((text) =>
-      Boolean(longestSharedHanPhrase(text, component.description)) ||
-      Boolean(longestSharedHanPhrase(component.description, text)))
-    if (matched) {
-      hints.push({ component_id: component.id, purpose: component.purpose, matched_text: matched })
+export async function bindRegisteredRenderComponentDisplayNames(
+  spec: RemotionTimelineSpecV1,
+): Promise<RemotionTimelineSpecV1> {
+  const componentIds = [...new Set(timelineRenderComponentReferences(spec).map((reference) => reference.id))]
+  const components = (await Promise.all(componentIds.map((id) => readRenderComponent(id))))
+    .flatMap((component): RenderComponentSummary[] => component
+      ? [{
+          id: component.id,
+          purpose: component.manifest.purpose,
+          displayName: component.manifest.displayName,
+          effectSummary: component.manifest.effectSummary,
+        }]
+      : [])
+  return bindRenderComponentDisplayNames(spec, components)
+}
+
+export function timelineRenderComponentReferences(
+  spec: RemotionTimelineSpecV1,
+): Array<{ id: string; purpose: 'scene' | 'transition' }> {
+  return [
+    ...spec.scenes.flatMap((scene) => scene.custom_render?.component_id
+      ? [{ id: scene.custom_render.component_id, purpose: 'scene' as const }]
+      : []),
+    ...spec.transitions.flatMap((transition) => transition.custom_render?.component_id
+      ? [{ id: transition.custom_render.component_id, purpose: 'transition' as const }]
+      : []),
+  ]
+}
+
+export async function validateRenderComponentReferences(
+  references: Array<{ id: string; purpose: 'scene' | 'transition' }>,
+  allowedDraftIds: ReadonlySet<string> = new Set(),
+): Promise<string[]> {
+  const issues: string[] = []
+  for (const reference of references) {
+    const component = await readRenderComponent(reference.id)
+    if (!component) {
+      issues.push(`${reference.id}: component does not exist`)
+    } else if (component.manifest.purpose !== reference.purpose) {
+      issues.push(`${reference.id}: component purpose is ${String(component.manifest.purpose)}, expected ${reference.purpose}`)
+    } else if (component.manifest.status === 'draft' && !allowedDraftIds.has(reference.id)) {
+      issues.push(`${reference.id}: draft component is not authorized for this action`)
     }
   }
-  return hints
+  return issues
 }
 
 async function readdirSafe(dir: string): Promise<string[]> {

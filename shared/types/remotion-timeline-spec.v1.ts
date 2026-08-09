@@ -68,12 +68,16 @@ export interface RemotionTimelineScene {
   custom_render?: RemotionCustomRenderRef
 }
 
-export type RemotionTimelineTransitionType =
-  | 'cut'
-  | 'fade'
-  | 'slide'
-  | 'wipe'
-  | 'light_flash'
+export const REMOTION_TIMELINE_TRANSITION_TYPES = [
+  'cut',
+  'fade',
+  'slide',
+  'wipe',
+  'light_flash',
+  'blur',
+] as const
+
+export type RemotionTimelineTransitionType = typeof REMOTION_TIMELINE_TRANSITION_TYPES[number]
 
 export type RemotionTimelineTransitionDirection =
   | 'from-left'
@@ -95,13 +99,12 @@ export interface RemotionTimelineTransition {
 /** Reference to a sandboxed, model-authored render component. */
 export interface RemotionCustomRenderRef {
   component_id: string
+  /** Server-bound display label captured from the registered component. */
+  display_name?: string
   params?: Record<string, unknown>
 }
 
-export interface RemotionTransitionCustomRender {
-  component_id: string
-  params?: Record<string, unknown>
-}
+export type RemotionTransitionCustomRender = RemotionCustomRenderRef
 
 export type RemotionTimelineOverlayType =
   | 'caption'
@@ -164,6 +167,9 @@ export interface RemotionTimelineMaterialJob {
   type: 'reuse_asset' | 'generate_video' | 'request_user_material'
   status: 'planned' | 'fulfilled' | 'failed'
   prompt?: string
+  /** Server-resolved image asset used to condition a generation job. */
+  input_asset_id?: string
+  /** @deprecated Historical persisted jobs only. New planners must use input_asset_id. */
   input_image_url?: string
   output_asset_id?: string
   fallback_asset_id?: string
@@ -181,7 +187,6 @@ export interface RemotionTimelineAudioClip {
 
 export interface RemotionTimelineRenderPolicy {
   renderer: 'remotion_timeline'
-  allow_custom_component: false
   fallback_renderer?: 'overlay_compose'
 }
 

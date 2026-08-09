@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { DirectorConversationRuntime } from '../../../../shared/lib/director-understanding.js'
 import type { DirectorContext } from '../../../../shared/types/director-context.js'
 import type { DirectorWorkspaceState } from '../../../../shared/types/director-workspace-session.js'
+import { REMOTION_TIMELINE_TRANSITION_TYPES } from '../../../../shared/types/remotion-timeline-spec.v1.js'
 
 export type V2AgentToolStatus = 'available' | 'planned' | 'disabled'
 export type V2AgentToolMode = 'preview' | 'execute'
@@ -28,21 +29,25 @@ const materialInspectArgumentsSchema = emptyArgumentsSchema
 const timelinePlanArgumentsSchema = z.object({
   instruction: z.string().trim().min(1).max(4_000).optional(),
 }).strict()
-const timelinePatchArgumentsSchema = z.object({
-  scope: z.enum(['subtitle', 'scene', 'visual_strategy', 'global']),
-  sceneId: z.string().trim().min(1).max(200).optional(),
-  instruction: z.string().trim().min(1).max(4_000).optional(),
-}).strict().superRefine((value, context) => {
-  if (value.scope === 'global' && value.sceneId) {
-    context.addIssue({ code: 'custom', path: ['sceneId'], message: 'sceneId is only valid for subtitle, scene or visual_strategy scope.' })
-  }
-})
+const patchInstructionSchema = z.string().trim().min(1).max(4_000).optional()
+const timelinePatchArgumentsSchema = z.discriminatedUnion('scope', [
+  z.object({ scope: z.literal('subtitle'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema }).strict(),
+  z.object({ scope: z.literal('scene'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema }).strict(),
+  z.object({ scope: z.literal('visual_strategy'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema }).strict(),
+  z.object({
+    scope: z.literal('transition'),
+    transitionIds: z.array(z.string().trim().min(1).max(200)).min(1).max(20)
+      .refine((ids) => new Set(ids).size === ids.length, 'transitionIds must be unique.'),
+    instruction: patchInstructionSchema,
+  }).strict(),
+  z.object({ scope: z.literal('global'), instruction: patchInstructionSchema }).strict(),
+])
 const timelineRenderArgumentsSchema = emptyArgumentsSchema
 const renderAuthorArgumentsSchema = z.object({
-  componentId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/).optional(),
-  source: z.string().min(1).max(40_000),
-  description: z.string().max(500).optional(),
-  purpose: z.enum(['scene', 'transition']).optional(),
+  purpose: z.enum(['scene', 'transition']),
+  displayName: z.string().trim().min(1).max(80),
+  effectBrief: z.string().trim().min(1).max(2_000),
+  acceptanceCriteria: z.array(z.string().trim().min(1).max(500)).min(1).max(12),
 }).strict()
 
 function jsonSchema(schema: z.ZodType) {
@@ -136,13 +141,13 @@ export const V2_AGENT_TOOLS: readonly V2AgentToolDefinition[] = [
   { id: 'sample.analyze', name: '分析样例', summary: '读取用户明确选择的样例，提取可复用的结构、节奏和风格事实。', status: 'available', effect: 'read', cost: 'low', skills: ['sample-reference-analysis'], inputSchema: sampleAnalyzeInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '确认样例有效后重试，或继续无样例规划。' },
   { id: 'material.inspect', name: '检查素材', summary: '检查已上传的 V2 候选素材与可用角色。', status: 'available', effect: 'read', cost: 'none', skills: ['v2-timeline-authoring'], inputSchema: materialInspectInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '补充可用素材或继续文生视频。' },
   { id: 'timeline.plan', name: '创建方案', summary: '根据当前 V2 输入创建完整可编辑时间线草稿。', status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'sample-reference-analysis'], inputSchema: timelinePlanInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保留当前会话事实，修正要求后重新规划。' },
-  { id: 'timeline.patch', name: '局部修订', summary: '按 V2 范围修订已有草稿：字幕（subtitle）、单镜头与相邻转场（scene）、单镜头视觉策略（visual_strategy）、整案重写（global）。', status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'subtitle-track-authoring'], inputSchema: timelinePatchInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保持基础版本，缩小或澄清修订范围后重试。' },
+  { id: 'timeline.patch', name: '局部修订', summary: `按 V2 范围修订已有草稿：字幕（subtitle）、单镜头与相邻转场（scene）、单镜头视觉策略（visual_strategy）、一个或多个明确转场（transition）、整案重写（global）。内置转场为 ${REMOTION_TIMELINE_TRANSITION_TYPES.join('、')}；其他效果使用已注册或新创作的 transition custom_render。`, status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'subtitle-track-authoring'], inputSchema: timelinePatchInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保持基础版本，缩小或澄清修订范围后重试。' },
   { id: 'timeline.render', name: '正式渲染', summary: '按已保存 V2 版本执行素材解析与 Remotion 交付。', status: 'available', effect: 'delivery', cost: 'external', skills: ['v2-render-delivery'], inputSchema: timelineRenderInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '保留草稿与失败原因，修复后由用户重新确认。' },
   { id: 'audio.plan', name: '规划音频', summary: '未来独立音频轨规划接口。', status: 'planned', effect: 'draft', cost: 'low', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },
   { id: 'audio.generate_tts', name: '生成旁白', summary: '未来 TTS 旁白生成接口。', status: 'planned', effect: 'delivery', cost: 'external', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },
   { id: 'audio.align', name: '对齐旁白', summary: '未来字幕型旁白时序对齐接口。', status: 'planned', effect: 'draft', cost: 'low', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },
   { id: 'audio.mix', name: '混音', summary: '未来项目级音频混音接口。', status: 'planned', effect: 'delivery', cost: 'external', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },
-  { id: 'render.author', name: '注册渲染组件', summary: '由导演模型根据设计意图自行生成一段沙箱化的 React/Remotion 渲染组件源码并提交注册（不是要求用户提供源码）；审计通过后注册，可在 timeline 的 scene/transition custom_render 中引用。', status: 'available', effect: 'draft', cost: 'low', skills: ['v2-render-delivery'], inputSchema: renderAuthorInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '按审计提示修正源码（import 白名单、禁止 IO/eval/动态 import、必须默认导出函数组件）后重试。' },
+  { id: 'render.author', name: '创建渲染组件', summary: '当 preset 和已注册组件都无法满足效果时，提交用户使用的简短效果名、scene/transition 类型、效果说明和可逐项验证的验收条件；服务端编码 Agent 生成、审计、试渲染、视觉验收并生成组件 ID。', status: 'available', effect: 'draft', cost: 'low', skills: ['v2-render-delivery'], inputSchema: renderAuthorInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '缩小或澄清效果说明与验收条件后重试；组件源码由服务端编码 Agent 负责。' },
 ]
 
 export function findV2AgentTool(id: string) {

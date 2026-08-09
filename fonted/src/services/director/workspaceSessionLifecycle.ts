@@ -36,6 +36,14 @@ export function rememberActiveDirectorWorkspaceSessionId(
   storage.setItem(ACTIVE_DIRECTOR_WORKSPACE_SESSION_KEY, id)
 }
 
+export function browserWorkspaceSessionId(): string {
+  return resolveActiveDirectorWorkspaceSessionId({
+    sessionStorage: window.sessionStorage,
+    legacyStorage: window.localStorage,
+    createId: () => `v2_director_${crypto.randomUUID()}`,
+  })
+}
+
 export async function restoreWorkspaceDraft<TDraft>(input: {
   workspace: { draftId?: string }
   loadDraft: (draftId: string) => Promise<TDraft>

@@ -76,7 +76,7 @@
 
 ### 第二阶段：沙箱组件
 
-`component.sandbox_preview` 负责隔离编译、静态检查和预览；`component.promote` 只提升审核通过的版本。固定 V2 渲染器在这之前持续 `allow_custom_component=false`。
+自定义组件必须经过隔离编译、静态检查和预览，只有审核通过的版本才能进入注册表并被时间线引用。
 
 ### 验收
 
@@ -85,6 +85,21 @@
 ## 5. Provider 原生 Function Calling
 
 保留 JSON `toolRequests` 为唯一业务协议。原生 provider function calling 仅作为适配层：原生调用 → V2 ToolRequest → 同一 Registry、授权器、Dispatcher、trace。通过兼容性 smoke 前不启用。
+
+## 6. 草稿版本与成片历史对比（后续）
+
+状态：数据库已保存草稿 revision 和 RenderRun，但当前历史工作台只展示最近 revision 与最近 RenderRun，尚不能浏览、播放和比较完整历史。本项只记录为当前真实端到端测试后的后续工作；本次测试前不修改运行代码。
+
+### 最小实现
+
+1. 在现有历史工作台或中间方案区增加“版本记录”入口，按时间列出 revision、对应修改要求和 RenderRun。
+2. 支持打开任一历史方案及其成片；不得覆盖当前工作区，也不得把历史 RenderRun 的 resolved spec 回写成当前草稿。
+3. 允许选择两个 revision，展示镜头、字幕、转场和素材绑定的结构化差异，并可分别播放对应成片。
+4. 沿用现有 revision/RenderRun 数据，不新增第二套版本状态或重复持久化。
+
+### 验收
+
+修改前后两个版本及各自 RenderRun 均可追溯、播放和对比；重新打开草稿后历史仍存在；查看历史不会改变当前 revision、草稿内容或交付结果。
 
 ## 完成定义
 

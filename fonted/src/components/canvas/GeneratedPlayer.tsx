@@ -4,6 +4,7 @@ import { forwardRef, type ReactNode, useMemo } from 'react'
 import { VideoPreviewFrame } from '@/components/canvas/VideoPreviewFrame'
 import { env } from '@/config/env'
 import { cn } from '@/lib/utils'
+import { v2TransitionDisplayText } from '@/lib/v2-timeline-ui'
 import {
   buildV2PlanPresentation,
   resolveV2PlanSceneIdFromClip,
@@ -30,10 +31,12 @@ export const GeneratedPlayer = forwardRef<HTMLVideoElement, GeneratedPlayerProps
     const isPlaying = usePlaybackStore((state) => state.isPlaying)
     const spec = useV2TimelineStore((state) => state.spec)
     const preview = useV2TimelineStore((state) => state.preview)
-    const result = useV2TimelineStore((state) => state.result)
+    const renderedOutputUrl = useV2TimelineStore((state) => state.renderedOutputUrl)
     const selectedClipId = useV2TimelineStore((state) => state.selectedClipId)
     const selectClip = useV2TimelineStore((state) => state.selectClip)
-    const outputUrl = result?.outputUrl ? `${env.apiBase}${result.outputUrl.startsWith('/') ? '' : '/'}${result.outputUrl}` : undefined
+    const outputUrl = renderedOutputUrl
+      ? `${env.apiBase}${renderedOutputUrl.startsWith('/') ? '' : '/'}${renderedOutputUrl}`
+      : undefined
     const presentation = useMemo(
       () => spec ? buildV2PlanPresentation(spec, preview?.review.scenes) : undefined,
       [preview, spec],
@@ -169,7 +172,7 @@ function V2PlanReview({
         <PlanFactSection title="镜头衔接">
           <p className="text-xs text-zinc-300">
             {active.transitionAfter
-              ? `${transitionLabel(active.transitionAfter.type)} · ${active.transitionAfter.duration_sec}s${active.transitionAfter.direction ? ` · ${active.transitionAfter.direction}` : ''}`
+              ? v2TransitionDisplayText(active.transitionAfter)
               : '直接结束或硬切到下一镜头'}
           </p>
         </PlanFactSection>
@@ -314,14 +317,4 @@ function backgroundLabel(background: string | undefined) {
   if (alpha <= 0.02) return '背景：透明'
   if (alpha < 1) return `背景：半透明(${Math.round(alpha * 100)}%)`
   return '背景：实底'
-}
-
-function transitionLabel(type: NonNullable<V2PlanScenePresentation['transitionAfter']>['type']) {
-  return {
-    cut: '硬切',
-    fade: '淡化',
-    slide: '滑动',
-    wipe: '擦除',
-    light_flash: '闪光',
-  }[type]
 }

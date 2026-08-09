@@ -1,4 +1,4 @@
-import { REMOTION_TIMELINE_SPEC_SCHEMA_VERSION, } from '../types/remotion-timeline-spec.v1.js';
+import { REMOTION_TIMELINE_SPEC_SCHEMA_VERSION, REMOTION_TIMELINE_TRANSITION_TYPES, } from '../types/remotion-timeline-spec.v1.js';
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -15,6 +15,9 @@ function validateCustomRenderRef(issues, path, value, label) {
     const ref = value;
     if (typeof ref.component_id !== 'string' || !ref.component_id.trim()) {
         addIssue(issues, 'error', `${path}.component_id`, `${label} requires a component_id.`);
+    }
+    if (ref.display_name !== undefined && (typeof ref.display_name !== 'string' || !ref.display_name.trim())) {
+        addIssue(issues, 'error', `${path}.display_name`, `${label} display_name must be a non-empty string.`);
     }
 }
 function addIssue(issues, severity, path, message) {
@@ -188,7 +191,7 @@ export function validateRemotionTimelineSpec(value) {
         if (!sceneIds.has(transition.to_scene_id)) {
             addIssue(issues, 'error', `${path}.to_scene_id`, 'to_scene_id must reference an existing scene.');
         }
-        if (!['cut', 'fade', 'slide', 'wipe', 'light_flash'].includes(transition.type)) {
+        if (!REMOTION_TIMELINE_TRANSITION_TYPES.includes(transition.type)) {
             addIssue(issues, 'error', `${path}.type`, 'unsupported transition type.');
         }
         if (!finiteNumber(transition.duration_sec) || transition.duration_sec < 0) {
@@ -204,14 +207,7 @@ export function validateRemotionTimelineSpec(value) {
             if (!isRecord(transition.custom_render)) {
                 addIssue(issues, 'error', `${path}.custom_render`, 'transition custom_render must be an object.');
             }
-            else {
-                const custom = transition.custom_render;
-                const hasEnter = typeof custom.enter_component_id === 'string' && custom.enter_component_id.trim();
-                const hasExit = typeof custom.exit_component_id === 'string' && custom.exit_component_id.trim();
-                if (!hasEnter && !hasExit) {
-                    addIssue(issues, 'error', `${path}.custom_render`, 'transition custom_render requires at least one of enter_component_id or exit_component_id.');
-                }
-            }
+            validateCustomRenderRef(issues, `${path}.custom_render`, transition.custom_render, 'transition custom_render');
         }
     });
     const overlays = Array.isArray(spec.overlays) ? spec.overlays : [];
@@ -376,6 +372,26 @@ export function validateRemotionTimelineSpec(value) {
         if (job.type === 'generate_video' && !job.prompt?.trim()) {
             addIssue(issues, 'error', `${path}.prompt`, 'generate_video jobs require prompt.');
         }
+        if (job.input_asset_id) {
+            const inputAsset = assets.find((asset) => asset.id === job.input_asset_id);
+            if (job.type !== 'generate_video') {
+                addIssue(issues, 'error', `${path}.input_asset_id`, 'input_asset_id is only valid for generate_video jobs.');
+            }
+            else if (!inputAsset) {
+                addIssue(issues, 'error', `${path}.input_asset_id`, 'input_asset_id must reference an existing asset.');
+            }
+            else if (inputAsset.type !== 'image') {
+                addIssue(issues, 'error', `${path}.input_asset_id`, 'input_asset_id must reference an image asset.');
+            }
+            const sceneIndex = scenes.findIndex((scene) => scene.id === job.scene_id);
+            const explanation = sceneIndex >= 0 ? scenes[sceneIndex]?.creative_intent?.description : undefined;
+            if (sceneIndex >= 0 && !explanation?.trim()) {
+                addIssue(issues, 'error', `scenes[${sceneIndex}].creative_intent.description`, 'image-conditioned generation must explain how the source image is used.');
+            }
+        }
+        if (job.input_asset_id && job.input_image_url) {
+            addIssue(issues, 'error', path, 'use input_asset_id or legacy input_image_url, not both.');
+        }
         if (job.output_asset_id && !assetIds.has(job.output_asset_id)) {
             addIssue(issues, job.status === 'fulfilled' ? 'error' : 'warning', `${path}.output_asset_id`, 'output_asset_id should reference an asset after resolution.');
         }
@@ -383,8 +399,12 @@ export function validateRemotionTimelineSpec(value) {
     if (spec.render_policy?.renderer !== 'remotion_timeline') {
         addIssue(issues, 'error', 'render_policy.renderer', 'render_policy.renderer must be remotion_timeline.');
     }
-    if (spec.render_policy?.allow_custom_component !== false) {
-        addIssue(issues, 'error', 'render_policy.allow_custom_component', 'custom components are not enabled in the timeline-first core path.');
+    if (isRecord(spec.render_policy)) {
+        for (const field of Object.keys(spec.render_policy)) {
+            if (!['renderer', 'fallback_renderer'].includes(field)) {
+                addIssue(issues, 'error', `render_policy.${field}`, 'unsupported render policy field.');
+            }
+        }
     }
     return {
         ok: issues.every((issue) => issue.severity !== 'error'),

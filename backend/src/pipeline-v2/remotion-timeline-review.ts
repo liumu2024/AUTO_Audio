@@ -168,10 +168,14 @@ export function buildV2TimelinePlanningReview(input: {
       const transition = input.spec.transitions.find((item) => item.from_scene_id === scene.id)
       const generationJob = generateVideoJobBySceneId.get(scene.id)
       const asset = scene.asset_id ? assetById.get(scene.asset_id) : undefined
+      const generationInputAsset = generationJob?.input_asset_id
+        ? assetById.get(generationJob.input_asset_id)
+        : undefined
       if (asset && (asset.type === 'video' || asset.type === 'image')) {
         usedVisualAssetIds.add(asset.id)
         mainSceneVisualAssetIds.add(asset.id)
       }
+      if (generationInputAsset?.type === 'image') usedVisualAssetIds.add(generationInputAsset.id)
       const sceneOverlays = input.spec.overlays.filter((overlay) => overlay.scene_id === scene.id)
       for (const overlay of sceneOverlays) {
         const overlayAsset = overlay.asset_id ? assetById.get(overlay.asset_id) : undefined

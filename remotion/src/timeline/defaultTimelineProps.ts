@@ -79,7 +79,6 @@ export const fallbackTimelineProps: RemotionTimelineSpecV1 = {
   material_jobs: [],
   render_policy: {
     renderer: 'remotion_timeline',
-    allow_custom_component: false,
     fallback_renderer: 'overlay_compose',
   },
 }

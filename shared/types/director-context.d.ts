@@ -3,7 +3,7 @@ import type { V2SampleUnderstandingResult } from './v2-sample-understanding.js';
 export type DirectorGoal = 'analyze_sample' | 'analyze_materials' | 'generate_timeline' | 'revise_timeline' | 'render';
 export type DirectorAspectRatio = '9:16' | '16:9' | '1:1' | '4:3';
 /** 对话层识别的用户意图（比 goal 更细，含澄清/未知） */
-export type DirectorConversationIntent = 'analyze_sample' | 'analyze_materials' | 'revise_timeline' | 'generate_timeline' | 'render' | 'clarify' | 'unknown';
+export type DirectorConversationIntent = 'chat' | 'analyze_sample' | 'analyze_materials' | 'revise_timeline' | 'generate_timeline' | 'render' | 'clarify' | 'unknown';
 /** 对话管理器输出的下一步动作 */
 export type DirectorNextAction = 'ASK_USER' | 'ANALYZE_SAMPLE' | 'GENERATE_TIMELINE' | 'RENDER' | 'REVISE_TIMELINE' | 'ACKNOWLEDGE' | 'NEED_BACKEND' | 'NEED_SAMPLE' | 'WAIT';
 /**
@@ -176,6 +176,11 @@ export interface DirectorTimelineFacts {
         animation?: string;
     }>;
     transitions: Array<{
+        id: string;
+        fromSceneId: string;
+        toSceneId: string;
+        fromSceneIndex: number;
+        toSceneIndex: number;
         type: string;
         durationSec: number;
     }>;

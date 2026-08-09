@@ -20,7 +20,7 @@ export interface V2TimelineRevisionContext {
     overlays: RemotionTimelineSpecV1['overlays']
     material_jobs: Array<Pick<
       RemotionTimelineSpecV1['material_jobs'][number],
-      'id' | 'scene_id' | 'type' | 'status' | 'output_asset_id' | 'fallback_asset_id'
+      'id' | 'scene_id' | 'type' | 'status' | 'input_asset_id' | 'output_asset_id' | 'fallback_asset_id'
     >>
     audio?: RemotionTimelineSpecV1['audio']
   }
@@ -89,6 +89,7 @@ export function buildV2TimelineRevisionContext(input: {
         scene_id: job.scene_id,
         type: job.type,
         status: job.status,
+        input_asset_id: job.input_asset_id,
         output_asset_id: job.output_asset_id,
         fallback_asset_id: job.fallback_asset_id,
       })),

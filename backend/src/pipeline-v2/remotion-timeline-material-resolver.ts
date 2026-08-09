@@ -6,6 +6,7 @@ import type {
   RemotionTimelineMaterialJob,
   RemotionTimelineSpecV1,
 } from '../../../shared/types/remotion-timeline-spec.v1.js'
+import { ensureExternallyReachableUploadUrl } from '../modules/upload/asset-publisher.js'
 import { standardizeGeneratedVideoAsset } from './media-standardizer.js'
 import {
   createNoopMaterialGenerationAdapter,
@@ -27,6 +28,7 @@ export interface V2TimelineMaterialResolutionReport {
     scene_id: string
     type: string
     prompt?: string
+    input_asset_id?: string
     input_image_url?: string
     output_asset_id?: string
     provider_task_id?: string
@@ -259,17 +261,32 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
       return { failedJob: { id: job.id, reason } }
     }
 
-    const generated: V2MaterialGenerationResult = await adapter.generate({
-      jobId: job.id,
-      shotId: job.scene_id,
-      type: 'generate_video',
-      prompt: job.prompt,
-      inputImageUrl: job.input_image_url,
-      outputAssetId: job.output_asset_id,
-    }).catch((error: unknown) => ({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    }))
+    let inputImageUrl = job.input_image_url
+    let inputBindingError: string | undefined
+    if (job.input_asset_id) {
+      const inputAsset = assetById(spec.assets, job.input_asset_id)!
+      try {
+        inputImageUrl = await ensureExternallyReachableUploadUrl(inputAsset.src)
+      } catch (error) {
+        inputBindingError = `Unable to bind image asset ${job.input_asset_id} for generation: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      }
+    }
+
+    const generated: V2MaterialGenerationResult = inputBindingError
+      ? { ok: false, error: inputBindingError }
+      : await adapter.generate({
+          jobId: job.id,
+          shotId: job.scene_id,
+          type: 'generate_video',
+          prompt: job.prompt,
+          inputImageUrl,
+          outputAssetId: job.output_asset_id,
+        }).catch((error: unknown) => ({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        }))
 
     if (generated.ok && generated.asset) {
       const normalized = await standardizeIfVideo({
@@ -289,7 +306,8 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
         scene_id: job.scene_id,
         type: job.type,
         prompt: job.prompt,
-        input_image_url: job.input_image_url,
+        input_asset_id: job.input_asset_id,
+        input_image_url: inputImageUrl,
         output_asset_id: job.output_asset_id,
         provider_task_id: generated.providerTaskId,
         status: 'fulfilled',
@@ -307,7 +325,8 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
         scene_id: job.scene_id,
         type: job.type,
         prompt: job.prompt,
-        input_image_url: job.input_image_url,
+        input_asset_id: job.input_asset_id,
+        input_image_url: inputImageUrl,
         output_asset_id: job.output_asset_id,
         provider_task_id: generated.providerTaskId,
         status: 'fallback',
@@ -324,7 +343,8 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
         scene_id: job.scene_id,
         type: job.type,
         prompt: job.prompt,
-        input_image_url: job.input_image_url,
+        input_asset_id: job.input_asset_id,
+        input_image_url: inputImageUrl,
         output_asset_id: job.output_asset_id,
         provider_task_id: generated.providerTaskId,
         status: 'fallback',
@@ -341,7 +361,8 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
       scene_id: job.scene_id,
       type: job.type,
       prompt: job.prompt,
-      input_image_url: job.input_image_url,
+      input_asset_id: job.input_asset_id,
+      input_image_url: inputImageUrl,
       output_asset_id: job.output_asset_id,
       provider_task_id: generated.providerTaskId,
       status: 'failed',

@@ -107,30 +107,34 @@ function captionOverlayFor(input: {
 export function applyV2TimelineHardRequirements(input: {
   spec: RemotionTimelineSpecV1
   requirements: V2TimelineHardRequirements
+  /** Existing revisions are validated only; synthesis is reserved for a new plan. */
+  synthesizeMissing?: boolean
 }): RemotionTimelineSpecV1 {
   const captions = input.requirements.required_captions
   if (!captions.length) return input.spec
 
+  const existingText = new Set(
+    input.spec.overlays
+      .map((overlay) => overlay.text?.trim())
+      .filter((text): text is string => Boolean(text)),
+  )
+  const missingCaptions = captions.filter((caption) => !existingText.has(caption))
+  if (!missingCaptions.length || input.synthesizeMissing === false) return input.spec
+
   const scenes = input.spec.scenes.slice().sort((a, b) => a.start_sec - b.start_sec)
-  const requiredOverlays = captions
+  const requiredOverlays = missingCaptions
     .map((text, index) => {
-      const scene = sceneForCaption(scenes, index, captions.length)
+      const scene = sceneForCaption(scenes, index, missingCaptions.length)
       return scene ? captionOverlayFor({ scene, index, text }) : undefined
     })
     .filter((overlay): overlay is RemotionTimelineOverlay => Boolean(overlay))
 
-  const requiredText = new Set(captions)
-  const otherOverlays = input.spec.overlays.filter((overlay) => {
-    if (!overlay.text) return true
-    return !requiredText.has(overlay.text)
-  })
-
   return {
     ...input.spec,
-    overlays: [...requiredOverlays, ...otherOverlays.filter((overlay) => !overlay.id.startsWith('required_caption_'))],
+    overlays: [...requiredOverlays, ...input.spec.overlays],
     notes: [
       ...(input.spec.notes ?? []),
-      `Hard requirements applied: ${captions.length} required captions.`,
+      `Hard requirements applied: ${missingCaptions.length} missing captions.`,
     ],
   }
 }

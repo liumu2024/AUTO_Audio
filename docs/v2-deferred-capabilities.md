@@ -8,7 +8,6 @@ This document records V2 interfaces that deliberately do **not** execute in the 
 | Hybrid memory retrieval | Keyword recall implemented; vector recall / fusion / rerank / conflict resolution deferred | `memory.search` | filter → keyword/vector recall → fusion → small rerank → dedupe/conflict resolution | Embedding provider and persistent store | Large corpus returns 3–5 source-labelled, relevant memories | No raw historical chat used as hidden instruction |
 | Project audio plan | Interface defined, not implemented | `audio.plan`, `audio.mix` | `V2AudioAssetDescriptor` and V2 audio clips | Licensed/user assets and audio policy | BGM, embedded generated sound and independent tracks are distinguishable | Generated-video embedded audio is never misreported as editable project BGM |
 | TTS narration and subtitle alignment | Interface defined, not implemented | `audio.generate_tts`, `audio.align` | `V2SubtitleNarrationAlignment` | TTS provider with duration/word timing | Caption narration fits caption and scene ranges; large mismatch returns to revision | No speech generation without explicit authorization |
-| Remotion-first component sandbox | Interface defined, disabled | `component.sandbox_preview`, `component.promote` | fixed component contract, isolated build/preview/promote lifecycle | Sandboxed compilation, validation and rollback | Approved component can be promoted after preview | `allow_custom_component=false` remains true for the current V2 renderer |
 
 ## Future retrieval contract
 

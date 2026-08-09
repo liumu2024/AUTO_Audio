@@ -4,8 +4,12 @@ import { slide } from '@remotion/transitions/slide'
 import { wipe } from '@remotion/transitions/wipe'
 import { AbsoluteFill, interpolate, useCurrentFrame } from 'remotion'
 import { createElement } from 'react'
-import type { ComponentType, ReactNode } from 'react'
+import type { ComponentType, CSSProperties, ReactNode } from 'react'
 
+import {
+  normalizeCustomTransitionProgress,
+  type CustomTransitionProps,
+} from '../../../shared/types/remotion-custom-component'
 import type { RemotionTimelineTransition } from '../../../shared/types/remotion-timeline-spec.v1'
 import { customComponentRegistry } from './custom-components/index'
 
@@ -19,7 +23,7 @@ export function buildTransitionElement(transition: RemotionTimelineTransition, f
   if (durationInFrames <= 0) return null
   if (transition.custom_render) {
     const Component = customComponentRegistry[transition.custom_render.component_id]?.default as
-      | ComponentType<Record<string, unknown>>
+      | ComponentType<CustomTransitionProps<ReactNode>>
       | undefined
     if (Component) {
       const params = transition.custom_render.params
@@ -28,17 +32,18 @@ export function buildTransitionElement(transition: RemotionTimelineTransition, f
           key={transition.id}
           presentation={{
             component: (props) => {
-              const { children, presentationProgress, presentationDirection, passedProps } = props as {
+              const { children, presentationProgress, presentationDirection, presentationDurationInFrames, passedProps } = props as {
                 children: ReactNode
                 presentationProgress: number
-                presentationDirection: string
+                presentationDirection: 'entering' | 'exiting'
+                presentationDurationInFrames: number
                 passedProps: Record<string, unknown>
               }
               return createElement(Component, {
                 children,
-                progress: presentationProgress,
+                progress: normalizeCustomTransitionProgress(presentationProgress, presentationDurationInFrames),
                 direction: presentationDirection,
-                params: passedProps?.params ?? params,
+                params: (passedProps?.params as Record<string, unknown> | undefined) ?? params,
               })
             },
             props: { params },
@@ -71,6 +76,29 @@ export function buildTransitionElement(transition: RemotionTimelineTransition, f
       <TransitionSeries.Transition
         key={transition.id}
         presentation={wipe({ direction: transition.direction ?? 'from-left' })}
+        timing={timing}
+      />
+    )
+  }
+  if (transition.type === 'blur') {
+    return (
+      <TransitionSeries.Transition
+        key={transition.id}
+        presentation={{
+          component: ({ children, presentationProgress, presentationDirection }) => {
+            const progress = presentationProgress
+            const style: CSSProperties = {
+              filter: presentationDirection === 'exiting'
+                ? `blur(${Math.round(18 * progress)}px)`
+                : `blur(${Math.round(18 * (1 - progress))}px)`,
+              height: '100%',
+              opacity: presentationDirection === 'exiting' ? 1 - progress : progress,
+              width: '100%',
+            }
+            return <div style={style}>{children}</div>
+          },
+          props: {},
+        }}
         timing={timing}
       />
     )

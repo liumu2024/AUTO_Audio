@@ -3,9 +3,9 @@ import path from 'node:path'
 
 import { env } from '../src/config/env.js'
 import {
-  deleteV2PlannerFile,
-  uploadV2PlannerImageFile,
-  waitForV2PlannerFileReady,
+  deleteArkImageFile,
+  uploadArkImageFile,
+  waitForArkImageFileReady,
 } from '../src/pipeline-v2/ark-file-input.js'
 import { createV2TraceWriter } from '../src/pipeline-v2/trace.js'
 
@@ -19,9 +19,9 @@ if (!env.directorAgentApiKey) throw new Error('DIRECTOR_AGENT_API_KEY is not con
 const trace = createV2TraceWriter({ taskId: `v2_image_model_access_${Date.now()}` })
 let fileId: string | undefined
 try {
-  const uploaded = await uploadV2PlannerImageFile({ localPath: imagePath })
+  const uploaded = await uploadArkImageFile({ localPath: imagePath })
   fileId = uploaded.fileId
-  await waitForV2PlannerFileReady(fileId)
+  await waitForArkImageFileReady(fileId)
 
   const response = await fetch(env.directorAgentResponsesUrl, {
     method: 'POST',
@@ -58,5 +58,5 @@ try {
   })
   console.info(`[verify-v2-image-model-access] OK ${trace.rootDir}`)
 } finally {
-  if (fileId) await deleteV2PlannerFile(fileId)
+  if (fileId) await deleteArkImageFile(fileId)
 }

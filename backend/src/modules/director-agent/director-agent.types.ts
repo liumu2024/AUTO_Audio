@@ -12,6 +12,8 @@ export interface DirectorAgentChatRequest {
   prompt: string
   context: DirectorContext
   runtime: DirectorConversationRuntime
+  /** Materials explicitly attached to this turn; omitted for contextual follow-ups. */
+  currentTurnMaterialIds?: string[]
   /** Stable for one user submission and reused only for transport retries. */
   turnRequestId?: string
   /** Stable browser workspace id; the server creates a V2 session when absent. */

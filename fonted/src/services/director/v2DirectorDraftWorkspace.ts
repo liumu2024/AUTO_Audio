@@ -1,5 +1,7 @@
-import type { V2TimelineDraftDto } from '@/lib/api'
+import type { V2TimelineDraftDetailDto, V2TimelineDraftDto } from '@/lib/api'
 import { useCreationStore } from '@/stores/creationStore'
+import { useDirectorChatStore } from '@/stores/directorChatStore'
+import { useDirectorContextStore } from '@/stores/directorContextStore'
 import type { TimelineMode } from '@/stores/editorStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { usePlaybackStore } from '@/stores/playbackStore'
@@ -10,7 +12,7 @@ import type { RemotionTimelineSpecV1 } from '@shared/types/remotion-timeline-spe
 export type V2DraftWorkspaceInput = Pick<
   V2TimelineDraftDto,
   'draftId' | 'revision' | 'spec' | 'traceDir'
->
+> & Pick<Partial<V2TimelineDraftDetailDto>, 'latestRun'>
 
 export type V2CanvasSurface =
   | 'sample_analysis'
@@ -57,7 +59,7 @@ export interface V2PlanScenePresentation extends V2PlanSceneCard {
   visibleTexts: V2PlanVisibleText[]
   transitionAfter?: Pick<
     RemotionTimelineSpecV1['transitions'][number],
-    'type' | 'duration_sec' | 'direction'
+    'type' | 'duration_sec' | 'direction' | 'custom_render'
   >
 }
 
@@ -196,6 +198,7 @@ export function buildV2PlanPresentation(
               type: transition.type,
               duration_sec: transition.duration_sec,
               direction: transition.direction,
+              custom_render: transition.custom_render,
             }
           : undefined,
       }
@@ -268,4 +271,44 @@ export function activateV2DraftWorkspace(draft: V2DraftWorkspaceInput): void {
   usePlaybackStore.getState().seek(0)
   useTaskStore.getState().setActiveTaskId(draft.draftId)
   useTaskStore.getState().setBackendReady(true)
+}
+
+/** Starts a blank local workspace without deleting persisted drafts or shared materials. */
+export function startNewV2DraftWorkspace(): void {
+  useV2TimelineStore.getState().clear()
+  useCreationStore.setState({
+    sampleUrl: '',
+    sampleName: '',
+    inputText: '',
+    attachments: [],
+    pendingAttachmentIds: [],
+    showSampleInInputTray: false,
+    aspectRatio: '9:16',
+    aspectRatioExplicit: false,
+    durationSec: undefined,
+    styleIntensity: 'medium',
+    styleIntensityExplicit: false,
+    isAnalyzing: false,
+    isSampleParsed: false,
+  })
+  useDirectorContextStore.getState().reset()
+  useDirectorChatStore.getState().reset()
+  useDirectorChatStore.getState().ensureWelcome()
+  useTaskStore.getState().setActiveTaskId(null)
+  useTaskStore.getState().resetTask()
+  useTaskStore.setState({ lastPrompt: null })
+  useEditorStore.setState({
+    projectName: '未命名视频项目',
+    sidebarTab: 'config',
+    sidebarSubView: 'main',
+    materialLibraryMode: 'manage',
+    timelineMode: 'sample',
+    generationEditEnabled: false,
+  })
+  usePlaybackStore.setState({
+    isPlaying: false,
+    currentTime: 0,
+    duration: 15,
+    syncLock: false,
+  })
 }

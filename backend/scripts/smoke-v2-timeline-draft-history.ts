@@ -12,6 +12,9 @@ const { buildDeterministicRemotionTimelineSpec } = await import(
 const { createV2TimelineDraftRepository } = await import(
   '../src/pipeline-v2/timeline-draft-repository.js'
 )
+const { promoteRenderComponent, registerRenderComponent } = await import(
+  '../src/modules/render-components/component-registry.js'
+)
 const {
   deleteV2TimelineDraft,
   getV2TimelineDraft,
@@ -57,6 +60,26 @@ const plannerInput = {
   plannerMode: 'deterministic' as const,
 }
 const spec = buildDeterministicRemotionTimelineSpec(plannerInput)
+await registerRenderComponent({
+  id: 'cmp_history_transition',
+  purpose: 'transition',
+  displayName: '历史圆形渐变',
+  effectBrief: '历史圆形渐变',
+  effectSummary: '历史测试用圆形渐变转场',
+  acceptanceCriteria: ['测试 fixture'],
+  source: 'export default function HistoryTransition({children}) { return children }',
+})
+await promoteRenderComponent({
+  id: 'cmp_history_transition',
+  previewEvidence: {
+    verdict: 'passed', frameCount: 5, summary: 'fixture', reviewedAt: new Date().toISOString(),
+    criteria: [{ criterion: '测试 fixture', passed: true, evidence: 'fixture' }],
+  },
+})
+spec.transitions[0]!.custom_render = {
+  component_id: 'cmp_history_transition',
+  display_name: '创建时伪造名称',
+}
 const draft = await repository.createDraft({
   userId: 1,
   plannerInput,
@@ -65,7 +88,24 @@ const draft = await repository.createDraft({
   review: { summary_zh: '历史 smoke 草稿' },
   traceDir: 'history-preview-trace',
 })
-const source = await repository.getRevision(draft.id, draft.revision, 1)
+assert.equal(draft.spec.transitions[0]?.custom_render?.display_name, '历史圆形渐变')
+const saved = await repository.saveDraft({
+  draftId: draft.id,
+  userId: 1,
+  baseRevision: draft.revision,
+  kind: 'user_edit',
+  spec: {
+    ...draft.spec,
+    transitions: draft.spec.transitions.map((transition) => ({
+      ...transition,
+      custom_render: transition.custom_render
+        ? { ...transition.custom_render, display_name: '修订时伪造名称' }
+        : undefined,
+    })),
+  },
+})
+assert.equal(saved.spec.transitions[0]?.custom_render?.display_name, '历史圆形渐变')
+const source = await repository.getRevision(saved.id, saved.revision, 1)
 assert.ok(source)
 const run = await repository.createRenderRun({
   id: `v2_history_run_${Date.now()}`,
@@ -90,7 +130,7 @@ assert.equal(list.statusCode, 200)
 const listed = list.body as { drafts: Array<Record<string, unknown>> }
 assert.equal(listed.drafts.length, 1)
 assert.equal(listed.drafts[0]?.draftId, draft.id)
-assert.equal(listed.drafts[0]?.revision, 1)
+assert.equal(listed.drafts[0]?.revision, 2)
 assert.equal((listed.drafts[0]?.latestRun as { id?: string })?.id, run.id)
 
 const getResponse = response()
@@ -99,7 +139,7 @@ const loaded = getResponse.result()
 assert.equal(loaded.statusCode, 200)
 const loadedDraft = (loaded.body as { draft: Record<string, unknown> }).draft
 assert.ok(loadedDraft.spec)
-assert.equal((loadedDraft.latestRevision as { revision?: number })?.revision, 1)
+assert.equal((loadedDraft.latestRevision as { revision?: number })?.revision, 2)
 
 const foreignDeleteResponse = response()
 await deleteV2TimelineDraft(request({ userId: '2', draftId: draft.id }), foreignDeleteResponse.res)

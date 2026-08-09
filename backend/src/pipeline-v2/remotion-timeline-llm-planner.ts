@@ -9,9 +9,9 @@ import {
   validateRemotionTimelineSpec,
 } from '../../../shared/lib/remotion-timeline-validator.js'
 import { normalizeV2TimelineTextOwnership } from '../../../shared/lib/remotion-timeline-text-ownership.js'
-import { isLikelyExternallyReachableUrl } from '../../../shared/lib/external-url-access.js'
 import {
   REMOTION_TIMELINE_SPEC_SCHEMA_VERSION,
+  REMOTION_TIMELINE_TRANSITION_TYPES,
   type RemotionTimelineSpecV1,
 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import {
@@ -20,10 +20,12 @@ import {
 } from './remotion-timeline-planner.js'
 import { extractV2TimelineHardRequirements } from './hard-requirements.js'
 import {
-  deleteV2PlannerFile,
-  uploadV2PlannerImageFile,
-  waitForV2PlannerFileReady,
-} from './ark-file-input.js'
+  prepareArkImageInputs,
+  releaseArkImageInputs,
+  resolveServerImageAccess,
+  type ArkImageInputReport,
+  type ArkResponsesImageInput,
+} from './ark-image-input.js'
 
 const MAX_V2_PLANNER_IMAGE_INPUTS = 12
 const TimelineJsonSchema = {
@@ -53,7 +55,7 @@ const TimelineJsonSchema = {
     transitions: {
       type: 'array', items: {
         type: 'object', required: ['id', 'from_scene_id', 'to_scene_id', 'type', 'duration_sec'],
-        properties: { id: { type: 'string' }, from_scene_id: { type: 'string' }, to_scene_id: { type: 'string' }, type: { type: 'string', enum: ['cut', 'fade', 'slide', 'wipe', 'light_flash'] }, duration_sec: { type: 'number' }, direction: { type: 'string', enum: ['from-left', 'from-right', 'from-top', 'from-bottom'] }, custom_render: { type: 'object', required: ['component_id'], properties: { component_id: { type: 'string' }, params: { type: 'object' } } } },
+        properties: { id: { type: 'string' }, from_scene_id: { type: 'string' }, to_scene_id: { type: 'string' }, type: { type: 'string', enum: [...REMOTION_TIMELINE_TRANSITION_TYPES] }, duration_sec: { type: 'number' }, direction: { type: 'string', enum: ['from-left', 'from-right', 'from-top', 'from-bottom'] }, custom_render: { type: 'object', required: ['component_id'], properties: { component_id: { type: 'string' }, params: { type: 'object' } } } },
       },
     },
     overlays: {
@@ -77,24 +79,19 @@ const TimelineJsonSchema = {
     material_jobs: {
       type: 'array', items: {
         type: 'object', required: ['id', 'scene_id', 'type', 'status'],
-        properties: { id: { type: 'string' }, scene_id: { type: 'string' }, type: { type: 'string', enum: ['reuse_asset', 'generate_video', 'request_user_material'] }, status: { type: 'string', enum: ['planned', 'fulfilled', 'failed'] }, prompt: { type: 'string' }, input_image_url: { type: 'string' }, output_asset_id: { type: 'string' }, fallback_asset_id: { type: 'string' }, fallback_kind: { type: 'string', enum: ['reuse_asset', 'static_image', 'blank_card', 'none'] }, provider: { type: 'string', enum: ['ark_seedance', 'manual', 'none'] } },
+        additionalProperties: false,
+        properties: { id: { type: 'string' }, scene_id: { type: 'string' }, type: { type: 'string', enum: ['reuse_asset', 'generate_video', 'request_user_material'] }, status: { type: 'string', enum: ['planned', 'fulfilled', 'failed'] }, prompt: { type: 'string' }, input_asset_id: { type: 'string' }, output_asset_id: { type: 'string' }, fallback_asset_id: { type: 'string' }, fallback_kind: { type: 'string', enum: ['reuse_asset', 'static_image', 'blank_card', 'none'] }, provider: { type: 'string', enum: ['ark_seedance', 'manual', 'none'] } },
       },
     },
     render_policy: {
-      type: 'object', required: ['renderer', 'allow_custom_component'],
-      properties: { renderer: { type: 'string', const: 'remotion_timeline' }, allow_custom_component: { type: 'boolean' }, fallback_renderer: { type: 'string', enum: ['overlay_compose'] } },
+      type: 'object', required: ['renderer'], additionalProperties: false,
+      properties: { renderer: { type: 'string', const: 'remotion_timeline' }, fallback_renderer: { type: 'string', enum: ['overlay_compose'] } },
     },
     notes: { type: 'array', items: { type: 'string' } },
   },
 } as const
 
-export interface V2TimelineVisualInputReport {
-  requested_image_material_count: number
-  attached_image_input_count: number
-  ark_file_input_count: number
-  public_url_input_count: number
-  omitted_material_ids: string[]
-}
+export type V2TimelineVisualInputReport = ArkImageInputReport
 
 export interface V2TimelineLlmPlannerResult {
   spec: RemotionTimelineSpecV1
@@ -268,7 +265,8 @@ export function buildV2TimelinePlannerPrompt(
     '- The planner does not own execution status. New generate_video jobs must use status "planned"; only the backend may mark them fulfilled after a real output asset exists.',
     '- assets contains only already-resolved, renderable assets and every asset src must be non-empty. Do not add an empty placeholder asset for a planned generation; reference its material_job output_asset_id from the scene instead.',
     '- This V2 plan has no audio-generation tool. When the user requests a BGM strategy but provides no audio asset, describe it in notes only; do not create audio clips, empty audio assets, or generate_video jobs for music.',
-    '- External video generation image inputs must be public http(s) URLs; never use localhost, private-network, file, or data URLs for input_image_url.',
+    '- For image-conditioned video generation, set input_asset_id to an existing image asset. Never output input_image_url; the backend binds the provider URL at execution time.',
+    '- When input_asset_id is used, the target scene creative_intent.description must explain which visible source-image facts are retained and which requested moving or new elements are added.',
     '- If main_video_asset_id is null, do not create user_video scenes unless another video asset exists in assets.',
     '- If reference_video_path is provided, treat it as style/structure context only; do not include it as an output asset unless it is also listed as main_video_path.',
     '- If sample_understanding is provided, use it as the source for sample content, rhythm, pacing, shot structure, and transition cues. Do not ignore it and do not infer sample details only from the filename.',
@@ -289,19 +287,12 @@ export function buildV2TimelinePlannerPrompt(
     '- When the user asks for original subtitles from themes or keywords, create audience-facing copy yourself; do not repeat the instruction text. If the user asks for a line limit or placement, express it with caption track defaults and overlay geometry/max_lines while preserving or creating appropriate copy.',
     '- A narrow revision such as audio strategy, transition, subtitle layout, or one selected scene must not replace unrelated subject matter, visual intent, confirmed captions, or sample-use boundaries.',
     '- The selected revision item identifies the user\'s current focus, not an instruction to ignore the rest of the timeline.',
-    '- revision_scope is the tool-authorized boundary: subtitle changes captions only; scene changes only the scene with revision_scene_id plus its caption overlays/track and transitions adjacent to it; visual_strategy changes only the visual strategy fields (type/fit/motion/background/asset binding) of the scene with revision_scene_id and that scene\'s material jobs, keeping captions, audio, transitions and other scenes unchanged; global allows a full rewrite only when the user explicitly requests a broader change.',
-    '- render_policy.allow_custom_component must be true when and only when the plan references a sedimented render component through custom_render; otherwise false.',
+    '- revision_scope is the tool-authorized boundary: subtitle changes captions only; scene changes only the scene with revision_scene_id plus its caption overlays/track and transitions adjacent to it; visual_strategy changes only the visual strategy fields (type/fit/motion/background/asset binding) of the scene with revision_scene_id and that scene\'s material jobs; transition changes only revision_transition_ids; global allows a full rewrite only when the user explicitly requests a broader change.',
     '- When the user requests an effect (filter, compositing, animation, transition) outside the preset set and the instruction explicitly names a sedimented component id, reference it with custom_render { component_id, params } on the target scene or transition. Do not invent component ids that are not explicitly given; do not output React/Remotion code here (components are authored separately through render.author).',
-    ...(input.componentHints?.length
-      ? [
-          `System-confirmed effect mappings (componentHints): ${JSON.stringify(input.componentHints)}`,
-          '- When the user requests an effect and a componentHints entry corresponds, reference that component_id with custom_render on the target scene or transition.',
-        ]
-      : []),
     ...(input.availableComponents?.length
       ? [
-          `Available sedimented render components: ${JSON.stringify(input.availableComponents)}`,
-          '- When no hint matches but an available component clearly fits the requested effect, you may reference it via custom_render. Never invent component ids.',
+          `Available server-confirmed render components: ${JSON.stringify(input.availableComponents)}`,
+          '- When an available component clearly fits the requested effect and its purpose matches the target object, you may reference it via custom_render. Never invent component ids.',
         ]
       : []),
     '- Avoid unnecessary generated video jobs, but do not hide user images just to keep the plan short.',
@@ -331,7 +322,7 @@ export function buildV2TimelinePlannerPrompt(
     '- caption_scene: Remotion-only caption scene.',
     '- data_viz: Remotion-only simple chart/metric scene.',
     '',
-    'Allowed transition types: cut, fade, slide, wipe, light_flash.',
+    `Allowed transition types: ${REMOTION_TIMELINE_TRANSITION_TYPES.join(', ')}.`,
     'Allowed overlay types: caption, title, label, shape, image_badge, light_sweep.',
     '',
     'Runtime input:',
@@ -345,6 +336,7 @@ export function buildV2TimelinePlannerPrompt(
         revision_context: input.revisionContext ?? null,
         revision_scope: input.revisionScope ?? null,
         revision_scene_id: input.revisionSceneId ?? null,
+        revision_transition_ids: input.revisionTransitionIds ?? null,
         agent_skill_context: input.agentSkillContext ?? null,
         agent_tool_context: input.agentToolContext ?? null,
         main_video_asset_id: example.assets.find((asset) => asset.id === 'main_video_asset')?.id ?? null,
@@ -355,20 +347,26 @@ export function buildV2TimelinePlannerPrompt(
         material_assets: example.assets.map((asset) => ({
           id: asset.id,
           type: asset.type,
-          src: asset.src,
           label: asset.label,
           source: asset.source,
         })),
-        user_materials: input.materials ?? [],
+        user_materials: (input.materials ?? []).map((material) => ({
+          id: material.id,
+          name: material.name,
+          type: material.type,
+          tags: material.tags,
+        })),
         sample_understanding: compactSampleUnderstanding(input),
         hard_requirements: hardRequirements,
-        external_input_image_url: input.inputImageUrl ?? null,
         attached_image_inputs: visualInputReport ?? {
           requested_image_material_count: (input.materials ?? []).filter((material) => material.type === 'image').length,
           attached_image_input_count: 0,
           ark_file_input_count: 0,
           public_url_input_count: 0,
+          attached_material_ids: [],
+          failed_material_ids: [],
           omitted_material_ids: [],
+          warnings: [],
         },
         seedance_default_image_available: Boolean(env.v2VideoGenerationDefaultImageUrl),
         canvas: example.canvas,
@@ -407,6 +405,10 @@ function assertLlmMainSceneMaterialCoverage(input: V2RemotionTimelinePlannerInpu
       const overlayAsset = overlay.asset_id ? assetById.get(overlay.asset_id) : undefined
       if (overlayAsset) usedSrcs.add(overlayAsset.src)
     }
+    for (const job of spec.material_jobs) {
+      const inputAsset = job.input_asset_id ? assetById.get(job.input_asset_id) : undefined
+      if (inputAsset) usedSrcs.add(inputAsset.src)
+    }
     const missing = expected.filter((asset) => !usedSrcs.has(asset.src))
     if (missing.length) {
       throw new Error(
@@ -425,6 +427,10 @@ function assertLlmMainSceneMaterialCoverage(input: V2RemotionTimelinePlannerInpu
       .map((scene) => (scene.asset_id ? assetById.get(scene.asset_id)?.src : undefined))
       .filter((src): src is string => Boolean(src)),
   )
+  for (const job of spec.material_jobs) {
+    const inputAsset = job.input_asset_id ? assetById.get(job.input_asset_id) : undefined
+    if (inputAsset) mainSceneSrcs.add(inputAsset.src)
+  }
   const missing = expected.filter((asset) => !mainSceneSrcs.has(asset.src))
   if (missing.length) {
     throw new Error(
@@ -433,58 +439,66 @@ function assertLlmMainSceneMaterialCoverage(input: V2RemotionTimelinePlannerInpu
   }
 }
 
-type PlannerImageContent =
-  | { type: 'input_image'; image_url: string }
-  | { type: 'input_image'; file_id: string }
+async function bindAuthoritativePlannerAssets(
+  input: V2RemotionTimelinePlannerInput,
+  spec: RemotionTimelineSpecV1,
+): Promise<RemotionTimelineSpecV1> {
+  if (spec.material_jobs.some((job) => job.input_image_url)) {
+    throw new Error('input_image_url is reserved for historical persisted jobs; model output must use input_asset_id.')
+  }
+  const authoritativeAssets = new Map(
+    [
+      ...buildDeterministicRemotionTimelineSpec(input).assets,
+      ...(input.revisionBaseSpec?.assets ?? []),
+    ].map((asset) => [asset.id, asset]),
+  )
+  const conditionedAssetIds = new Set(
+    spec.material_jobs.flatMap((job) => job.input_asset_id ? [job.input_asset_id] : []),
+  )
 
-async function preparePlannerImageInputs(input: V2RemotionTimelinePlannerInput): Promise<{
-  content: PlannerImageContent[]
-  temporaryFileIds: string[]
-  report: V2TimelineVisualInputReport
-}> {
-  const imageMaterials = (input.materials ?? []).filter((material) => material.type === 'image')
-  const selected = imageMaterials.slice(0, MAX_V2_PLANNER_IMAGE_INPUTS)
-  const content: PlannerImageContent[] = []
-  const temporaryFileIds: string[] = []
-  let publicUrlInputCount = 0
-
-  try {
-    for (const material of selected) {
-      const publicImageUrl = [material.publicUrl, material.src].find(isLikelyExternallyReachableUrl)
-      if (publicImageUrl) {
-        content.push({ type: 'input_image', image_url: publicImageUrl })
-        publicUrlInputCount += 1
-        continue
-      }
-      const uploaded = await uploadV2PlannerImageFile({
-        localPath: material.src,
-        originalName: material.name,
-      })
-      temporaryFileIds.push(uploaded.fileId)
-      await waitForV2PlannerFileReady(uploaded.fileId)
-      content.push({ type: 'input_image', file_id: uploaded.fileId })
+  for (const assetId of conditionedAssetIds) {
+    const authoritative = authoritativeAssets.get(assetId)
+    if (!authoritative || authoritative.type !== 'image') {
+      throw new Error(`input_asset_id is not a server-owned image asset: ${assetId}`)
     }
-  } catch (error) {
-    await Promise.all(temporaryFileIds.map((fileId) => deleteV2PlannerFile(fileId)))
-    throw error
+    if (!await resolveServerImageAccess(authoritative.src)) {
+      throw new Error(`input_asset_id does not reference an approved image source: ${assetId}`)
+    }
+    if (!spec.assets.some((asset) => asset.id === assetId)) {
+      throw new Error(`input_asset_id is missing from the candidate asset list: ${assetId}`)
+    }
   }
 
   return {
-    content,
-    temporaryFileIds,
-    report: {
-      requested_image_material_count: imageMaterials.length,
-      attached_image_input_count: content.length,
-      ark_file_input_count: temporaryFileIds.length,
-      public_url_input_count: publicUrlInputCount,
-      omitted_material_ids: imageMaterials.slice(MAX_V2_PLANNER_IMAGE_INPUTS).map((material) => material.id),
-    },
+    ...spec,
+    assets: spec.assets.map((asset) => {
+      const authoritative = authoritativeAssets.get(asset.id)
+      if (conditionedAssetIds.has(asset.id)) return { ...authoritative! }
+      if (asset.source !== 'user_asset') return asset
+      if (!authoritative || authoritative.source !== 'user_asset') {
+        throw new Error(`model returned an unknown user_asset: ${asset.id}`)
+      }
+      return { ...authoritative }
+    }),
   }
+}
+
+async function preparePlannerImageInputs(input: V2RemotionTimelinePlannerInput) {
+  const imageMaterials = (input.materials ?? []).filter((material) => material.type === 'image')
+  return prepareArkImageInputs({
+    materials: imageMaterials.map((material) => ({
+      id: material.id,
+      name: material.name,
+      source: material.src,
+      publicUrl: material.publicUrl,
+    })),
+    maxInputs: MAX_V2_PLANNER_IMAGE_INPUTS,
+  })
 }
 
 async function callResponsesApi(
   promptText: string,
-  imageInputs: PlannerImageContent[],
+  imageInputs: ArkResponsesImageInput[],
   options: { allowStructuredOutput?: boolean } = {},
 ): Promise<{
   raw: unknown
@@ -581,7 +595,7 @@ export async function runV2TimelineLlmPlanner(
     initialResponseAudit = responseAudit(rawResponse)
     structuredOutput = response.structuredOutput
   } finally {
-    await Promise.all(preparedImages.temporaryFileIds.map((fileId) => deleteV2PlannerFile(fileId)))
+    await releaseArkImageInputs(preparedImages)
   }
   let extracted = extractStructuredJsonCandidate(
     rawResponse,
@@ -616,8 +630,9 @@ export async function runV2TimelineLlmPlanner(
     }
   }
 
-  let normalizedCandidate = normalizeV2TimelineTextOwnership(
-    extracted.candidate as RemotionTimelineSpecV1,
+  let normalizedCandidate = await bindAuthoritativePlannerAssets(
+    input,
+    normalizeV2TimelineTextOwnership(extracted.candidate as RemotionTimelineSpecV1),
   )
   let repairedCandidate = repairV2LlmGeneratedMaterialPrompts(normalizedCandidate)
   let validation = validateRemotionTimelineSpec(repairedCandidate.spec)
@@ -635,7 +650,10 @@ export async function runV2TimelineLlmPlanner(
           (value as { schema_version?: unknown }).schema_version === REMOTION_TIMELINE_SPEC_SCHEMA_VERSION,
       )
       if (extracted.candidate) {
-        normalizedCandidate = normalizeV2TimelineTextOwnership(extracted.candidate as RemotionTimelineSpecV1)
+        normalizedCandidate = await bindAuthoritativePlannerAssets(
+          input,
+          normalizeV2TimelineTextOwnership(extracted.candidate as RemotionTimelineSpecV1),
+        )
         repairedCandidate = repairV2LlmGeneratedMaterialPrompts(normalizedCandidate)
         validation = validateRemotionTimelineSpec(repairedCandidate.spec)
       }

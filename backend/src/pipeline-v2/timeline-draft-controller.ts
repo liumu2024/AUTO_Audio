@@ -1,15 +1,16 @@
 import { randomUUID } from 'node:crypto'
-import path from 'node:path'
 
 import type { Request, Response } from 'express'
 
 import { validateRemotionTimelineSpec } from '../../../shared/lib/remotion-timeline-validator.js'
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import { v2PlannerInputFromRequest } from './controller.js'
-import { previewV2RemotionTimeline, runV2RemotionTimeline } from './remotion-timeline-service.js'
+import { previewV2RemotionTimeline } from './remotion-timeline-service.js'
+import { executeV2TimelineDraftRun } from './timeline-draft-runner.js'
 import { buildV2TimelineRevisionContext } from './timeline-revision-context.js'
 import {
   createV2TimelineDraftRepository,
+  V2TimelineComponentReferenceError,
   V2TimelineRevisionConflictError,
   type V2TimelineDraftHistoryRecord,
   type V2TimelineDraftRecord,
@@ -126,6 +127,14 @@ function sendConflict(res: Response, error: V2TimelineRevisionConflictError) {
   })
 }
 
+function sendComponentReferenceError(res: Response, error: V2TimelineComponentReferenceError) {
+  res.status(422).json({
+    error: 'Invalid timeline component reference.',
+    code: 'V2_TIMELINE_COMPONENT_REFERENCE',
+    issues: error.issues,
+  })
+}
+
 function persistedPlannerInput(input: ReturnType<typeof v2PlannerInputFromRequest>) {
   const { revisionContext: _revisionContext, revisionBaseSpec: _revisionBaseSpec, ...persisted } = input
   return persisted
@@ -202,6 +211,10 @@ export async function postV2TimelineDraftPreview(req: Request, res: Response): P
         })
     res.json({ ...preview, draft: draftDto(draft) })
   } catch (error) {
+    if (error instanceof V2TimelineComponentReferenceError) {
+      sendComponentReferenceError(res, error)
+      return
+    }
     if (error instanceof V2TimelineRevisionConflictError) {
       sendConflict(res, error)
       return
@@ -257,6 +270,10 @@ export async function putV2TimelineDraft(req: Request, res: Response): Promise<v
     })
     res.json({ draft: draftDto(draft) })
   } catch (error) {
+    if (error instanceof V2TimelineComponentReferenceError) {
+      sendComponentReferenceError(res, error)
+      return
+    }
     if (error instanceof V2TimelineRevisionConflictError) {
       sendConflict(res, error)
       return
@@ -273,54 +290,13 @@ export async function postV2TimelineDraftRun(req: Request, res: Response): Promi
     return
   }
   const userId = userIdFrom(req)
-  const draft = await repository.getDraft(draftId, userId)
-  const source = await repository.getRevision(draftId, revision, userId)
-  if (!draft || !source) {
-    res.status(404).json({ error: 'V2 timeline draft revision not found.' })
-    return
-  }
-
-  const runId = `v2_run_${Date.now()}_${randomUUID().slice(0, 8)}`
-  await repository.createRenderRun({
-    id: runId,
-    draftId,
-    sourceRevision: source.revision,
-    sourceSpec: source.spec,
-  })
   try {
-    const result = await runV2RemotionTimeline({
-      ...draft.plannerInput,
-      taskId: runId,
-      timelineSpecOverride: source.spec,
-    })
-    const outputUrl = `/v2-renders/${encodeURIComponent(result.taskId)}/${encodeURIComponent(path.basename(result.outputPath))}`
-    const run = await repository.completeRenderRun({
-      id: runId,
-      resolvedSpec: result.spec,
-      outputPath: result.outputPath,
-      outputUrl,
-      traceDir: result.traceDir,
-      materialResolution: result.materialResolution,
-      evaluation: result.evaluation,
-    })
-    res.json({
-      ok: result.ok,
-      draftId,
-      draftRevision: source.revision,
-      renderRunId: run.id,
-      plannerSource: result.plannerSource,
-      resolvedSpec: run.resolvedSpec,
-      outputPath: run.outputPath,
-      outputUrl: run.outputUrl,
-      traceDir: run.traceDir,
-      review: result.review,
-      validation: result.validation,
-      materialResolution: result.materialResolution,
-      standardizedAssets: result.standardizedAssets,
-      evaluation: result.evaluation,
-    })
+    res.json(await executeV2TimelineDraftRun({ repository, draftId, revision, userId }))
   } catch (error) {
-    await repository.failRenderRun(runId)
+    if (error instanceof Error && error.message === 'V2 timeline draft revision not found.') {
+      res.status(404).json({ error: error.message })
+      return
+    }
     throw error
   }
 }

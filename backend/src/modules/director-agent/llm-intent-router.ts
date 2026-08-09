@@ -19,7 +19,15 @@ import type {
 } from '../../../../shared/types/director-context.js'
 import type { ConfirmedRequirement } from '../../../../shared/types/director-workspace-session.js'
 import type { CreativeMemorySearchResult } from '../creative-memory/creative-memory.service.js'
-import { listPromotedComponents } from '../render-components/component-registry.js'
+import {
+  listPromotedComponents,
+  type RenderComponentSummary,
+} from '../render-components/component-registry.js'
+import {
+  prepareArkImageInputs,
+  releaseArkImageInputs,
+  type ArkResponsesImageInput,
+} from '../../pipeline-v2/ark-image-input.js'
 
 const AspectRatioSchema = z.enum(['9:16', '16:9', '1:1', '4:3'])
 const ContentDomainSchema = z.enum([
@@ -29,6 +37,7 @@ const ContentDomainSchema = z.enum([
   'general',
 ])
 const CanonicalIntentSchema = z.enum(['chat', 'create', 'revise', 'execute', 'clarify'])
+const MAX_DIRECTOR_IMAGE_INPUTS = 12
 const RequirementOperationSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('add'), statement: z.string().trim().min(1).max(500) }).strict(),
   z.object({
@@ -127,6 +136,7 @@ export interface LlmIntentRouterOutput {
   modelResponseAudit?: unknown
   protocolError?: { kind: 'json_syntax' | 'field_validation'; message: string }
   structuredOutput?: { requested: boolean; providerFallback: boolean; reason?: string }
+  imageInputWarnings?: string[]
   jsonRepair?: {
     request: string
     responseAudit?: unknown
@@ -163,7 +173,7 @@ export function compactDirectorContextForPrompt(input: {
   runtime: DirectorConversationRuntime
   confirmedRequirements?: ConfirmedRequirement[]
   retrievedCreativeMemories?: CreativeMemorySearchResult
-  promotedComponents?: Array<{ id: string; purpose?: 'scene' | 'transition'; description: string }>
+  promotedComponents?: RenderComponentSummary[]
 }) {
   const state = input.context.directorState
   const compactDirectorState = state
@@ -265,7 +275,7 @@ export function buildDirectorModelPrompt(input: {
   runtime: DirectorConversationRuntime
   confirmedRequirements?: ConfirmedRequirement[]
   retrievedCreativeMemories?: CreativeMemorySearchResult
-  promotedComponents?: Array<{ id: string; purpose?: 'scene' | 'transition'; description: string }>
+  promotedComponents?: RenderComponentSummary[]
 }) {
   return `你是 AI Video Studio 的导演 Agent。请自然理解当前输入，并结合结构化事实和历史上下文处理指代、延续与冲突。
 
@@ -281,6 +291,7 @@ export function buildDirectorModelPrompt(input: {
 - 只有当前输入明确授权创建、修订或执行时才请求 Tool；渲染、导出等交付操作必须使用 execute。用户明确命令“渲染、导出、提交、生成成片”等交付动作即本轮授权，不要再次询问（服务端仍会执行最终权限校验）。
 - capabilitySnapshot 是服务端权威能力事实。不要从缺少某类素材推导整个任务不可执行；优先选择 ready 路径。blocked 时说明具体缺失项和 alternatives。
 - sample video 是结构和风格参考，materials 才是候选成片素材。模型不得填写样例、素材、草稿、版本、项目或用户 ID；这些由服务端绑定。
+- 当 Current context 声明本轮已附加视觉输入时，必须直接观察图片回答内容、比较或创意建议；不得声称无法读取图片。只读问答仍使用 chat，不能因此创建或渲染。
 - creativeConfigDelta 只写本轮新确认的创作参数；UI 明确值优先，不能被模型覆盖。
 - 用户明确要求记录、替换或撤销创作要求时，输出一个 requirements.update stateAction。replace/revoke 只能使用 activeRequirements 中的 id，并填写 targetRequirementId；不得使用字幕、场景、素材、样例或草稿 ID。
 - stateActions 和 toolRequests 使用本轮局部 ref。Tool 只有真实依赖前序状态或 Tool 结果时才写 dependsOn；独立动作使用空数组。
@@ -291,7 +302,9 @@ export function buildDirectorModelPrompt(input: {
 - Tool arguments 必须严格符合 Tool 卡片中的 inputSchema，不得增加字段。
 - 用户在本轮明确请求修改草稿（改字幕、换转场、换视觉策略、重排镜头）即为本轮执行授权；draft 修订不需要再次确认，直接选择 timeline.patch 执行。
 - 用户表达的效果需求（滤镜、合成、动画、转场）超出预置集时：先查 Current context 中 renderedComponents 清单，有则用 custom_render 引用；没有则通过 render.author 创作组件（用户无需明确要求写代码）。
+- render.author 提交 purpose、用户原话中的简短 displayName、effectBrief 和逐项 acceptanceCriteria，不得生成 React 源码或组件 ID。displayName 优先沿用用户给出的中文效果名，不得使用“自定义转场”等含糊名称。服务端编码 Agent 负责生成、试渲染和验收；同轮需要立即应用时，让 timeline.plan/timeline.patch 显式 dependsOn 该 author 动作。
 - timeline.patch 的 sceneId 必须使用当前草稿 timelineFacts 中真实存在的场景 id；不确定时省略 sceneId，服务端会按当前选中镜头解析。subtitle 范围可全量修订字幕，也可带目标 sceneId 只改该场景字幕。
+- 修改一个或多个具体转场时使用 transition 范围，并从 timelineFacts.transitions 选择全部真实 transitionIds；用户用镜头顺序描述时，根据 fromSceneIndex/toSceneIndex 选择对应转场，不要把转场修改伪装成 scene 或 global 修订。
 - scene 范围修改目标镜头的画面事实、字幕与相邻转场；visual_strategy 只切换目标镜头的视觉呈现（type/fit/motion/background/素材绑定），不动字幕与转场；两者都需要目标场景。
 - 要求台账（stateActions）与创作记忆（memoryActions）不要对同一句话同时输出：记录为“要求/约束”走 stateActions；记住“偏好/长期/以后都这样”走 memoryActions。
 - 用户明确说“记住/保存/沉淀”，或表达明确偏好（我喜欢、偏好、习惯、总是用…）时，必须输出对应的 memoryAction：稳定且跨项目→user+active；仅当前草稿→draft+active；不确定或仅一次选择→candidate。
@@ -375,8 +388,25 @@ function responseAudit(raw: unknown, finalText: string) {
   }
 }
 
+async function prepareDirectorImageInputs(
+  context: DirectorContext,
+  currentTurnMaterialIds?: string[],
+) {
+  const allImages = context.materials.filter((material) => material.type === 'image')
+  const currentIds = new Set(currentTurnMaterialIds)
+  const images = (currentIds.size
+    ? allImages.filter((material) => currentIds.has(material.id))
+    : allImages.slice(-1)
+  )
+  return prepareArkImageInputs({
+    materials: images.map((image) => ({ id: image.id, name: image.name, source: image.url })),
+    maxInputs: MAX_DIRECTOR_IMAGE_INPUTS,
+  })
+}
+
 async function callResponsesApi(input: {
   promptText: string
+  imageInputs?: ArkResponsesImageInput[]
   previousResponseId?: string
   allowStructuredOutput?: boolean
   structuredOutput?: { name: string; schema: Record<string, unknown> }
@@ -404,7 +434,10 @@ async function callResponsesApi(input: {
     input: [
       {
         role: 'user',
-        content: [{ type: 'input_text', text: input.promptText }],
+        content: [
+          { type: 'input_text', text: input.promptText },
+          ...(input.imageInputs ?? []),
+        ],
       },
     ],
   })
@@ -476,6 +509,7 @@ function intentResultKind(candidate: LlmIntentResult): DirectorIntentResult['int
   if (toolIds.includes('timeline.plan')) return 'generate_timeline'
   if (toolIds.includes('sample.analyze')) return 'analyze_sample'
   if (toolIds.includes('material.inspect')) return 'analyze_materials'
+  if (candidate.intent === 'chat') return 'chat'
   return candidate.intent === 'clarify' ? 'clarify' : 'unknown'
 }
 
@@ -645,6 +679,7 @@ function directorJsonRepairPrompt(input: { invalidText: string; error: string })
 export async function routeDirectorIntentWithLlm(input: {
   prompt: string
   currentTurnId?: string
+  currentTurnMaterialIds?: string[]
   context: DirectorContext
   runtime: DirectorConversationRuntime
   previousResponseId?: string
@@ -659,9 +694,21 @@ export async function routeDirectorIntentWithLlm(input: {
     })
   }
 
+  let temporaryImageFileIds: string[] = []
+  let imageInputWarnings: string[] = []
+  let modelCalled = false
   try {
+    const imageInputs = await prepareDirectorImageInputs(input.context, input.currentTurnMaterialIds)
+    temporaryImageFileIds = imageInputs.temporaryFileIds
+    imageInputWarnings = imageInputs.warnings
+    const promptText = [
+      buildDirectorModelPrompt({ ...input, promotedComponents }),
+      `本轮已附加视觉输入：${imageInputs.content.length} 张。`,
+    ].join('\n\n')
+    modelCalled = true
     const response = await callResponsesApi({
-      promptText: buildDirectorModelPrompt({ ...input, promotedComponents }),
+      promptText,
+      imageInputs: imageInputs.content,
       previousResponseId: input.previousResponseId,
     })
     const raw = response.raw
@@ -690,6 +737,7 @@ export async function routeDirectorIntentWithLlm(input: {
           memoryActions: repaired.memoryActions,
           missingInformation: repaired.missingInformation,
           structuredOutput: response.structuredOutput,
+          imageInputWarnings,
           jsonRepair: { request: repairPrompt, responseAudit: repairAudit },
         }
       } catch (repairError) {
@@ -698,6 +746,7 @@ export async function routeDirectorIntentWithLlm(input: {
         if (safeReply) return {
           ...safeReply, responseId: responseIdFrom(raw), modelOutputText: text, modelResponseAudit: audit,
           protocolError, structuredOutput: response.structuredOutput,
+          imageInputWarnings,
           jsonRepair: { request: repairPrompt, responseAudit: repairAudit, protocolError: { kind: 'json_syntax', message: repairMessage } },
         }
       return {
@@ -711,6 +760,7 @@ export async function routeDirectorIntentWithLlm(input: {
         modelResponseAudit: audit,
         protocolError,
         structuredOutput: response.structuredOutput,
+        imageInputWarnings,
         jsonRepair: { request: repairPrompt, responseAudit: repairAudit, protocolError: { kind: 'json_syntax', message: repairMessage } },
       }
       }
@@ -729,17 +779,21 @@ export async function routeDirectorIntentWithLlm(input: {
       memoryActions: parsed.memoryActions,
       missingInformation: parsed.missingInformation,
       structuredOutput: response.structuredOutput,
+      imageInputWarnings,
     }
   } catch (error) {
     const fallback = buildDirectorContextFallback({
       ...input,
-      reason: error instanceof Error ? error.name : 'director model request failed',
+      reason: error instanceof Error ? error.message.slice(0, 500) : 'director model request failed',
     })
     return {
       ...fallback,
-      modelCalled: true,
+      modelCalled,
+      imageInputWarnings,
       responseContinuityRejected:
         Boolean(input.previousResponseId) && continuityWasRejected(error),
     }
+  } finally {
+    await releaseArkImageInputs({ temporaryFileIds: temporaryImageFileIds })
   }
 }

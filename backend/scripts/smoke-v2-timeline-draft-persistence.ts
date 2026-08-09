@@ -6,6 +6,7 @@ import {
   V2TimelineRevisionConflictError,
   type V2StoredPlannerInput,
 } from '../src/pipeline-v2/timeline-draft-repository.js'
+import { executeV2TimelineDraftRun } from '../src/pipeline-v2/timeline-draft-runner.js'
 
 const plannerInput: V2StoredPlannerInput = {
   taskId: `v2_draft_smoke_${Date.now()}`,
@@ -82,5 +83,34 @@ assert.ok(reloaded)
 assert.equal(reloaded.revision, 2)
 assert.equal(reloaded.spec.scenes[0]?.title, '用户保存的草稿镜头')
 assert.notEqual(reloaded.spec.scenes[0]?.title, resolvedSpec.scenes[0]?.title)
+
+let receivedOverride: unknown
+const executed = await executeV2TimelineDraftRun({
+  repository,
+  draftId: draft.id,
+  revision: saved.revision,
+  userId: 1,
+  runTimeline: async (input) => {
+    receivedOverride = input.timelineSpecOverride
+    return {
+      ok: true,
+      taskId: input.taskId,
+      plannerSource: 'override',
+      spec: source.spec,
+      validation: { ok: true, issues: [] },
+      review: {},
+      materialResolution: { ok: true },
+      standardizedAssets: [],
+      render: { outputPath: 'shared-run.mp4' },
+      outputPath: 'shared-run.mp4',
+      traceDir: 'shared-run-trace',
+      evaluation: { ok: true, metrics: {}, warnings: [] },
+    } as never
+  },
+})
+assert.deepEqual(receivedOverride, source.spec, 'RenderRun must consume the saved revision as its exact override')
+assert.equal(executed.draftId, draft.id)
+assert.equal(executed.draftRevision, saved.revision)
+assert.equal(executed.outputUrl?.includes(executed.renderRunId), true)
 
 console.info('[smoke-v2-timeline-draft-persistence] OK')

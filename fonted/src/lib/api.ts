@@ -125,6 +125,7 @@ export interface DirectorAgentChatPayload {
   prompt: string
   context: DirectorContext
   runtime: DirectorConversationRuntime
+  currentTurnMaterialIds?: string[]
   workspaceSessionId?: string
   turnRequestId?: string
 }

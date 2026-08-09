@@ -9,6 +9,7 @@ import {
 import { MaterialLibraryPickerDialog } from '@/components/sidebar/MaterialLibraryPickerDialog'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { browserWorkspaceSessionId } from '@/services/director/workspaceSessionLifecycle'
 import type { InputAttachment } from '@/stores/creationStore'
 import { useCreationStore } from '@/stores/creationStore'
 import { useMaterialLibraryStore } from '@/stores/materialLibraryStore'
@@ -41,7 +42,8 @@ export function ChatInput({
   const removeAttachment = useCreationStore((s) => s.removeAttachment)
   const addFromFileWithHash = useMaterialLibraryStore((s) => s.addFromFileWithHash)
 
-  const [draft, setDraft] = useState('')
+  const draft = useCreationStore((s) => s.inputText)
+  const setDraft = useCreationStore((s) => s.setInputText)
   const [libraryOpen, setLibraryOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -52,6 +54,7 @@ export function ChatInput({
     (files: FileList | File[] | null) => {
       if (!files?.length) return
       void (async () => {
+        const uploadWorkspaceSessionId = browserWorkspaceSessionId()
         for (const file of Array.from(files)) {
           const mime = file.type
           let type: 'video' | 'image' | 'audio' = 'image'
@@ -60,6 +63,7 @@ export function ChatInput({
           else if (!mime.startsWith('image/')) continue
 
           const material = await addFromFileWithHash(file)
+          if (browserWorkspaceSessionId() !== uploadWorkspaceSessionId) continue
           addAttachment({
             id: `att_${material.id}`,
             name: material.name,

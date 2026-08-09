@@ -1,4 +1,4 @@
-import { bundle } from '@remotion/bundler'
+import { bundle, webpack } from '@remotion/bundler'
 import { renderMedia, selectComposition } from '@remotion/renderer'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -17,11 +17,12 @@ const propsPath = argValue('--props')
 const outputPath = argValue('--out')
 const compositionId = argValue('--composition-id') ?? 'V2TimelineVideo'
 const browserExecutable = argValue('--browser-executable')
+const customComponentsRegistry = argValue('--custom-components-registry')
 const keepBundle = process.argv.includes('--keep-bundle')
 
 if (!propsPath || !outputPath) {
   console.error(
-    'Usage: node scripts/render-timeline-video.mjs --props <props.json> --out <video.mp4> [--composition-id V2TimelineVideo] [--browser-executable <path>]',
+    'Usage: node scripts/render-timeline-video.mjs --props <props.json> --out <video.mp4> [--composition-id V2TimelineVideo] [--browser-executable <path>] [--custom-components-registry <path>]',
   )
   process.exit(2)
 }
@@ -37,6 +38,18 @@ await rm(bundleDir, { recursive: true, force: true })
 const serveUrl = await bundle({
   entryPoint: path.join(remotionRoot, 'src', 'index.ts'),
   outDir: bundleDir,
+  webpackOverride: customComponentsRegistry
+    ? (config) => ({
+        ...config,
+        plugins: [
+          ...(config.plugins ?? []),
+          new webpack.NormalModuleReplacementPlugin(
+            /custom-components[\\/]index$/,
+            path.resolve(customComponentsRegistry),
+          ),
+        ],
+      })
+    : undefined,
   onProgress: (progress) => {
     if (progress === 1) console.log('[v2-timeline-render] bundle complete')
   },

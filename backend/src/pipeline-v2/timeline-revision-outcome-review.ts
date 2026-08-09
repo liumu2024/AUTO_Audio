@@ -2,6 +2,9 @@ import { env } from '../config/env.js'
 import { extractTextCandidate } from '../modules/agent-tools/structured-json-tool.js'
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import { VISUAL_STRATEGY_SCENE_FIELDS } from './timeline-revision-scope.js'
+import type { V2PlannerInput } from './v2-input.js'
+
+type V2TimelineAvailableComponents = NonNullable<V2PlannerInput['availableComponents']>
 
 export type V2TimelineRevisionViolationKind =
   | 'missing_requested_change'
@@ -34,11 +37,13 @@ export interface V2TimelineFactDigest {
     animation?: string
   }>
   transitions: Array<{
+    id: string
     from_scene_id: string
     to_scene_id: string
     type: string
     duration_sec: number
     custom_render_component_id?: string
+    custom_render_display_name?: string
   }>
   audio: Array<{ start_sec: number; end_sec: number; volume?: number }>
   notes: string[]
@@ -60,7 +65,7 @@ export interface V2TimelineRevisionOutcomeReview {
 
 export interface V2TimelineRevisionCommitDecision {
   ok: boolean
-  scope: 'global' | 'subtitle' | 'scene' | 'visual_strategy'
+  scope: 'global' | 'subtitle' | 'scene' | 'visual_strategy' | 'transition'
   violation?: { kind: 'missing_requested_change'; message: string }
 }
 
@@ -196,11 +201,13 @@ export function buildV2TimelineFactDigest(spec: RemotionTimelineSpecV1): V2Timel
         animation: overlay.animation,
       })),
     transitions: spec.transitions.map((transition) => ({
+      id: transition.id,
       from_scene_id: transition.from_scene_id,
       to_scene_id: transition.to_scene_id,
       type: transition.type,
       duration_sec: transition.duration_sec,
       custom_render_component_id: transition.custom_render?.component_id,
+      custom_render_display_name: transition.custom_render?.display_name,
     })),
     audio: (spec.audio ?? []).map((clip) => ({
       start_sec: clip.start_sec,
@@ -253,8 +260,9 @@ function emptyTimelineFactDigest(): V2TimelineFactDigest {
 export function evaluateV2TimelineRevisionCommit(input: {
   baseSpec: RemotionTimelineSpecV1
   candidateSpec: RemotionTimelineSpecV1
-  scope: 'global' | 'subtitle' | 'scene' | 'visual_strategy'
+  scope: 'global' | 'subtitle' | 'scene' | 'visual_strategy' | 'transition'
   sceneId?: string
+  transitionIds?: string[]
 }): V2TimelineRevisionCommitDecision {
   const comparable = (spec: RemotionTimelineSpecV1) => input.scope === 'subtitle'
     ? {
@@ -297,6 +305,12 @@ export function evaluateV2TimelineRevisionCommit(input: {
               material_jobs: spec.material_jobs.filter((job) => job.scene_id === sceneId),
             }
           })()
+        : input.scope === 'transition'
+          ? (() => {
+              const transitionIds = new Set(input.transitionIds)
+              if (transitionIds.size === 0) throw new Error('Transition revision scope requires transitionIds.')
+              return spec.transitions.filter((transition) => transitionIds.has(transition.id))
+            })()
         : input.scope === 'global'
           ? {
             canvas: spec.canvas,
@@ -360,12 +374,31 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
   prompt: string
   baseDigest: V2TimelineFactDigest
   candidateDigest: V2TimelineFactDigest
+  availableComponents?: V2TimelineAvailableComponents
   specDiff?: V2TimelineSpecDiffSummary
   confirmedContext?: string
   hasBase: boolean
   revisionScope?: string
   revisionSceneId?: string
+  revisionTransitionIds?: string[]
 }) {
+  const componentsById = new Map((input.availableComponents ?? []).map((item) => [item.id, item]))
+  const effectiveTransitions = input.candidateDigest.transitions.map((transition) => {
+    const componentId = transition.custom_render_component_id
+    if (!componentId) {
+      return { id: transition.id, effective_render: { kind: 'preset', preset: transition.type } }
+    }
+    return {
+      id: transition.id,
+      effective_render: {
+        kind: 'custom_component',
+        component_id: componentId,
+        display_name: componentsById.get(componentId)?.displayName ?? transition.custom_render_display_name,
+        effect_summary: componentsById.get(componentId)?.effectSummary,
+      },
+      fallback_preset: transition.type,
+    }
+  })
   return [
     'You are the V2 timeline revision outcome reviewer.',
     'Judge the actual candidate against the user\'s current request and the persisted base timeline.',
@@ -376,11 +409,13 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
     'Visible text must be audience copy. Do not accept technical notes, filenames, internal planning instructions, or display constraints as captions unless the user explicitly asked to show those exact words.',
     'When the request is a presentation constraint (placement, line limit, non-repetition), evaluate the candidate\'s displayed text and geometry rather than treating the constraint itself as copy.',
     'When a sample is used for inspiration, reject copied sample-specific subject matter or copy; reusable rhythm and structure are allowed.',
+    'When custom_render_component_id is present, that custom component defines the effective transition. The preset type and direction are fallback presentation settings only; do not require the custom effect name to appear in the preset type.',
     'Return JSON only. Do not reveal reasoning.',
     `User request: ${input.prompt}`,
     `Confirmed V2 conversation facts: ${input.confirmedContext ?? 'None supplied; rely on the persisted base timeline.'}`,
     `Base timeline facts: ${input.hasBase ? JSON.stringify(input.baseDigest) : 'No prior timeline; judge whether the initial plan fulfils the request.'}`,
     `Candidate timeline facts: ${JSON.stringify(input.candidateDigest)}`,
+    `Candidate effective transition facts: ${JSON.stringify(effectiveTransitions)}`,
     `Observed diff: ${JSON.stringify(buildV2TimelineRevisionDiff(input.baseDigest, input.candidateDigest))}`,
     ...(input.specDiff
       ? [
@@ -395,7 +430,7 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
         ]
       : []),
     ...(input.revisionScope
-      ? [`Tool-authorized revision boundary: scope=${input.revisionScope}${input.revisionSceneId ? `, scene_id=${input.revisionSceneId}` : ''}. Any change outside this boundary is an unrelated change.`]
+      ? [`Tool-authorized revision boundary: scope=${input.revisionScope}${input.revisionSceneId ? `, scene_id=${input.revisionSceneId}` : ''}${input.revisionTransitionIds?.length ? `, transition_ids=${input.revisionTransitionIds.join(',')}` : ''}. Any change outside this boundary is an unrelated change.`]
       : []),
   ].join('\n')
 }
@@ -460,9 +495,11 @@ export async function reviewV2TimelineRevisionOutcome(input: {
   prompt: string
   baseSpec?: RemotionTimelineSpecV1
   candidateSpec: RemotionTimelineSpecV1
+  availableComponents?: V2TimelineAvailableComponents
   confirmedContext?: string
   revisionScope?: string
   revisionSceneId?: string
+  revisionTransitionIds?: string[]
   assess?: (input: {
     prompt: string
     baseDigest: V2TimelineFactDigest
@@ -496,6 +533,7 @@ export async function reviewV2TimelineRevisionOutcome(input: {
     prompt: input.prompt,
     baseDigest,
     candidateDigest,
+    availableComponents: input.availableComponents,
     specDiff: input.baseSpec
       ? describeV2TimelineSpecDiff(input.baseSpec, input.candidateSpec)
       : undefined,
@@ -503,6 +541,7 @@ export async function reviewV2TimelineRevisionOutcome(input: {
     hasBase: Boolean(input.baseSpec),
     revisionScope: input.revisionScope,
     revisionSceneId: input.revisionSceneId,
+    revisionTransitionIds: input.revisionTransitionIds,
   })
   const requested = env.directorAgentStructuredOutputMode === 'auto'
   let raw: unknown

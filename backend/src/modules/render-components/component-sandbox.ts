@@ -16,38 +16,16 @@ const ALLOWED_IMPORT_PREFIXES = [
   '@remotion/media',
 ] as const
 
-const FORBIDDEN_MODULE_PREFIXES = [
-  'node:',
-  'fs',
-  'path',
-  'os',
-  'child_process',
-  'process',
-  'events',
-  'worker_threads',
-  'net',
-  'http',
-  'https',
-  'crypto',
-  'dns',
-  'tls',
-  'util',
-  'stream',
-  'zlib',
-] as const
-
-const FORBIDDEN_CALL_NAMES = new Set([
+const FORBIDDEN_IDENTIFIERS = new Set([
   'fetch',
   'require',
   'XMLHttpRequest',
   'WebSocket',
   'eval',
-])
-
-const FORBIDDEN_NEW_NAMES = new Set(['Function'])
-
-const FORBIDDEN_GLOBAL_ACCESS = new Set([
+  'Function',
+  'random',
   'globalThis',
+  'self',
   'process',
   'window',
   'document',
@@ -55,6 +33,26 @@ const FORBIDDEN_GLOBAL_ACCESS = new Set([
   'sessionStorage',
   'indexedDB',
   'navigator',
+  'crypto',
+  'Image',
+  'EventSource',
+  'Worker',
+  'SharedWorker',
+  'Audio',
+  'requestAnimationFrame',
+  'cancelAnimationFrame',
+  'setTimeout',
+  'clearTimeout',
+  'setInterval',
+  'clearInterval',
+  'Date',
+  'performance',
+])
+
+const FORBIDDEN_RESOURCE_TAGS = new Set(['img', 'audio', 'video', 'source', 'iframe', 'script', 'link', 'object', 'embed'])
+const FORBIDDEN_WALL_CLOCK_STYLE_PROPERTIES = new Set([
+  'animation', 'animationName', 'animationDuration', 'animationDelay',
+  'transition', 'transitionProperty', 'transitionDuration', 'transitionDelay',
 ])
 
 export interface RenderComponentAudit {
@@ -69,29 +67,39 @@ function walk(node: ts.Node, issues: string[]): void {
       issues.push(`import "${specifier}" is not on the whitelist.`)
     }
   }
+  if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+    const specifier = node.moduleSpecifier.text
+    if (!ALLOWED_IMPORT_PREFIXES.some((prefix) => specifier === prefix || specifier.startsWith(`${prefix}/`))) {
+      issues.push(`re-export from "${specifier}" is not on the whitelist.`)
+    }
+  }
   if (ts.isCallExpression(node)) {
     if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
       issues.push('dynamic import() is forbidden.')
     }
-    const name = ts.isIdentifier(node.expression) ? node.expression.text : undefined
-    if (name && FORBIDDEN_CALL_NAMES.has(name)) {
-      issues.push(`call "${name}" is forbidden.`)
-    }
-  }
-  if (ts.isNewExpression(node)) {
-    const name = ts.isIdentifier(node.expression) ? node.expression.text : undefined
-    if (name && FORBIDDEN_NEW_NAMES.has(name)) {
-      issues.push(`new ${name} is forbidden.`)
-    }
   }
   if (ts.isPropertyAccessExpression(node)) {
-    if (ts.isIdentifier(node.expression) && FORBIDDEN_GLOBAL_ACCESS.has(node.expression.text)) {
-      issues.push(`access to "${node.expression.text}" is forbidden.`)
+    if (ts.isIdentifier(node.expression) && node.expression.text === 'Math' && node.name.text === 'random') {
+      issues.push('Math.random is forbidden; Remotion output must be deterministic.')
     }
   }
-  if (ts.isElementAccessExpression(node)) {
-    if (ts.isIdentifier(node.expression) && FORBIDDEN_GLOBAL_ACCESS.has(node.expression.text)) {
-      issues.push(`access to "${node.expression.text}" is forbidden.`)
+  if (ts.isIdentifier(node) && FORBIDDEN_IDENTIFIERS.has(node.text)) {
+    issues.push(`identifier "${node.text}" is forbidden.`)
+  }
+  if (ts.isStringLiteralLike(node) && /(?:https?:)?\/\//i.test(node.text)) {
+    issues.push('network URL literals are forbidden; use authoritative timeline assets.')
+  }
+  if (
+    (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node))
+    && ts.isIdentifier(node.tagName)
+    && FORBIDDEN_RESOURCE_TAGS.has(node.tagName.text)
+  ) {
+    issues.push(`resource-loading JSX tag "${node.tagName.text}" is forbidden; use Remotion media components with timeline assets.`)
+  }
+  if (ts.isPropertyAssignment(node)) {
+    const name = ts.isIdentifier(node.name) || ts.isStringLiteral(node.name) ? node.name.text : undefined
+    if (name && FORBIDDEN_WALL_CLOCK_STYLE_PROPERTIES.has(name)) {
+      issues.push(`wall-clock CSS property "${name}" is forbidden; derive animation from Remotion frame hooks.`)
     }
   }
   if (ts.isImportEqualsDeclaration(node)) {
@@ -101,36 +109,42 @@ function walk(node: ts.Node, issues: string[]): void {
 }
 
 function hasFunctionDefaultExport(sourceFile: ts.SourceFile): boolean {
-  let found = false
-  const visit = (node: ts.Node): void => {
-    if (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) {
-      const isDefault = node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword)
-      if (isDefault) found = true
+  const functionBindings = new Set<string>()
+  for (const statement of sourceFile.statements) {
+    if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name) {
+      functionBindings.add(statement.name.text)
     }
-    if (ts.isExportAssignment(node) && node.isExportEquals !== true) {
-      const expr = node.expression
-      if (
-        ts.isFunctionExpression(expr) ||
-        ts.isArrowFunction(expr) ||
-        ts.isIdentifier(expr)
-      ) {
-        found = true
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (
+          ts.isIdentifier(declaration.name)
+          && declaration.initializer
+          && (ts.isArrowFunction(declaration.initializer)
+            || ts.isFunctionExpression(declaration.initializer)
+            || ts.isClassExpression(declaration.initializer))
+        ) functionBindings.add(declaration.name.text)
       }
     }
-    if (ts.isExportDeclaration(node) && node.exportClause === undefined && node.moduleSpecifier === undefined) {
-      const declaration = (node as ts.ExportDeclaration & { declaration?: ts.Declaration }).declaration
-      if (declaration && (ts.isFunctionDeclaration(declaration) || ts.isClassDeclaration(declaration))) {
-        found = true
-      }
-    }
-    if (ts.isExportDeclaration(node) && node.exportClause && ts.isNamedExports(node.exportClause)) {
-      // default re-exports are resolved by the bundler; allow identifier re-exports.
-      found = true
-    }
-    ts.forEachChild(node, visit)
   }
-  visit(sourceFile)
-  return found
+  return sourceFile.statements.some((statement) => {
+    if (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) {
+      return statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) === true
+    }
+    if (ts.isExportAssignment(statement) && statement.isExportEquals !== true) {
+      const expression = statement.expression
+      return ts.isFunctionExpression(expression)
+        || ts.isArrowFunction(expression)
+        || ts.isClassExpression(expression)
+        || (ts.isIdentifier(expression) && functionBindings.has(expression.text))
+    }
+    if (ts.isExportDeclaration(statement) && !statement.moduleSpecifier && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+      return statement.exportClause.elements.some((element) => {
+        const localName = element.propertyName?.text
+        return element.name.text === 'default' && Boolean(localName && functionBindings.has(localName))
+      })
+    }
+    return false
+  })
 }
 
 export function auditRenderComponentSource(source: string): RenderComponentAudit {

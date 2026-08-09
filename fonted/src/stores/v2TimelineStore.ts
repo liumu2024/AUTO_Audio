@@ -5,6 +5,7 @@ import type {
   V2TimelineDraftDto,
   V2TimelineDraftPreviewResult,
   V2TimelineDraftRunResult,
+  V2TimelineDraftRunSummaryDto,
 } from '@/lib/api'
 import type { RemotionTimelineSpecV1 } from '@shared/types/remotion-timeline-spec.v1'
 import type { V2SampleSession } from '@/lib/v2-sample-ui'
@@ -16,6 +17,7 @@ interface V2TimelineState {
   spec: RemotionTimelineSpecV1 | null
   preview: V2TimelineDraftPreviewResult | null
   result: V2TimelineDraftRunResult | null
+  renderedOutputUrl: string | null
   lastRunResolvedSpec: RemotionTimelineSpecV1 | null
   sampleSession: V2SampleSession | null
   previewAssetUrls: Record<string, string>
@@ -40,7 +42,9 @@ interface V2TimelineState {
     previewAssetUrls?: Record<string, string>,
   ) => void
   setPersistedDraft: (draft: V2TimelineDraftDto) => void
-  openPersistedDraft: (draft: Pick<V2TimelineDraftDto, 'draftId' | 'revision' | 'spec' | 'traceDir'>) => void
+  openPersistedDraft: (draft: Pick<V2TimelineDraftDto, 'draftId' | 'revision' | 'spec' | 'traceDir'> & {
+    latestRun?: V2TimelineDraftRunSummaryDto
+  }) => void
   updateSpec: (update: (spec: RemotionTimelineSpecV1) => RemotionTimelineSpecV1) => void
   selectClip: (clipId: string | null) => void
   clear: () => void
@@ -53,6 +57,7 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
   spec: null,
   preview: null,
   result: null,
+  renderedOutputUrl: null,
   lastRunResolvedSpec: null,
   sampleSession: null,
   previewAssetUrls: {},
@@ -69,6 +74,7 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       spec: null,
       preview: null,
       result: null,
+      renderedOutputUrl: null,
       lastRunResolvedSpec: null,
       sampleSession: {
         reference: { playbackUrl, name: sampleName },
@@ -90,6 +96,7 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       spec: preview.spec,
       preview,
       result: null,
+      renderedOutputUrl: null,
       lastRunResolvedSpec: null,
       sampleSession: state.sampleSession,
       previewAssetUrls: previewAssetUrls ?? state.previewAssetUrls,
@@ -108,6 +115,7 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       // to that RenderRun and must never replace the draft in the editor.
       spec: state.spec,
       result,
+      renderedOutputUrl: result.outputUrl ?? null,
       lastRunResolvedSpec: result.resolvedSpec,
       sampleSession: state.sampleSession,
       previewAssetUrls: previewAssetUrls ?? state.previewAssetUrls,
@@ -128,6 +136,13 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
             spec: draft.spec,
           }
         : state.preview,
+      result: state.result?.draftRevision === draft.revision ? state.result : null,
+      renderedOutputUrl: state.result?.draftRevision === draft.revision
+        ? state.renderedOutputUrl
+        : null,
+      lastRunResolvedSpec: state.result?.draftRevision === draft.revision
+        ? state.lastRunResolvedSpec
+        : null,
       hasLocalEdits: false,
     })),
 
@@ -139,6 +154,10 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       spec: draft.spec,
       preview: null,
       result: null,
+      renderedOutputUrl: draft.latestRun?.status === 'completed'
+        && draft.latestRun.sourceRevision === draft.revision
+        ? draft.latestRun.outputUrl ?? null
+        : null,
       lastRunResolvedSpec: null,
       sampleSession: null,
       previewAssetUrls: {},
@@ -174,6 +193,7 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       spec: null,
       preview: null,
       result: null,
+      renderedOutputUrl: null,
       lastRunResolvedSpec: null,
       sampleSession: null,
       previewAssetUrls: {},

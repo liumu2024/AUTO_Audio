@@ -16,6 +16,7 @@
     { "rootCause": "model_memory_write", "turns": ["sci_fi_concept_pitch:5", "sci_fi_memory_sedimentation:2", "sci_fi_memory_sedimentation:3", "sci_fi_memory_sedimentation:5"], "fixType": "prompt", "status": "needs_live_rerun", "verification": "live" },
     { "rootCause": "model_render_refusal", "turns": ["sci_fi_render_then_revise_then_rerender:1", "sci_fi_render_then_revise_then_rerender:7"], "fixType": "dataset", "status": "needs_real_media", "verification": "live" },
     { "rootCause": "model_state_action_missing", "turns": ["sci_fi_continuity_recovery:7"], "fixType": "prompt", "status": "needs_live_rerun", "verification": "live" },
-    { "rootCause": "retrieval_limit", "turns": ["sci_fi_memory_sedimentation:6", "sci_fi_memory_sedimentation:10"], "fixType": "known_limit", "status": "deferred", "verification": "eval:v2:formal retrieval report" }
+    { "rootCause": "retrieval_limit", "turns": ["sci_fi_memory_sedimentation:6", "sci_fi_memory_sedimentation:10"], "fixType": "known_limit", "status": "deferred", "verification": "eval:v2:formal retrieval report" },
+    { "rootCause": "transition_target_protocol_and_unverified_reply", "turns": ["manual_transition_multi_target:1"], "fixType": "protocol_and_receipt_reply", "status": "fixed_this_round", "verification": "smoke-v2-agent-tool-skill-registry;smoke-v2-scifi-scoped-edit;smoke-v2-director-multiturn" }
   ]
 }

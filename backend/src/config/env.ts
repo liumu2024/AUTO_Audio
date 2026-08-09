@@ -105,7 +105,6 @@ export const env = {
   /** Local Remotion rendering. */
   remotionRoot: readEnv('REMOTION_ROOT') ?? '../remotion',
   remotionCompositionId: readEnv('REMOTION_COMPOSITION_ID') ?? 'V2TimelineVideo',
-  remotionBrowserExecutable: readEnv('REMOTION_BROWSER_EXECUTABLE'),
   renderOutputDir: readEnv('RENDER_OUTPUT_DIR') ?? 'renders',
   directorAgentApiKey:
     readEnv('DIRECTOR_AGENT_API_KEY') ??

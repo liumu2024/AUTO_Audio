@@ -4,6 +4,8 @@ import { persist } from 'zustand/middleware'
 import { analyzeMaterialHeuristically } from '@shared/lib/material-analysis-heuristic'
 import type { MaterialAnalysis } from '@shared/types/material-analysis'
 
+import { uploadFile } from '@/lib/api'
+
 export type MaterialType = 'video' | 'image' | 'audio'
 
 export interface UserMaterial {
@@ -87,14 +89,19 @@ function refreshFileBackedMaterial(
   material: UserMaterial,
   file: File,
   fingerprint: string,
+  url: string,
 ): UserMaterial {
   return {
     ...material,
     name: file.name || material.name,
     type: inferType(file),
-    url: URL.createObjectURL(file),
+    url,
     fingerprint,
   }
+}
+
+function isPersistedMaterialUrl(url: string): boolean {
+  return !url.startsWith('blob:') && !url.startsWith('data:')
 }
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -112,7 +119,6 @@ async function contentFingerprint(file: File): Promise<string> {
 interface MaterialLibraryState {
   materials: UserMaterial[]
   addMaterial: (input: Omit<UserMaterial, 'id' | 'createdAt'>) => UserMaterial
-  addFromFile: (file: File) => UserMaterial
   addFromFileWithHash: (file: File) => Promise<UserMaterial>
   updateMaterial: (
     id: string,
@@ -158,46 +164,26 @@ export const useMaterialLibraryStore = create<MaterialLibraryState>()(
         return item
       },
 
-      addFromFile: (file) => {
-        const fingerprint = fileFingerprint(file)
-        const existing = get().materials.find((item) => item.fingerprint === fingerprint)
-        if (existing) {
-          const refreshed = refreshFileBackedMaterial(existing, file, fingerprint)
-          set((s) => ({
-            materials: s.materials.map((item) => (item.id === existing.id ? refreshed : item)),
-          }))
-          return refreshed
-        }
-        const url = URL.createObjectURL(file)
-        return get().addMaterial({
-          name: file.name,
-          type: inferType(file),
-          url,
-          tags: [],
-          fingerprint,
-        })
-      },
-
       addFromFileWithHash: async (file) => {
         const legacyFingerprint = fileFingerprint(file)
         const legacyExisting = get().materials.find((item) => item.fingerprint === legacyFingerprint)
-        if (legacyExisting) {
-          const refreshed = refreshFileBackedMaterial(legacyExisting, file, legacyFingerprint)
-          set((s) => ({
-            materials: s.materials.map((item) => (item.id === legacyExisting.id ? refreshed : item)),
-          }))
-          return refreshed
-        }
+        if (legacyExisting && isPersistedMaterialUrl(legacyExisting.url)) return legacyExisting
         const fingerprint = await contentFingerprint(file)
         const existing = get().materials.find((item) => item.fingerprint === fingerprint)
-        if (existing) {
-          const refreshed = refreshFileBackedMaterial(existing, file, fingerprint)
+        if (existing && isPersistedMaterialUrl(existing.url)) return existing
+
+        const uploaded = await uploadFile(file)
+        const url = uploaded.publication?.externallyReachable
+          ? uploaded.publicUrl ?? uploaded.url
+          : uploaded.localUrl ?? uploaded.url
+        const matched = existing ?? legacyExisting
+        if (matched) {
+          const refreshed = refreshFileBackedMaterial(matched, file, fingerprint, url)
           set((s) => ({
-            materials: s.materials.map((item) => (item.id === existing.id ? refreshed : item)),
+            materials: s.materials.map((item) => (item.id === matched.id ? refreshed : item)),
           }))
           return refreshed
         }
-        const url = URL.createObjectURL(file)
         return get().addMaterial({
           name: file.name,
           type: inferType(file),

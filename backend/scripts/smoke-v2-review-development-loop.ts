@@ -28,6 +28,7 @@ const rootCauses = new Set([
   'eval_exact_match', 'judge_rubric', 'recovery_semantics', 'model_reconfirm',
   'model_intent_no_patch', 'model_scope_choice', 'model_requirement_memory_mix',
   'model_memory_write', 'model_render_refusal', 'model_state_action_missing', 'retrieval_limit',
+  'transition_target_protocol_and_unverified_reply',
 ])
 const statuses = new Set(['fixed_this_round', 'needs_live_rerun', 'needs_real_media', 'deferred'])
 assert.ok(ledger.groups.length >= 10, 'ledger must carry the live failure groups')

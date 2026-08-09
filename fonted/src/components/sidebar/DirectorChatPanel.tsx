@@ -8,6 +8,7 @@ import {
   getDirectorWorkspaceSession,
   getV2TimelineDraft,
   type DirectorAgentStreamEvent,
+  type V2TimelineDraftRunResult,
 } from '@/lib/api'
 import {
   summarizeDirectorSessionState,
@@ -16,8 +17,8 @@ import {
 import { buildDirectorContextFromUI } from '@/services/director/directorDecisionContext'
 import { activateV2DraftWorkspace } from '@/services/director/v2DirectorDraftWorkspace'
 import {
+  browserWorkspaceSessionId,
   rememberActiveDirectorWorkspaceSessionId,
-  resolveActiveDirectorWorkspaceSessionId,
   restoreWorkspaceDraft,
 } from '@/services/director/workspaceSessionLifecycle'
 import { useCreationStore, type InputAttachment } from '@/stores/creationStore'
@@ -30,14 +31,6 @@ import type {
   DirectorSessionState,
   DirectorTimelineSnapshot,
 } from '@shared/types/director-state'
-
-function browserWorkspaceSessionId(): string {
-  return resolveActiveDirectorWorkspaceSessionId({
-    sessionStorage: window.sessionStorage,
-    legacyStorage: window.localStorage,
-    createId: () => `v2_director_${crypto.randomUUID()}`,
-  })
-}
 
 function attachmentTypeFromMime(mime: string): InputAttachment['type'] | null {
   if (mime.startsWith('video/')) return 'video'
@@ -81,6 +74,17 @@ function syncDirectorContext(input: {
 function shouldShowThoughtSurface(event: DirectorAgentStreamEvent) {
   // Surface routing is diagnostic-only. It is not a user-visible workflow.
   return event.type === 'surface' && event.mode === 'repair'
+}
+
+function isTimelineDraftRunResult(value: unknown): value is V2TimelineDraftRunResult {
+  if (!value || typeof value !== 'object') return false
+  const result = value as Partial<V2TimelineDraftRunResult>
+  return typeof result.draftId === 'string'
+    && typeof result.draftRevision === 'number'
+    && typeof result.renderRunId === 'string'
+    && typeof result.outputPath === 'string'
+    && typeof result.traceDir === 'string'
+    && Boolean(result.resolvedSpec)
 }
 
 function eventThought(event: DirectorAgentStreamEvent): string | null {
@@ -204,7 +208,6 @@ function currentRecoverySuggestions() {
 }
 
 export function DirectorChatPanel() {
-  const setInputText = useCreationStore((s) => s.setInputText)
   const clearInputTray = useCreationStore((s) => s.clearInputTray)
 
   const isSending = useDirectorChatStore((s) => s.isSending)
@@ -223,19 +226,21 @@ export function DirectorChatPanel() {
   const dragDepthRef = useRef(0)
   const abortRef = useRef<AbortController | null>(null)
   const streamCancelRef = useRef(false)
-  const workspaceSessionIdRef = useRef<string | null>(null)
-
   useEffect(() => {
     const workspaceSessionId = browserWorkspaceSessionId()
-    workspaceSessionIdRef.current = workspaceSessionId
     void getDirectorWorkspaceSession(workspaceSessionId)
       .then(async (session) => {
         if (!session) return
+        if (browserWorkspaceSessionId() !== workspaceSessionId) return
         useDirectorContextStore.getState().replaceContext(session.state.context)
         await restoreWorkspaceDraft({
           workspace: session.state,
           loadDraft: async (draftId) => (await getV2TimelineDraft(draftId)).draft,
-          openDraft: activateV2DraftWorkspace,
+          openDraft: (draft) => {
+            if (browserWorkspaceSessionId() === workspaceSessionId) {
+              activateV2DraftWorkspace(draft)
+            }
+          },
         })
       })
       .catch(() => {
@@ -249,10 +254,12 @@ export function DirectorChatPanel() {
     const store = useCreationStore.getState()
 
     void (async () => {
+      const uploadWorkspaceSessionId = browserWorkspaceSessionId()
       for (const file of Array.from(files)) {
         const type = attachmentTypeFromMime(file.type)
         if (!type) continue
         const material = await useMaterialLibraryStore.getState().addFromFileWithHash(file)
+        if (browserWorkspaceSessionId() !== uploadWorkspaceSessionId) continue
 
         store.addAttachment({
           id: `att_${material.id}`,
@@ -376,7 +383,6 @@ export function DirectorChatPanel() {
         ...messageAttachments,
       ],
     })
-    setInputText(prompt)
     const thinkingId = addProgressMessage('我在理解你的意思，整理创作意图、可选参考和当前时间线...')
     activeProgressMessageIdRef.current = thinkingId
 
@@ -388,14 +394,21 @@ export function DirectorChatPanel() {
 
     let directMessage: string | null = null
     const debugThoughts: string[] = []
+    const requestWorkspaceSessionId = browserWorkspaceSessionId()
 
     try {
       await streamDirectorChat(
         {
           prompt,
+          ...(messageAttachments.length
+            ? {
+                currentTurnMaterialIds: messageAttachments.map((item) =>
+                  item.materialId ?? item.id.replace(/^att_/, ''),
+                ),
+              }
+            : {}),
           turnRequestId: crypto.randomUUID(),
-          workspaceSessionId:
-            workspaceSessionIdRef.current ?? browserWorkspaceSessionId(),
+          workspaceSessionId: requestWorkspaceSessionId,
           context: directorContext,
           runtime: {
             backendEnabled: true,
@@ -421,6 +434,7 @@ export function DirectorChatPanel() {
           },
         },
         (event) => {
+          if (browserWorkspaceSessionId() !== requestWorkspaceSessionId) return
           if (event.type === 'surface') {
             if (shouldShowThoughtSurface(event)) {
               debugThoughts.push(
@@ -456,7 +470,7 @@ export function DirectorChatPanel() {
           if (event.type === 'tool_progress') {
             const elapsedLabel = event.elapsedMs == null
               ? ''
-              : ` · ${(event.elapsedMs / 1000).toFixed(1)}s`
+              : ` · 总用时 ${(event.elapsedMs / 1000).toFixed(1)} 秒`
             useTaskStore.getState().updateProgress(
               event.progress,
               `${event.message}${elapsedLabel}`,
@@ -465,7 +479,10 @@ export function DirectorChatPanel() {
           }
           if (event.type === 'tool_result') {
             if (event.toolId === 'timeline.render') {
-              if (event.ok) useTaskStore.getState().completeTask()
+              if (event.ok && isTimelineDraftRunResult(event.result)) {
+                useV2TimelineStore.getState().setResult(event.result, prompt)
+                useTaskStore.getState().completeTask()
+              }
               else useTaskStore.getState().setFailed(event.summary)
             }
             if (event.ok && event.draft) {
@@ -476,14 +493,12 @@ export function DirectorChatPanel() {
           }
           if (event.type === 'assistant_reply') directMessage = event.message
           if (event.type === 'workspace_snapshot') {
-            workspaceSessionIdRef.current = event.workspaceSessionId
             useDirectorContextStore.getState().replaceContext(event.state.context)
           }
           if (event.type === 'state_update') {
             useDirectorContextStore.getState().setDirectorState(event.state)
           }
           if (event.type === 'workspace_session') {
-            workspaceSessionIdRef.current = event.workspaceSessionId
             rememberActiveDirectorWorkspaceSessionId(
               window.sessionStorage,
               event.workspaceSessionId,

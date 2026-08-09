@@ -37,6 +37,8 @@
     "test:smoke:v2:remotion-root-composition": "tsx scripts/smoke-v2-remotion-root-composition.ts",
     "test:smoke:v2:director-routing": "npm run build:shared && tsx scripts/smoke-v2-director-routing.ts",
     "test:smoke:v2:agent-tools-skills": "npm run build:shared && tsx scripts/smoke-v2-agent-tool-skill-registry.ts",
+    "test:smoke:v2:render-component-authoring": "npm run build:shared && tsx scripts/smoke-v2-render-component-authoring-agent.ts",
+    "eval:v2:render-component-authoring": "tsx scripts/live-v2-render-component-authoring.ts",
     "test:smoke:v2:director-skill-tool-loop": "tsx scripts/smoke-v2-director-skill-tool-loop.ts",
     "test:smoke:v2:structured-model-protocol": "tsx scripts/smoke-v2-structured-model-protocol.ts",
     "test:smoke:v2:director-reply-quality": "tsx scripts/smoke-v2-director-reply-quality-gate.ts",

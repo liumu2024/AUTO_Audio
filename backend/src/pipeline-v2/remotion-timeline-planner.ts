@@ -352,7 +352,7 @@ export function buildDeterministicRemotionTimelineSpec(
             .filter(Boolean)
             .join('；'),
           output_asset_id: `generated_${sceneId}`,
-          input_image_url: input.inputImageUrl,
+          input_asset_id: input.imageSrc || input.inputImageUrl ? 'planner_image_asset' : undefined,
           provider: 'ark_seedance',
           fallback_kind: 'blank_card',
         })
@@ -429,7 +429,6 @@ export function buildDeterministicRemotionTimelineSpec(
     material_jobs: materialJobs,
     render_policy: {
       renderer: 'remotion_timeline',
-      allow_custom_component: false,
       fallback_renderer: 'overlay_compose',
     },
     notes: [

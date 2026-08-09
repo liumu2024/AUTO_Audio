@@ -10,6 +10,7 @@ process.env.V2_DIRECTOR_SESSION_DIR = path.join('tmp', 'v2-director-smoke-sessio
 
 const { createDefaultDirectorSlots } = await import('../../shared/lib/director-understanding.js')
 const { streamDirectorAgentChat } = await import('../src/modules/director-agent/director-agent.service.js')
+const { createV2TimelineDraftRepository } = await import('../src/pipeline-v2/timeline-draft-repository.js')
 const { env } = await import('../src/config/env.js')
 
 assert.equal(env.directorAgentEnabled, true)
@@ -83,7 +84,7 @@ const replies = [
   {
     id: 'resp_8',
     output_text: JSON.stringify({
-      replyDraft: 'apply isolated actions', intent: 'create', creativeConfigDelta: {},
+      replyDraft: '当前草稿已完成修订。', intent: 'create', creativeConfigDelta: {},
       stateActions: [{ ref: 'requirements', kind: 'requirements.update', operations: [{ operation: 'revoke', targetRequirementId: 'missing_requirement' }] }],
       memoryActions: [{
         ref: 'invalid_memory', operation: 'add', scopeType: 'user',
@@ -108,9 +109,30 @@ const replies = [
       skillRequests: [], toolRequests: [], missingInformation: [],
     }),
   },
+  {
+    id: 'resp_10',
+    output_text: JSON.stringify({
+      replyDraft: '我会创作并应用这个转场。', intent: 'revise', creativeConfigDelta: {},
+      stateActions: [], memoryActions: [], skillRequests: [],
+      toolRequests: [
+        {
+          ref: 'author_transition', toolId: 'render.author', skillId: 'v2-render-delivery',
+          arguments: { purpose: 'transition', displayName: '粒子转场', effectBrief: '粒子转场', acceptanceCriteria: ['粒子在中间帧明显散开'] },
+          requestedMode: 'preview', dependsOn: [],
+        },
+        {
+          ref: 'apply_transition', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring',
+          arguments: { scope: 'transition', transitionIds: ['transition_random'], instruction: '使用刚创作的粒子转场' },
+          requestedMode: 'preview', dependsOn: ['author_transition'],
+        },
+      ],
+      missingInformation: [],
+    }),
+  },
 ]
 const originalFetch = globalThis.fetch
 let dispatchCount = 0
+const authorizedDraftComponentsSeen: string[][] = []
 globalThis.fetch = async (_url, init) => {
   requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
   const reply = replies.shift()
@@ -132,19 +154,67 @@ async function turn(
     workspaceSessionId: sessionId,
     userId: 1,
   }, {
-    dispatchTool: async ({ stage }) => {
+    dispatchTool: async (dispatchInput) => {
+      const { stage } = dispatchInput
       dispatchCount += 1
+      if (stage.toolRequest.ref === 'apply_transition') {
+        authorizedDraftComponentsSeen.push(dispatchInput.authorizedDraftComponentIds ?? [])
+      }
       const ok = !failedRefs.has(stage.toolRequest.ref)
       return {
         callId: stage.toolRequest.callId,
         toolId: stage.toolRequest.toolId,
         ok,
         summary: ok ? 'V2 正式渲染已完成。' : 'mock tool failure',
+        output: stage.toolRequest.toolId === 'render.author'
+          ? {
+              componentId: 'cmp_server_generated',
+              purpose: 'transition',
+              displayName: '粒子转场',
+              effectSummary: '粒子在转场中间帧散开',
+              status: 'promoted',
+            }
+          : undefined,
       }
     },
   })) events.push(event)
   return events
 }
+
+const restoredDraftRepository = createV2TimelineDraftRepository()
+const restoredDraft = await restoredDraftRepository.createDraft({
+  userId: 1,
+  plannerInput: {
+    taskId: `director_restore_${Date.now()}`,
+    prompt: 'restore an existing timeline',
+    creationMode: 'text_to_video',
+    plannerMode: 'deterministic',
+  },
+  spec: {
+    schema_version: 'remotion_timeline_spec.v1',
+    task_id: `director_restore_${Date.now()}`,
+    canvas: { width: 1080, height: 1920, fps: 30, duration_sec: 2 },
+    assets: [],
+    scenes: [
+      { id: 'restore_scene_1', type: 'remotion_card', start_sec: 0, duration_sec: 1 },
+      { id: 'restore_scene_2', type: 'remotion_card', start_sec: 1, duration_sec: 1 },
+    ],
+    transitions: [{
+      id: 'transition_restore_target',
+      from_scene_id: 'restore_scene_1',
+      to_scene_id: 'restore_scene_2',
+      type: 'fade',
+      duration_sec: 0.3,
+    }],
+    overlays: [],
+    audio: [],
+    material_jobs: [],
+    render_policy: { renderer: 'remotion_timeline' },
+  },
+  plannerSource: 'deterministic',
+  review: {},
+  traceDir: 'director-restore-smoke',
+})
 
 try {
   const created = await turn('请生成一版 15 秒的校园介绍方案')
@@ -199,18 +269,28 @@ try {
   assert.equal((recovered.find((event) => event.type === 'workspace_session') as { state: { pendingQuestion?: unknown } }).state.pendingQuestion, undefined)
   const executable = await turn('请渲染当前方案', {
     ...baseContext,
-    currentTimeline: { kind: 'v2_timeline', status: 'saved', draftId: 'draft_1', currentRevision: 2 },
+    currentTimeline: {
+      kind: 'v2_timeline',
+      status: 'saved',
+      draftId: restoredDraft.id,
+      currentRevision: restoredDraft.revision,
+    },
   }, { hasV2Timeline: true, v2SceneCount: 3 })
+  assert.match(
+    JSON.stringify(requests.at(-1)),
+    /transition_restore_target/,
+    'a restored workspace must provide persisted transition ids to the Director model',
+  )
   assert.equal(executable.some((event) => event.type === 'tool_started'), true)
   assert.equal(dispatchCount, 1)
   assert.match(
     String((executable.find((event) => event.type === 'assistant_reply') as { message: string }).message),
     /要求变更未通过校验.*渲染已完成/,
   )
-  assert.match(
+  assert.doesNotMatch(
     String((executable.find((event) => event.type === 'assistant_reply') as { message: string }).message),
     /我会提交当前已确认版本渲染/,
-    'tool turns must keep the model\'s natural reply instead of replacing it with templates',
+    'tool turns must use receipts instead of the pre-execution model draft',
   )
   const unsaved = [] as Array<{ type: string; [key: string]: unknown }>
   for await (const event of streamDirectorAgentChat({
@@ -245,6 +325,11 @@ try {
     ],
   )
   assert.equal(dispatchCount, 3)
+  assert.doesNotMatch(
+    String((isolated.find((event) => event.type === 'assistant_reply') as { message: string }).message),
+    /当前草稿已完成修订/,
+    'failed or partial tool turns must discard unverified model success claims',
+  )
   const isolatedSession = isolated.find((event) => event.type === 'workspace_session') as { traceDir: string }
   const isolatedTrace = JSON.parse(await readFile(
     path.join(isolatedSession.traceDir, '00-director-turn', 'turn-result.json'),
@@ -258,9 +343,15 @@ try {
     (negatedPersistence.find((event) => event.type === 'assistant_reply') as { message: string }).message,
     '当前是讨论模式；我不会记录任何偏好，也不会修改草稿。',
   )
-  assert.equal(requests.length, 9)
+  await turn('创作一个粒子转场并应用到当前转场', {
+    ...baseContext,
+    currentTimeline: { kind: 'v2_timeline', status: 'saved', draftId: 'draft_1', currentRevision: 2 },
+  }, { hasV2Timeline: true, v2SceneCount: 3 })
+  assert.deepEqual(authorizedDraftComponentsSeen, [['cmp_server_generated']])
+  assert.equal(requests.length, 10)
 } finally {
   globalThis.fetch = originalFetch
+  await restoredDraftRepository.deleteDraft(restoredDraft.id, 1)
 }
 
 console.log('[smoke] V2 director multi-turn session passed')

@@ -7,7 +7,10 @@ process.env.RENDER_COMPONENTS_DIR = mkdtempSync(path.join(os.tmpdir(), 'render-c
 
 import { createDefaultDirectorSlots } from '../../shared/lib/director-understanding.js'
 import { validateRemotionTimelineSpec } from '../../shared/lib/remotion-timeline-validator.js'
-import type { RemotionTimelineSpecV1 } from '../../shared/types/remotion-timeline-spec.v1.js'
+import {
+  REMOTION_TIMELINE_TRANSITION_TYPES,
+  type RemotionTimelineSpecV1,
+} from '../../shared/types/remotion-timeline-spec.v1.js'
 import { createDirectorWorkspaceState } from '../src/modules/director-agent/director-workspace-session.js'
 import {
   listV2AgentSkillCards,
@@ -32,6 +35,8 @@ assert.equal(findV2AgentTool('timeline.patch')?.requiresExplicitAuthorization, f
 assert.equal(findV2AgentTool('timeline.render')?.requiresExplicitAuthorization, true)
 assert.equal(listV2AgentToolCards().find((tool) => tool.id === 'timeline.patch')?.effectiveMode, 'preview')
 assert.equal(listV2AgentToolCards().find((tool) => tool.id === 'timeline.render')?.effectiveMode, 'execute')
+assert.deepEqual(REMOTION_TIMELINE_TRANSITION_TYPES, ['cut', 'fade', 'slide', 'wipe', 'light_flash', 'blur'])
+assert.match(listV2AgentToolCards().find((tool) => tool.id === 'timeline.patch')?.summary ?? '', /blur/)
 assert.ok(listV2AgentSkillCards().some((skill) => skill.id === 'subtitle-track-authoring'))
 for (const tool of listV2AgentToolCards()) {
   for (const skillId of tool.skills) {
@@ -68,18 +73,49 @@ assert.equal(validateV2AgentToolRequest({
   callId: 'author_001',
   toolId: 'render.author',
   skillId: 'v2-render-delivery',
-  arguments: { source: 'export default function C() { return null }' },
+  arguments: {
+    purpose: 'transition',
+    displayName: '中心裂开',
+    effectBrief: '画面从中心裂开并露出下一镜头',
+    acceptanceCriteria: ['进入方向从闭合到完全展开', '退出方向从完全展开到闭合'],
+  },
   requestedMode: 'preview',
 }).ok, true)
+assert.equal(validateV2AgentToolRequest({
+  callId: 'author_bad_missing_name',
+  toolId: 'render.author',
+  skillId: 'v2-render-delivery',
+  arguments: {
+    purpose: 'transition',
+    effectBrief: '画面从中心裂开并露出下一镜头',
+    acceptanceCriteria: ['进入方向从闭合到完全展开'],
+  },
+  requestedMode: 'preview',
+}).ok, false)
 assert.equal(validateV2AgentToolRequest({
   callId: 'author_bad_001',
   toolId: 'render.author',
   skillId: 'v2-render-delivery',
-  arguments: {},
+  arguments: { purpose: 'transition', displayName: '', effectBrief: '', acceptanceCriteria: [] },
+  requestedMode: 'preview',
+}).ok, false)
+assert.equal(validateV2AgentToolRequest({
+  callId: 'author_bad_002',
+  toolId: 'render.author',
+  skillId: 'v2-render-delivery',
+  arguments: {
+    purpose: 'transition',
+    displayName: '裂开展开',
+    effectBrief: '裂开展开',
+    acceptanceCriteria: ['画面从中心裂开'],
+    source: 'export default function C() { return null }',
+  },
   requestedMode: 'preview',
 }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_vs_002', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'visual_strategy' }, requestedMode: 'preview' }).ok, true)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_bad_003', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'global', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, false)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_transition_001', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring', arguments: { scope: 'transition', transitionIds: ['transition_random_a', 'transition_random_b'], instruction: '只修改这两个转场' }, requestedMode: 'preview' }).ok, true)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_transition_002', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring', arguments: { scope: 'transition', transitionIds: [] }, requestedMode: 'preview' }).ok, false)
 assert.ok(listV2AgentToolCards().find((tool) => tool.id === 'timeline.patch')?.inputSchema)
 
 const callIdContext = {
@@ -223,67 +259,6 @@ const duplicateResult = await dispatchV2AgentTool({
 assert.equal(duplicateResult.ok, false)
 assert.match(duplicateResult.summary, /重复/)
 
-const validAuthorSource = `
-import { AbsoluteFill } from 'remotion'
-export default function CustomScene(props) {
-  return <AbsoluteFill style={{ background: props.params?.color ?? '#09090b' }} />
-}
-`
-const authorStage = {
-  stage: 'authoring' as const,
-  primarySkill: { id: 'v2-render-delivery' },
-  toolRequest: {
-    callId: 'author_ok_001',
-    ref: 'author_ok',
-    toolId: 'render.author',
-    skillId: 'v2-render-delivery',
-    arguments: { source: validAuthorSource, description: 'custom scene' },
-    requestedMode: 'preview',
-    dependsOn: [],
-  },
-  references: [],
-}
-const authorResult = await dispatchV2AgentTool({
-  stage: authorStage,
-  prompt: '注册一个自定义场景组件',
-  userId: 1,
-  context: duplicateContext,
-  runtime: {
-    backendEnabled: true, sampleUrl: '', isSampleParsed: false,
-    hasVisualMaterial: false, materialCount: 0,
-  },
-  workspace: {
-    ...createDirectorWorkspaceState({ context: duplicateContext }),
-  },
-})
-assert.equal(authorResult.ok, true)
-assert.equal(typeof authorResult.output?.componentId, 'string')
-
-const maliciousAuthorStage = {
-  ...authorStage,
-  toolRequest: {
-    ...authorStage.toolRequest,
-    callId: 'author_bad_002',
-    arguments: { source: `export default function Bad() { fetch('https://example.com') }` },
-  },
-}
-const maliciousAuthorResult = await dispatchV2AgentTool({
-  stage: maliciousAuthorStage,
-  prompt: '注册一个恶意组件',
-  userId: 1,
-  context: duplicateContext,
-  runtime: {
-    backendEnabled: true, sampleUrl: '', isSampleParsed: false,
-    hasVisualMaterial: false, materialCount: 0,
-  },
-  workspace: {
-    ...createDirectorWorkspaceState({ context: duplicateContext }),
-  },
-})
-assert.equal(maliciousAuthorResult.ok, false)
-assert.equal(maliciousAuthorResult.gate, 'component_sandbox')
-assert.match(maliciousAuthorResult.summary, /审计未通过/)
-
 assert.equal(evaluateV2AgentToolReadiness({
   toolId: 'timeline.render', context: duplicateContext,
   runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: false, materialCount: 0 },
@@ -313,6 +288,7 @@ const plannerPrompt = buildV2TimelinePlannerPrompt({
 assert.match(plannerPrompt, /Audience-facing captions/)
 assert.match(plannerPrompt, /official\.remotion-captions/)
 assert.match(plannerPrompt, new RegExp(executionPlan.stages[0]!.toolRequest.callId))
+assert.match(plannerPrompt, /Allowed transition types: cut, fade, slide, wipe, light_flash, blur\./)
 
 const base: RemotionTimelineSpecV1 = {
   schema_version: 'remotion_timeline_spec.v1', task_id: 'subtitle_track_smoke',
@@ -324,7 +300,7 @@ const base: RemotionTimelineSpecV1 = {
     { id: 'caption_1', type: 'caption', scene_id: 'scene_1', track_id: 'caption_main', text: '第一句', start_sec: 0.5, end_sec: 1.8, x_pct: 50, y_pct: 82, max_lines: 2 },
     { id: 'caption_2', type: 'caption', scene_id: 'scene_1', track_id: 'caption_main', text: '第二句', start_sec: 1.65, end_sec: 3, x_pct: 50, y_pct: 82, max_lines: 2 },
   ],
-  audio: [], material_jobs: [], render_policy: { renderer: 'remotion_timeline', allow_custom_component: false },
+  audio: [], material_jobs: [], render_policy: { renderer: 'remotion_timeline' },
 }
 assert.equal(validateRemotionTimelineSpec(base).ok, true)
 const invalid = structuredClone(base)

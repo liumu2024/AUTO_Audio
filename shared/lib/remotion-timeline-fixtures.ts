@@ -148,7 +148,6 @@ export function createRemotionTimelineFixture(input: {
     ],
     render_policy: {
       renderer: 'remotion_timeline',
-      allow_custom_component: false,
       fallback_renderer: 'overlay_compose',
     },
     notes: [

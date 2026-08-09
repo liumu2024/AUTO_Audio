@@ -34,7 +34,11 @@ const base = createRemotionTimelineFixture({
 
 const spec = {
   ...base,
-  assets: base.assets.filter((asset) => asset.id !== 'main_video_asset'),
+  assets: base.assets
+    .filter((asset) => asset.id !== 'main_video_asset')
+    .map((asset) => asset.id === 'hero_image_asset'
+      ? { ...asset, src: 'https://cdn.example.com/source-landscape.png' }
+      : asset),
   overlays: [],
   scenes: base.scenes.map((scene) =>
     scene.id === 'scene_001'
@@ -42,6 +46,11 @@ const spec = {
           ...scene,
           type: 'ai_video' as const,
           asset_id: 'generated_scene_001',
+          creative_intent: {
+            title: 'Generated landscape motion',
+            description: 'Keep the supplied landscape composition and add a moving subject in the sky.',
+            material_label: 'Source landscape',
+          },
         }
       : scene,
   ),
@@ -52,6 +61,7 @@ const spec = {
       type: 'generate_video' as const,
       status: 'planned' as const,
       prompt: 'Generate a short product scene',
+      input_asset_id: 'hero_image_asset',
       output_asset_id: 'generated_scene_001',
       fallback_asset_id: undefined,
       fallback_kind: 'none' as const,
@@ -60,9 +70,16 @@ const spec = {
   ],
 }
 
+let boundGenerationImageUrl: string | undefined
+const staticAdapter = createStaticMaterialGenerationAdapter({ videoAssetPath: sampleVideo })
 const resolved = await resolveRemotionTimelineMaterialJobs({
   spec,
-  adapter: createStaticMaterialGenerationAdapter({ videoAssetPath: sampleVideo }),
+  adapter: {
+    async generate(input) {
+      boundGenerationImageUrl = input.inputImageUrl
+      return staticAdapter.generate(input)
+    },
+  },
   outputDir,
 })
 
@@ -73,7 +90,33 @@ assertV2MaterialResolutionContract({
   expectedGeneratedJobCount: 1,
 })
 assert.equal(resolved.report.generation_trace[0]?.provider_task_id, `static:${path.basename(sampleVideo)}`)
+assert.equal(boundGenerationImageUrl, 'https://cdn.example.com/source-landscape.png')
+assert.equal(resolved.report.generation_trace[0]?.input_asset_id, 'hero_image_asset')
 assert.equal(validateRemotionTimelineSpec(resolved.spec).ok, true)
+
+const invalidInputAsset = validateRemotionTimelineSpec({
+  ...spec,
+  material_jobs: spec.material_jobs.map((job) => ({ ...job, input_asset_id: 'missing_image_asset' })),
+})
+assert.equal(invalidInputAsset.ok, false)
+assert.equal(
+  invalidInputAsset.issues.some((issue) => issue.path.endsWith('.input_asset_id')),
+  true,
+  'image-conditioned generation must reference an existing image asset',
+)
+
+const missingMaterialExplanation = validateRemotionTimelineSpec({
+  ...spec,
+  scenes: spec.scenes.map((scene) => scene.id === 'scene_001'
+    ? { ...scene, creative_intent: undefined }
+    : scene),
+})
+assert.equal(missingMaterialExplanation.ok, false)
+assert.equal(
+  missingMaterialExplanation.issues.some((issue) => issue.path.endsWith('.creative_intent.description')),
+  true,
+  'an image-conditioned generated scene must explain how the source material is used',
+)
 
 const blankCardFallbackSpec = {
   ...spec,

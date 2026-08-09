@@ -45,7 +45,7 @@ const withComponents = buildDirectorModelPrompt({
   prompt: '给第五段加一个粒子消散效果。',
   context,
   runtime: runtime(),
-  promotedComponents: [{ id: 'cmp_blur_dissolve', purpose: 'transition', description: '模糊溶解转场' }],
+  promotedComponents: [{ id: 'cmp_blur_dissolve', purpose: 'transition', displayName: '模糊溶解', effectSummary: '模糊溶解转场' }],
 })
 assert.match(withComponents, /renderedComponents/)
 assert.match(withComponents, /cmp_blur_dissolve/)

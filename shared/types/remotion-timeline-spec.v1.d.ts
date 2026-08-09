@@ -49,7 +49,8 @@ export interface RemotionTimelineScene {
     /** Model-authored sandboxed render override; takes precedence over type. */
     custom_render?: RemotionCustomRenderRef;
 }
-export type RemotionTimelineTransitionType = 'cut' | 'fade' | 'slide' | 'wipe' | 'light_flash';
+export declare const REMOTION_TIMELINE_TRANSITION_TYPES: readonly ["cut", "fade", "slide", "wipe", "light_flash", "blur"];
+export type RemotionTimelineTransitionType = typeof REMOTION_TIMELINE_TRANSITION_TYPES[number];
 export type RemotionTimelineTransitionDirection = 'from-left' | 'from-right' | 'from-top' | 'from-bottom';
 export interface RemotionTimelineTransition {
     id: string;
@@ -58,19 +59,17 @@ export interface RemotionTimelineTransition {
     type: RemotionTimelineTransitionType;
     duration_sec: number;
     direction?: RemotionTimelineTransitionDirection;
-    /** Model-authored sandboxed transition override (enter/exit components). */
+    /** Model-authored sandboxed transition override (single presentation component). */
     custom_render?: RemotionTransitionCustomRender;
 }
 /** Reference to a sandboxed, model-authored render component. */
 export interface RemotionCustomRenderRef {
     component_id: string;
+    /** Server-bound display label captured from the registered component. */
+    display_name?: string;
     params?: Record<string, unknown>;
 }
-export interface RemotionTransitionCustomRender {
-    enter_component_id?: string;
-    exit_component_id?: string;
-    params?: Record<string, unknown>;
-}
+export type RemotionTransitionCustomRender = RemotionCustomRenderRef;
 export type RemotionTimelineOverlayType = 'caption' | 'title' | 'label' | 'shape' | 'image_badge' | 'light_sweep';
 export type RemotionTimelineOverlayAnimation = 'none' | 'fade' | 'slide_up_fade' | 'pop' | 'pulse' | 'sweep';
 /** Defaults shared by caption overlays in the same V2 subtitle track. */
@@ -116,6 +115,9 @@ export interface RemotionTimelineMaterialJob {
     type: 'reuse_asset' | 'generate_video' | 'request_user_material';
     status: 'planned' | 'fulfilled' | 'failed';
     prompt?: string;
+    /** Server-resolved image asset used to condition a generation job. */
+    input_asset_id?: string;
+    /** @deprecated Historical persisted jobs only. New planners must use input_asset_id. */
     input_image_url?: string;
     output_asset_id?: string;
     fallback_asset_id?: string;
@@ -131,7 +133,6 @@ export interface RemotionTimelineAudioClip {
 }
 export interface RemotionTimelineRenderPolicy {
     renderer: 'remotion_timeline';
-    allow_custom_component: false;
     fallback_renderer?: 'overlay_compose';
 }
 export interface RemotionTimelineSpecV1 {

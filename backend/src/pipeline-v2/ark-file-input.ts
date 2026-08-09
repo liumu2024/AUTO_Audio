@@ -56,7 +56,7 @@ function authorizationHeaders(): HeadersInit {
  * understanding can use a file_id, while image-to-video still needs a public
  * URL supplied by the asset publisher.
  */
-export async function uploadV2PlannerImageFile(input: {
+export async function uploadArkImageFile(input: {
   localPath: string
   originalName?: string
 }): Promise<ArkFileInput> {
@@ -87,7 +87,7 @@ export async function uploadV2PlannerImageFile(input: {
   return { fileId, sourcePath, originalName }
 }
 
-export async function waitForV2PlannerFileReady(fileId: string): Promise<void> {
+export async function waitForArkImageFileReady(fileId: string): Promise<void> {
   const started = Date.now()
   while (Date.now() - started < env.directorAgentFileReadyTimeoutMs) {
     const response = await fetch(`${filesUrl()}/${encodeURIComponent(fileId)}`, {
@@ -112,10 +112,19 @@ export async function waitForV2PlannerFileReady(fileId: string): Promise<void> {
   throw new Error(`Timed out waiting for Ark Files image preprocessing. file_id=${fileId}`)
 }
 
-export async function deleteV2PlannerFile(fileId: string): Promise<void> {
-  await fetch(`${filesUrl()}/${encodeURIComponent(fileId)}`, {
-    method: 'DELETE',
-    headers: authorizationHeaders(),
-    signal: AbortSignal.timeout(env.directorAgentTimeoutMs),
-  }).catch(() => undefined)
+export async function deleteArkImageFile(fileId: string): Promise<void> {
+  try {
+    const response = await fetch(`${filesUrl()}/${encodeURIComponent(fileId)}`, {
+      method: 'DELETE',
+      headers: authorizationHeaders(),
+      signal: AbortSignal.timeout(env.directorAgentTimeoutMs),
+    })
+    if (!response.ok) {
+      console.warn(`[ark-files] failed to delete temporary file ${fileId}: HTTP ${response.status}`)
+    }
+  } catch (error) {
+    console.warn(
+      `[ark-files] failed to delete temporary file ${fileId}: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
 }

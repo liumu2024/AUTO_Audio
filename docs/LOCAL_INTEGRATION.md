@@ -46,9 +46,10 @@ REMOTION_COMPOSITION_ID=Dpl304Video
 RENDER_OUTPUT_DIR=renders
 ```
 
-If Windows cannot locate Chrome or Edge automatically:
+By default, Remotion uses its managed compatible browser. Set an executable only for an explicit, tested override:
 
 ```env
+# 可选：仅在需要显式覆盖 Remotion 管理的浏览器时设置
 REMOTION_BROWSER_EXECUTABLE=C:\Program Files\Google\Chrome\Application\chrome.exe
 ```
 
