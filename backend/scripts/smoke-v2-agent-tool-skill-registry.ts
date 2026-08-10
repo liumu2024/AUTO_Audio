@@ -342,7 +342,12 @@ assert.equal(validateRemotionTimelineSpec(base).ok, true)
 const localImageGenerationSpec: RemotionTimelineSpecV1 = {
   ...base,
   assets: [{ id: 'local_input', type: 'image', source: 'user_asset', src: 'http://localhost:3001/uploads/local.png' }],
-  scenes: [{ ...base.scenes[0]!, type: 'ai_video', asset_id: 'generated_scene_1' }],
+  scenes: [{
+    ...base.scenes[0]!,
+    type: 'ai_video',
+    asset_id: 'generated_scene_1',
+    creative_intent: { description: 'Use the supplied image as the generation composition.' },
+  }],
   material_jobs: [{
     id: 'generate_scene_1', scene_id: 'scene_1', type: 'generate_video', status: 'planned',
     prompt: 'add natural motion', input_asset_id: 'local_input', output_asset_id: 'generated_scene_1',
@@ -358,6 +363,82 @@ const localImageReadiness = evaluateV2AgentToolReadiness({
 })
 assert.equal(localImageReadiness.status, 'blocked')
 assert.ok(localImageReadiness.missing.some((item) => item.code === 'generation_input_unreachable'))
+const localImageFallbackSpec: RemotionTimelineSpecV1 = {
+  ...localImageGenerationSpec,
+  assets: [
+    ...localImageGenerationSpec.assets,
+    { id: 'local_fallback', type: 'image', source: 'generated_asset', src: 'https://cdn.example.com/fallback.png' },
+  ],
+  material_jobs: localImageGenerationSpec.material_jobs.map((job) => ({
+    ...job,
+    fallback_asset_id: 'local_fallback',
+    fallback_kind: 'static_image' as const,
+  })),
+}
+assert.equal(validateRemotionTimelineSpec(localImageFallbackSpec).ok, true)
+const localImageFallbackReadiness = evaluateV2AgentToolReadiness({
+  toolId: 'timeline.render',
+  context: duplicateContext,
+  runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: true, materialCount: 1 },
+  workspace: { draftId: 'draft_local_image_fallback', baseRevision: 1 },
+  authorizationGranted: true,
+  timelineSpec: localImageFallbackSpec,
+})
+assert.equal(
+  localImageFallbackReadiness.status,
+  'ready',
+  'a valid visual fallback must keep rendering ready when the generation input is not externally reachable',
+)
+const fallbackWithoutOutputSpec: RemotionTimelineSpecV1 = {
+  ...localImageFallbackSpec,
+  material_jobs: localImageFallbackSpec.material_jobs.map((job) => ({
+    ...job,
+    output_asset_id: undefined,
+  })),
+}
+const fallbackWithoutOutputValidation = validateRemotionTimelineSpec(fallbackWithoutOutputSpec)
+assert.equal(
+  fallbackWithoutOutputValidation.ok,
+  false,
+  'generate_video needs an output asset id even when a fallback is available',
+)
+assert.ok(fallbackWithoutOutputValidation.issues.some((issue) => issue.path === 'material_jobs[0].output_asset_id'))
+const fallbackWithoutOutputReadiness = evaluateV2AgentToolReadiness({
+  toolId: 'timeline.render',
+  context: duplicateContext,
+  runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: true, materialCount: 1 },
+  workspace: { draftId: 'draft_fallback_without_output', baseRevision: 1 },
+  authorizationGranted: true,
+  timelineSpec: fallbackWithoutOutputSpec,
+})
+assert.equal(fallbackWithoutOutputReadiness.status, 'blocked')
+assert.ok(fallbackWithoutOutputReadiness.missing.some((item) => item.code === 'material_output_missing'))
+const failedBlankCardSpec: RemotionTimelineSpecV1 = {
+  ...base,
+  material_jobs: [{
+    id: 'failed_blank_card',
+    scene_id: 'scene_1',
+    type: 'generate_video',
+    status: 'failed',
+    prompt: 'generation failed and the scene was converted to a card',
+    fallback_kind: 'blank_card',
+  }],
+}
+assert.equal(
+  validateRemotionTimelineSpec(failedBlankCardSpec).ok,
+  true,
+  'a terminal blank-card fallback no longer requires a generated output asset',
+)
+const failedBlankCardReadiness = evaluateV2AgentToolReadiness({
+  toolId: 'timeline.render',
+  context: duplicateContext,
+  runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: false, materialCount: 0 },
+  workspace: { draftId: 'draft_failed_blank_card', baseRevision: 1 },
+  authorizationGranted: true,
+  timelineSpec: failedBlankCardSpec,
+})
+assert.equal(failedBlankCardReadiness.status, 'blocked')
+assert.ok(failedBlankCardReadiness.missing.some((item) => item.code === 'material_generation_failed'))
 const staleFulfilledSpec: RemotionTimelineSpecV1 = {
   ...base,
   scenes: [{ ...base.scenes[0]!, type: 'ai_video', asset_id: 'missing_generated_asset' }],

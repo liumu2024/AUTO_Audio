@@ -153,6 +153,13 @@ export function evaluateV2AgentToolReadiness(input: {
         })
         continue
       }
+      if (job.status === 'failed') {
+        missing.push({
+          code: 'material_generation_failed',
+          description: `镜头 ${job.scene_id} 的素材任务已经失败，需要修订或重新规划后再执行。`,
+        })
+        continue
+      }
       if (job.status === 'fulfilled') {
         continue
       }
@@ -163,7 +170,8 @@ export function evaluateV2AgentToolReadiness(input: {
       if (job.type !== 'generate_video') continue
       const fallbackAsset = job.fallback_asset_id ? assetById.get(job.fallback_asset_id) : undefined
       const hasFallback = fallbackAsset?.type === 'video' || fallbackAsset?.type === 'image'
-      if (env.v2VideoGenerationProvider !== 'ark-seedance' && !hasFallback) {
+      if (hasFallback) continue
+      if (env.v2VideoGenerationProvider !== 'ark-seedance') {
         missing.push({ code: 'generation_provider_unavailable', description: `镜头 ${job.scene_id} 需要生成视频，但当前未配置视频生成 Provider。` })
       }
       if (!job.input_asset_id) continue

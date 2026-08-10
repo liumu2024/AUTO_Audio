@@ -187,6 +187,22 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
   const resolveJob = async (job: RemotionTimelineMaterialJob): Promise<JobOutcome> => {
     const startedAt = Date.now()
     await reportProgress(job, 'started')
+    if (job.status === 'failed') {
+      const reason = 'Material job is already failed; revise or replan it before execution.'
+      await reportProgress(job, 'failed')
+      return {
+        failedJob: { id: job.id, reason },
+        trace: {
+          id: job.id,
+          scene_id: job.scene_id,
+          type: job.type,
+          output_asset_id: job.output_asset_id,
+          status: 'failed',
+          elapsed_ms: Date.now() - startedAt,
+          error: reason,
+        },
+      }
+    }
     if (job.status === 'fulfilled' && assetById(spec.assets, job.output_asset_id)) {
       await reportProgress(job, 'fulfilled')
       return {

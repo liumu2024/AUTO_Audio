@@ -397,6 +397,31 @@ async function requireVisualAcceptance(input: {
   return verdict
 }
 
+async function acceptAndPromotePreview(input: {
+  componentId: string
+  authoring: RenderComponentAuthoringInput
+  preview: PreviewEvidence
+  reviewPreview: NonNullable<RenderComponentAuthoringDependencies['reviewPreview']>
+}) {
+  const verdict = await requireVisualAcceptance(input)
+  const manifest = await promoteRenderComponent({
+    id: input.componentId,
+    previewEvidence: {
+      verdict: 'passed',
+      policyVersion: RENDER_COMPONENT_VISUAL_POLICY_VERSION,
+      canvas: { width: input.authoring.canvas.width, height: input.authoring.canvas.height },
+      frameCount: input.preview.framePaths.length,
+      summary: verdict.summary,
+      criteria: verdict.criteria,
+      reviewedAt: new Date().toISOString(),
+    },
+  })
+  if (!manifest || manifest.status !== 'promoted') {
+    throw new Error(`Component ${input.componentId} promotion failed after visual acceptance.`)
+  }
+  return { verdict, manifest }
+}
+
 async function defaultReviewPreview(input: {
   prompt: string
   framePaths: string[]
@@ -461,20 +486,12 @@ export async function ensureRenderComponentVisualEvidence(
       purpose: component.manifest.purpose,
       canvas: input.canvas,
     })
-    const verdict = await requireVisualAcceptance({ authoring, preview, reviewPreview })
-    const promoted = await promoteRenderComponent({
-      id: component.id,
-      previewEvidence: {
-        verdict: 'passed',
-        policyVersion: RENDER_COMPONENT_VISUAL_POLICY_VERSION,
-        canvas: { width: input.canvas.width, height: input.canvas.height },
-        frameCount: preview.framePaths.length,
-        summary: verdict.summary,
-        criteria: verdict.criteria,
-        reviewedAt: new Date().toISOString(),
-      },
+    await acceptAndPromotePreview({
+      componentId: component.id,
+      authoring,
+      preview,
+      reviewPreview,
     })
-    if (!promoted) throw new Error(`Component ${component.id} visual evidence update failed.`)
   } finally {
     if (preview) await cleanupPreview(preview)
   }
@@ -580,20 +597,12 @@ export async function authorRenderComponent(
           }
         }
         preview = await renderPreview({ componentId, purpose: input.purpose, canvas: input.canvas })
-        const verdict = await requireVisualAcceptance({ authoring: input, preview, reviewPreview })
-        const accepted = await promoteRenderComponent({
-          id: componentId,
-          previewEvidence: {
-            verdict: 'passed',
-            policyVersion: RENDER_COMPONENT_VISUAL_POLICY_VERSION,
-            canvas: { width: input.canvas.width, height: input.canvas.height },
-            frameCount: preview.framePaths.length,
-            summary: verdict.summary,
-            criteria: verdict.criteria,
-            reviewedAt: new Date().toISOString(),
-          },
+        const { verdict } = await acceptAndPromotePreview({
+          componentId,
+          authoring: input,
+          preview,
+          reviewPreview,
         })
-        if (!accepted) throw new Error('Component preview evidence update failed.')
         const manifest = await useRequestedDisplayName()
         return {
           ok: true,
@@ -621,20 +630,12 @@ export async function authorRenderComponent(
       })
       componentId = registered.id
       preview = await renderPreview({ componentId, purpose: input.purpose, canvas: input.canvas })
-      const verdict = await requireVisualAcceptance({ authoring: input, preview, reviewPreview })
-      const promoted = await promoteRenderComponent({
-        id: componentId,
-        previewEvidence: {
-          verdict: 'passed',
-          policyVersion: RENDER_COMPONENT_VISUAL_POLICY_VERSION,
-          canvas: { width: input.canvas.width, height: input.canvas.height },
-          frameCount: preview.framePaths.length,
-          summary: verdict.summary,
-          criteria: verdict.criteria,
-          reviewedAt: new Date().toISOString(),
-        },
+      const { verdict, manifest: promoted } = await acceptAndPromotePreview({
+        componentId,
+        authoring: input,
+        preview,
+        reviewPreview,
       })
-      if (!promoted || promoted.status !== 'promoted') throw new Error('Component promotion failed after visual acceptance.')
       return {
         ok: true,
         componentId,

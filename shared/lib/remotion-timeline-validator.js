@@ -6,6 +6,8 @@ function finiteNumber(value) {
     return typeof value === 'number' && Number.isFinite(value);
 }
 export function materialJobMissingRequiredOutput(job, assetIds) {
+    if (job.type === 'generate_video' && job.status === 'planned' && !job.output_asset_id)
+        return true;
     return (job.type === 'reuse_asset' || job.status === 'fulfilled')
         && (!job.output_asset_id || !assetIds.has(job.output_asset_id));
 }

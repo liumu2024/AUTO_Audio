@@ -243,6 +243,40 @@ assert.equal(imageFallbackResolved.report.delivery_readiness.ready, true)
 assert.equal(imageFallbackResolved.spec.scenes[0]?.type, 'image_motion')
 assert.equal(imageFallbackResolved.spec.scenes[0]?.asset_id, fallbackOutputAssetId)
 
+let failedJobGenerationCalls = 0
+const failedJobResolved = await resolveRemotionTimelineMaterialJobs({
+  spec: {
+    ...spec,
+    task_id: `v2_timeline_failed_job_${Date.now()}`,
+    assets: [...spec.assets, {
+      id: fallbackImageAssetId,
+      type: 'image' as const,
+      src: sampleImage,
+      source: 'user_asset' as const,
+    }],
+    scenes: spec.scenes.map((scene) => scene.id === 'scene_001'
+      ? { ...scene, asset_id: fallbackOutputAssetId }
+      : scene),
+    material_jobs: spec.material_jobs.map((job) => ({
+      ...job,
+      status: 'failed' as const,
+      output_asset_id: fallbackOutputAssetId,
+      fallback_asset_id: fallbackImageAssetId,
+      fallback_kind: 'static_image' as const,
+    })),
+  },
+  adapter: {
+    async generate() {
+      failedJobGenerationCalls += 1
+      return { ok: false, error: 'must not run' }
+    },
+  },
+})
+assert.equal(failedJobGenerationCalls, 0)
+assert.equal(failedJobResolved.report.ok, false)
+assert.equal(failedJobResolved.report.failed_jobs[0]?.id, 'job_generate_scene_001')
+assert.equal(failedJobResolved.report.delivery_readiness.ready, false)
+
 const delayedAdapter: V2MaterialGenerationAdapter = {
   async generate(input) {
     await new Promise((resolve) => setTimeout(resolve, 200))
