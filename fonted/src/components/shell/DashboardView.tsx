@@ -15,7 +15,11 @@ import { cn } from '@/lib/utils'
 import { useAppShellStore } from '@/stores/appShellStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { useTaskStore } from '@/stores/taskStore'
-import { activateV2DraftWorkspace } from '@/services/director/v2DirectorDraftWorkspace'
+import {
+  activateV2DraftWorkspace,
+  startNewV2DraftWorkspace,
+} from '@/services/director/v2DirectorDraftWorkspace'
+import { replaceActiveDirectorWorkspaceSession } from '@/services/director/workspaceSessionLifecycle'
 import { mapV2TimelineDraftHistoryCard } from '@shared/lib/v2-timeline-draft-history'
 import type { V2TimelineDraftHistoryDto } from '@/lib/api'
 
@@ -86,6 +90,11 @@ export function DashboardView() {
     try {
       const { draft: persisted } = await api.getV2TimelineDraft(draft.draftId)
       const card = mapV2TimelineDraftHistoryCard(persisted)
+      replaceActiveDirectorWorkspaceSession({
+        sessionStorage: window.sessionStorage,
+        createId: () => `v2_director_${crypto.randomUUID()}`,
+      })
+      startNewV2DraftWorkspace()
       activateV2DraftWorkspace(persisted)
       useEditorStore.getState().enterV2Workspace()
       useEditorStore.getState().setProjectName(card.title)

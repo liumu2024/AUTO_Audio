@@ -18,6 +18,7 @@ import type {
   DirectorIntentResult,
 } from '../../../../shared/types/director-context.js'
 import type { ConfirmedRequirement } from '../../../../shared/types/director-workspace-session.js'
+import type { RemotionTimelineSpecV1 } from '../../../../shared/types/remotion-timeline-spec.v1.js'
 import type { CreativeMemorySearchResult } from '../creative-memory/creative-memory.service.js'
 import {
   listPromotedComponents,
@@ -51,7 +52,6 @@ const CreativeConfigDeltaSchema = z.object({
   aspectRatio: AspectRatioSchema.optional(),
   durationSec: z.number().min(1).max(600).optional(),
   styleIntensity: z.enum(['light', 'medium', 'strong']).optional(),
-  subtitlePolicy: z.enum(['keep', 'none', 'rewrite']).optional(),
 }).strict()
 const StateActionSchema = z.object({
   ref: z.string().trim().min(1).max(80),
@@ -174,6 +174,7 @@ export function compactDirectorContextForPrompt(input: {
   confirmedRequirements?: ConfirmedRequirement[]
   retrievedCreativeMemories?: CreativeMemorySearchResult
   promotedComponents?: RenderComponentSummary[]
+  timelineSpec?: RemotionTimelineSpecV1
 }) {
   const state = input.context.directorState
   const compactDirectorState = state
@@ -208,6 +209,11 @@ export function compactDirectorContextForPrompt(input: {
         toolId: tool.id,
         context: input.context,
         runtime: input.runtime,
+        workspace: {
+          draftId: input.context.currentTimeline?.draftId,
+          baseRevision: input.context.currentTimeline?.currentRevision,
+        },
+        timelineSpec: input.timelineSpec,
       })),
     slots: input.context.slots,
     explicitUiControls: input.context.explicitUiControls,
@@ -218,6 +224,18 @@ export function compactDirectorContextForPrompt(input: {
           id: input.context.sampleVideo.id,
           name: input.context.sampleVideo.name,
           hasReferenceSummary: Boolean(input.context.sampleVideo.reference),
+          reference: input.context.sampleVideo.reference
+            ? {
+                summary: input.context.sampleVideo.reference.summary,
+                atmosphere: input.context.sampleVideo.reference.atmosphere,
+                editing: input.context.sampleVideo.reference.editing,
+                rhythm: input.context.sampleVideo.reference.rhythm,
+                reusableStyle: input.context.sampleVideo.reference.reusableStyle,
+                segmentCount: input.context.sampleVideo.reference.segmentCount,
+                shotCount: input.context.sampleVideo.reference.shotCount,
+                warnings: input.context.sampleVideo.reference.warnings,
+              }
+            : undefined,
           hasStyleRecipe: Boolean(input.context.sampleVideo.styleRecipe),
           styleRecipe: input.context.sampleVideo.styleRecipe
             ? {
@@ -276,6 +294,7 @@ export function buildDirectorModelPrompt(input: {
   confirmedRequirements?: ConfirmedRequirement[]
   retrievedCreativeMemories?: CreativeMemorySearchResult
   promotedComponents?: RenderComponentSummary[]
+  timelineSpec?: RemotionTimelineSpecV1
 }) {
   return `你是 AI Video Studio 的导演 Agent。请自然理解当前输入，并结合结构化事实和历史上下文处理指代、延续与冲突。
 
@@ -292,6 +311,7 @@ export function buildDirectorModelPrompt(input: {
 - capabilitySnapshot 是服务端权威能力事实。不要从缺少某类素材推导整个任务不可执行；优先选择 ready 路径。blocked 时说明具体缺失项和 alternatives。
 - sample video 是结构和风格参考，materials 才是候选成片素材。模型不得填写样例、素材、草稿、版本、项目或用户 ID；这些由服务端绑定。
 - 当 Current context 声明本轮已附加视觉输入时，必须直接观察图片回答内容、比较或创意建议；不得声称无法读取图片。只读问答仍使用 chat，不能因此创建或渲染。
+- 回答当前方案“哪些内容会由 AI 生成”或判断方案是否实现画面要求时，只能依据 timelineFacts 的 type、assetId 和 materialJobs：image_motion 只能移动或裁剪原图像素，不能生成原图中不存在的内容；只有 ai_video 配套 generate_video（或明确实现该效果的已注册 scene 组件）才算新增动态画面。不得把 creative_intent 的文字描述当成已实现结果。
 - creativeConfigDelta 只写本轮新确认的创作参数；UI 明确值优先，不能被模型覆盖。
 - 用户明确要求记录、替换或撤销创作要求时，输出一个 requirements.update stateAction。replace/revoke 只能使用 activeRequirements 中的 id，并填写 targetRequirementId；不得使用字幕、场景、素材、样例或草稿 ID。
 - stateActions 和 toolRequests 使用本轮局部 ref。Tool 只有真实依赖前序状态或 Tool 结果时才写 dependsOn；独立动作使用空数组。
@@ -304,6 +324,7 @@ export function buildDirectorModelPrompt(input: {
 - 用户表达的效果需求（滤镜、合成、动画、转场）超出预置集时：先查 Current context 中 renderedComponents 清单，有则用 custom_render 引用；没有则通过 render.author 创作组件（用户无需明确要求写代码）。
 - render.author 提交 purpose、用户原话中的简短 displayName、effectBrief 和逐项 acceptanceCriteria，不得生成 React 源码或组件 ID。displayName 优先沿用用户给出的中文效果名，不得使用“自定义转场”等含糊名称。服务端编码 Agent 负责生成、试渲染和验收；同轮需要立即应用时，让 timeline.plan/timeline.patch 显式 dependsOn 该 author 动作。
 - timeline.patch 的 sceneId 必须使用当前草稿 timelineFacts 中真实存在的场景 id；不确定时省略 sceneId，服务端会按当前选中镜头解析。subtitle 范围可全量修订字幕，也可带目标 sceneId 只改该场景字幕。
+- 已有草稿后不得再次使用 timeline.plan。拆分、合并、插入或删除镜头使用 timeline.patch 的 structure 范围，并从 timelineFacts.scenes 选择一个连续的 sceneIds 范围；只有用户明确要求整体推翻重做时才使用 global。
 - 修改一个或多个具体转场时使用 transition 范围，并从 timelineFacts.transitions 选择全部真实 transitionIds；用户用镜头顺序描述时，根据 fromSceneIndex/toSceneIndex 选择对应转场，不要把转场修改伪装成 scene 或 global 修订。
 - scene 范围修改目标镜头的画面事实、字幕与相邻转场；visual_strategy 只切换目标镜头的视觉呈现（type/fit/motion/background/素材绑定），不动字幕与转场；两者都需要目标场景。
 - 要求台账（stateActions）与创作记忆（memoryActions）不要对同一句话同时输出：记录为“要求/约束”走 stateActions；记住“偏好/长期/以后都这样”走 memoryActions。
@@ -396,7 +417,7 @@ async function prepareDirectorImageInputs(
   const currentIds = new Set(currentTurnMaterialIds)
   const images = (currentIds.size
     ? allImages.filter((material) => currentIds.has(material.id))
-    : allImages.slice(-1)
+    : []
   )
   return prepareArkImageInputs({
     materials: images.map((image) => ({ id: image.id, name: image.name, source: image.url })),
@@ -685,8 +706,13 @@ export async function routeDirectorIntentWithLlm(input: {
   previousResponseId?: string
   confirmedRequirements?: ConfirmedRequirement[]
   retrievedCreativeMemories?: CreativeMemorySearchResult
+  timelineSpec?: RemotionTimelineSpecV1
 }): Promise<LlmIntentRouterOutput> {
-  const promotedComponents = await listPromotedComponents()
+  const aspectRatio = input.context.effectiveCreativeConfig?.aspectRatio ?? input.context.slots.aspectRatio
+  const [aspectWidth, aspectHeight] = aspectRatio.split(':').map(Number)
+  const promotedComponents = await listPromotedComponents(
+    input.timelineSpec?.canvas ?? { width: aspectWidth!, height: aspectHeight! },
+  )
   if (!env.directorAgentEnabled) {
     return buildDirectorContextFallback({
       ...input,

@@ -35,7 +35,8 @@ resolution, media standardization, Remotion rendering, and trace output.
 
 The old overlay-first V2 path has been removed from the active V2 code. Real
 Seedance calls are triggered only when a reviewed timeline contains
-`generate_video` material jobs and `/api/v2/timeline/run` executes them.
+`generate_video` material jobs and a saved revision is executed through
+`/api/v2/timeline-drafts/:draftId/runs`.
 
 Read the V2 architecture notes:
 

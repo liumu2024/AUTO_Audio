@@ -4,6 +4,7 @@ import { validateRemotionTimelineSpec } from '../../shared/lib/remotion-timeline
 import type { RemotionTimelineSpecV1 } from '../../shared/types/remotion-timeline-spec.v1.js'
 import {
   buildV2TimelineFactDigest,
+  buildDirectorTimelineFacts,
   buildV2TimelineOutcomeReviewPrompt,
   describeV2TimelineSpecDiff,
   evaluateV2TimelineRevisionCommit,
@@ -37,6 +38,40 @@ const base: RemotionTimelineSpecV1 = {
 }
 
 assert.equal(buildV2TimelineFactDigest(base).visible_text.length, 2)
+const realizedSpec: RemotionTimelineSpecV1 = {
+  ...base,
+  assets: [{ id: 'source_image', type: 'image', src: 'https://example.invalid/source.png', source: 'user_material' }],
+  scenes: base.scenes.map((scene, index) => index === 0
+    ? { ...scene, type: 'image_motion', asset_id: 'source_image', motion: 'slow_zoom_in' }
+    : index === 1
+      ? { ...scene, type: 'ai_video', asset_id: 'generated_scene_2' }
+      : scene),
+  material_jobs: [{
+    id: 'generate_scene_2',
+    scene_id: 'scene_2',
+    type: 'generate_video',
+    status: 'planned',
+    input_asset_id: 'source_image',
+    output_asset_id: 'generated_scene_2',
+    prompt: 'generate visible motion',
+  }],
+}
+const realizedDigest = buildV2TimelineFactDigest(realizedSpec)
+assert.equal(realizedDigest.scenes[0]?.type, 'image_motion')
+assert.equal(realizedDigest.scenes[0]?.motion, 'slow_zoom_in')
+assert.equal(realizedDigest.scenes[1]?.material_jobs[0]?.type, 'generate_video')
+assert.equal(realizedDigest.scenes[1]?.material_jobs[0]?.input_asset_id, 'source_image')
+assert.equal(realizedDigest.scenes[0]?.caption_count, 1)
+assert.equal(buildDirectorTimelineFacts(9, realizedSpec).scenes[1]?.materialJobs[0]?.outputAssetId, 'generated_scene_2')
+const realizationPrompt = buildV2TimelineOutcomeReviewPrompt({
+  prompt: 'Add a flying bird that is not present in the source image.',
+  baseDigest: buildV2TimelineFactDigest(base),
+  candidateDigest: realizedDigest,
+  hasBase: true,
+})
+assert.match(realizationPrompt, /image_motion can only pan, zoom, or crop existing pixels/i)
+assert.match(realizationPrompt, /remotion_card can fulfill only an intentional typography or motion-graphics scene/i)
+assert.match(realizationPrompt, /generate_video/i)
 assert.match(
   buildV2TimelineOutcomeReviewPrompt({
     prompt: '请围绕产品主题自由重写字幕，不要重复旧文案。',

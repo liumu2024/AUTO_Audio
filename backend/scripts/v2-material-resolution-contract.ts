@@ -27,9 +27,9 @@ export function assertV2MaterialResolutionContract(input: {
     assert.ok(trace, `Missing generation trace for ${job.id}`)
     assert.ok(scene, `Missing scene for ${job.id}`)
     assert.ok(input.report.fulfilled_jobs.includes(job.id), `Job was not fulfilled: ${job.id}`)
-    assert.equal(job.status, 'fulfilled')
 
     if (trace.status === 'fulfilled') {
+      assert.equal(job.status, 'fulfilled')
       assert.ok(trace.output_asset_id, `Provider fulfillment needs an output asset: ${job.id}`)
       const asset = assetsById.get(trace.output_asset_id)
       assert.ok(asset, `Missing fulfilled asset: ${trace.output_asset_id}`)
@@ -40,6 +40,7 @@ export function assertV2MaterialResolutionContract(input: {
     }
 
     if (trace.status === 'fallback' && job.fallback_kind === 'blank_card') {
+      assert.equal(job.status, 'failed')
       assert.equal(scene.type, 'remotion_card')
       assert.equal(scene.asset_id, undefined)
       assert.equal(job.output_asset_id, undefined)
@@ -47,6 +48,7 @@ export function assertV2MaterialResolutionContract(input: {
     }
 
     if (trace.status === 'fallback' && job.fallback_asset_id) {
+      assert.equal(job.status, 'fulfilled')
       assert.ok(job.output_asset_id, `Fallback asset needs an output id: ${job.id}`)
       const asset = assetsById.get(job.output_asset_id)
       assert.ok(asset, `Missing fallback asset: ${job.output_asset_id}`)

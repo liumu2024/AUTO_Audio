@@ -18,12 +18,12 @@ output.
 
 The backend treats `RemotionTimelineSpecV1` as the active renderable plan.
 
-1. `POST /api/v2/timeline/preview` creates or repairs a timeline spec and
-   returns a Chinese planning review.
+1. `POST /api/v2/timeline-drafts/preview` creates or repairs a timeline spec,
+   saves its revision, and returns a Chinese planning review.
 2. The frontend lets the user revise before an expensive render run.
-3. `POST /api/v2/timeline/run` resolves material jobs, normalizes assets, and
-   renders through Remotion.
-4. V2 trace is written under `backend/tmp/v2-agent-trace/<taskId>/`.
+3. `POST /api/v2/timeline-drafts/:draftId/runs` consumes a saved revision,
+   resolves material jobs, normalizes assets, and renders through Remotion.
+4. V2 trace is written under `backend/tmp/v2-traces/`.
 
 ## Render Output Gate
 
@@ -37,7 +37,7 @@ and checks:
 - actual duration is close to the expected timeline duration when ffprobe is
   available.
 
-The frontend marks the run complete only after `/api/v2/timeline/run` returns a
+The frontend marks the run complete only after the draft RenderRun returns a
 rendered output and trace path.
 
 ## Desktop Local Mode
@@ -46,7 +46,7 @@ When `DPL304_LOCAL_MODE=true`, PostgreSQL, Prisma setup, and external worker
 processes are not required. The backend:
 
 - uses the local JSON adapter;
-- exposes the same V2 preview/run APIs as server mode;
+- exposes the same V2 draft preview/RenderRun APIs as server mode;
 - writes runtime artifacts under `tmp/`, `uploads/`, and `v2-renders/`.
 
 The desktop launcher sets this mode automatically.
@@ -68,8 +68,9 @@ npm.cmd run dev
 | --- | --- | --- |
 | `GET` | `/health` | Health check. |
 | `POST` | `/api/uploads` | Upload sample or material files; optionally publish them for external image-to-video providers. |
-| `POST` | `/api/v2/timeline/preview` | Create a V2 timeline spec and Chinese planning review. |
-| `POST` | `/api/v2/timeline/run` | Resolve materials, standardize media, render, and return output/trace. |
+| `POST` | `/api/v2/timeline/preview` | Stateless diagnostic preview; does not render or persist a revision. |
+| `POST` | `/api/v2/timeline-drafts/preview` | Create or revise a saved V2 timeline draft. |
+| `POST` | `/api/v2/timeline-drafts/:draftId/runs` | Render a saved revision and persist its output/trace. |
 | `WS` | `/ws/tasks?taskId=...` | Optional task progress and trace events. V2 runs remain driven by their direct API responses. |
 
 ## Runtime Artifacts

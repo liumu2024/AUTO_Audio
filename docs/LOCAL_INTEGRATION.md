@@ -93,10 +93,10 @@ preview/run results directly and writes local task-store logs.
 
 1. Upload one sample video as structure/style reference.
 2. Upload image/video/audio materials for the actual output.
-3. The director executor calls `POST /api/v2/timeline/preview`.
+3. The director uses the shared draft planning service to save a revision.
 4. The frontend shows the Chinese planning review and timeline.
 5. The user revises or confirms the plan.
-6. `POST /api/v2/timeline/run` resolves material jobs, optionally calls the
+6. `POST /api/v2/timeline-drafts/:draftId/runs` resolves material jobs, optionally calls the
    video model, normalizes media, and renders MP4.
 7. V2 trace is written under `backend/tmp/v2-traces/tasks/<taskId>/` (director sessions use `sessions/<workspace>/operations/<operation>/`).
 
@@ -106,7 +106,7 @@ preview/run results directly and writes local task-store logs.
 | --- | --- |
 | Backend | Open `http://localhost:3001/health` |
 | V2 check | `npm.cmd run v2:timeline:check` |
-| V2 render | `/api/v2/timeline/run` returns `outputUrl` and `traceDir` |
+| V2 render | `/api/v2/timeline-drafts/:draftId/runs` returns `outputUrl` and `traceDir` |
 
 ## Common Issues
 

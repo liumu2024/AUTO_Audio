@@ -14,6 +14,10 @@ export interface DirectorAgentChatRequest {
   runtime: DirectorConversationRuntime
   /** Materials explicitly attached to this turn; omitted for contextual follow-ups. */
   currentTurnMaterialIds?: string[]
+  /** True only after the user changed the current material selection in this browser session. */
+  contextMaterialsAuthoritative?: boolean
+  /** True only after the user selected or cleared the current sample in this browser session. */
+  contextSampleAuthoritative?: boolean
   /** Stable for one user submission and reused only for transport retries. */
   turnRequestId?: string
   /** Stable browser workspace id; the server creates a V2 session when absent. */

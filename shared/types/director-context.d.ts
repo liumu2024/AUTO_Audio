@@ -1,5 +1,6 @@
 import type { DirectorSessionState, DirectorTimelineSnapshot } from './director-state.js';
 import type { V2SampleUnderstandingResult } from './v2-sample-understanding.js';
+import type { RemotionTimelineMaterialJob, RemotionTimelineScene } from './remotion-timeline-spec.v1.js';
 export type DirectorGoal = 'analyze_sample' | 'analyze_materials' | 'generate_timeline' | 'revise_timeline' | 'render';
 export type DirectorAspectRatio = '9:16' | '16:9' | '1:1' | '4:3';
 /** 对话层识别的用户意图（比 goal 更细，含澄清/未知） */
@@ -14,7 +15,6 @@ export type DirectorExecutionEffect = 'none' | 'workspace_change' | 'draft_chang
 export type DirectorContentDomain = 'landscape_montage' | 'music_video' | 'product_marketing' | 'general';
 export type DirectorSampleVideoStatus = 'missing' | 'attached' | 'parsed';
 export type DirectorMaterialStatus = 'missing' | 'partial' | 'ready';
-export type DirectorSubtitlePolicy = 'keep' | 'none' | 'rewrite';
 export interface DirectorPendingConfirmation {
     intent: DirectorConversationIntent;
     summary: string;
@@ -27,7 +27,6 @@ export interface DirectorContextSlots {
     aspectRatio: DirectorAspectRatio;
     durationSec?: number;
     styleIntensity: 'light' | 'medium' | 'strong';
-    subtitlePolicy: DirectorSubtitlePolicy;
     selectedClipId?: string;
     /** A video material explicitly selected by the director as the sample reference. */
     sampleMaterialId?: string;
@@ -106,6 +105,8 @@ export interface DirectorReferenceSummary {
     rhythm?: string;
     reusableStyle?: string;
     segmentCount: number;
+    /** Count of high-confidence visual shots, distinct from semantic chapters. */
+    shotCount: number;
     warnings?: string[];
 }
 /** A compact V2-facing summary of a candidate creation material. */
@@ -165,6 +166,19 @@ export interface DirectorTimelineFacts {
         description?: string;
         visualRole?: string;
         durationSec: number;
+        type: RemotionTimelineScene['type'];
+        assetId?: string;
+        motion?: RemotionTimelineScene['motion'];
+        customRenderComponentId?: string;
+        captionCount: number;
+        materialJobs: Array<{
+            id: string;
+            type: RemotionTimelineMaterialJob['type'];
+            status: RemotionTimelineMaterialJob['status'];
+            inputAssetId?: string;
+            outputAssetId?: string;
+            fallbackKind?: RemotionTimelineMaterialJob['fallback_kind'];
+        }>;
     }>;
     visibleText: Array<{
         id: string;

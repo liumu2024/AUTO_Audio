@@ -10,14 +10,18 @@ import { analyzeV2Sample } from '../sample-understanding-service.js'
 import { previewV2RemotionTimeline } from '../remotion-timeline-service.js'
 import { executeV2TimelineDraftRun } from '../timeline-draft-runner.js'
 import { buildV2TimelineRevisionContext } from '../timeline-revision-context.js'
-import { evaluateV2TimelineRevisionCommit } from '../timeline-revision-outcome-review.js'
+import { buildDirectorTimelineFacts, evaluateV2TimelineRevisionCommit } from '../timeline-revision-outcome-review.js'
+import type { V2TimelineRevisionScope } from '../timeline-revision-scope.js'
 import {
   listPromotedComponents,
   readRenderComponent,
   timelineRenderComponentReferences,
   type RenderComponentSummary,
 } from '../../modules/render-components/component-registry.js'
-import { authorRenderComponent } from '../../modules/render-components/component-authoring-agent.js'
+import {
+  authorRenderComponent,
+  ensureTimelineRenderComponentVisualEvidence,
+} from '../../modules/render-components/component-authoring-agent.js'
 import {
   createV2TimelineDraftRepository,
   V2TimelineComponentReferenceError,
@@ -26,6 +30,7 @@ import type { V2PlannerInput } from '../v2-input.js'
 import {
   bindV2AgentToolArguments,
   evaluateV2AgentToolReadiness,
+  resolveV2AgentSample,
   validateV2AgentToolRequest,
   type V2AgentToolMode,
 } from './registry.js'
@@ -55,6 +60,7 @@ export interface V2AgentToolResult {
   gate?: string
   draft?: { id: string; revision: number; spec: RemotionTimelineSpecV1; traceDir?: string }
   sampleUnderstanding?: unknown
+  sampleSelection?: { id: string; url: string; name?: string }
   output?: Record<string, unknown>
   recovery?: string
   /** True only when the V2 timeline planner was actually invoked. */
@@ -114,7 +120,7 @@ function plannerInput(input: {
     })),
     durationSec: input.context.effectiveCreativeConfig?.durationSec ?? input.context.userIntent.durationSec ?? input.context.slots.durationSec,
     plannerMode: 'llm',
-    allowPlannerFallback: true,
+    allowPlannerFallback: !input.workspace.draftId,
     canvas: canvas(input.context.effectiveCreativeConfig?.aspectRatio ?? input.context.slots.aspectRatio),
     planningContext: {
       kind: input.workspace.draftId ? 'revision' : 'initial',
@@ -149,25 +155,6 @@ function plannerInput(input: {
   }
 }
 
-function timelineFacts(revision: number, spec: RemotionTimelineSpecV1): DirectorTimelineFacts {
-  return {
-    revision,
-    scenes: spec.scenes.map((scene) => ({ id: scene.id, title: scene.title, description: scene.creative_intent?.description ?? scene.body, visualRole: scene.visual_role, durationSec: scene.duration_sec })),
-    visibleText: spec.overlays.filter((item) => Boolean(item.text?.trim())).map((item) => ({ id: item.id, sceneId: item.scene_id, type: item.type, text: item.text ?? '', yPct: item.y_pct, maxLines: item.max_lines, animation: item.animation })),
-    transitions: spec.transitions.map((item) => ({
-      id: item.id,
-      fromSceneId: item.from_scene_id,
-      toSceneId: item.to_scene_id,
-      fromSceneIndex: spec.scenes.findIndex((scene) => scene.id === item.from_scene_id) + 1,
-      toSceneIndex: spec.scenes.findIndex((scene) => scene.id === item.to_scene_id) + 1,
-      type: item.type,
-      durationSec: item.duration_sec,
-    })),
-    audioClipCount: spec.audio?.length ?? 0,
-    notes: spec.notes ?? [],
-  }
-}
-
 export async function dispatchV2AgentTool(input: {
   stage: V2AgentExecutionStage
   prompt: string
@@ -195,12 +182,16 @@ export async function dispatchV2AgentTool(input: {
   if (input.workspace.recentToolCallIds?.includes(request.callId)) {
     return { callId: request.callId, toolId: request.toolId, ok: false, gate: 'idempotency', summary: '重复的工具调用已被拒绝。', recovery: '等待已有调用的真实结果。' }
   }
+  const existing = input.workspace.draftId && input.workspace.baseRevision
+    ? await drafts.getRevision(input.workspace.draftId, input.workspace.baseRevision, input.userId)
+    : null
   const readiness = evaluateV2AgentToolReadiness({
     toolId: request.toolId,
     context: input.context,
     runtime: input.runtime,
     workspace: input.workspace,
     authorizationGranted: input.authorization?.granted,
+    timelineSpec: existing?.spec,
   })
   if (readiness.status !== 'ready') {
     return {
@@ -282,7 +273,7 @@ export async function dispatchV2AgentTool(input: {
     }
   }
   if (request.toolId === 'sample.analyze') {
-    const sample = input.context.sampleVideo
+    const sample = resolveV2AgentSample(input.context, input.runtime)
     if (!sample?.url) return { callId: request.callId, toolId: request.toolId, ok: false, summary: '没有用户选中的样例视频。', recovery: checked.tool.recovery }
     const resolvedContext = plannerInput({
       taskId: 'sample-skill-context',
@@ -304,18 +295,22 @@ export async function dispatchV2AgentTool(input: {
         ? { sessionId: input.traceSessionId, operationId: `sample_${request.callId}` }
         : undefined,
     })
-    return { callId: request.callId, toolId: request.toolId, ok: true, summary: '样例理解已完成；结果仅作为 V2 风格与节奏参考。', sampleUnderstanding: result.understanding, output: { traceDir: result.traceDir } }
+    return {
+      callId: request.callId,
+      toolId: request.toolId,
+      ok: true,
+      summary: '样例理解已完成；结果仅作为 V2 风格与节奏参考。',
+      sampleUnderstanding: result.understanding,
+      sampleSelection: { id: sample.id, url: sample.url, name: sample.name },
+      output: { traceDir: result.traceDir },
+    }
   }
 
-  const readsExistingDraft = request.toolId !== 'timeline.plan'
-  const existing = readsExistingDraft && input.workspace.draftId && input.workspace.baseRevision
-    ? await drafts.getRevision(input.workspace.draftId, input.workspace.baseRevision, input.userId)
-    : null
   if (request.toolId === 'timeline.patch' && !existing) {
     return { callId: request.callId, toolId: request.toolId, ok: false, gate: 'dispatcher_draft', summary: '局部修订需要当前 V2 草稿。', recovery: checked.tool.recovery }
   }
   const patchScope = request.toolId === 'timeline.patch'
-    ? (checked.arguments.scope as 'subtitle' | 'scene' | 'visual_strategy' | 'transition' | 'global')
+    ? (checked.arguments.scope as V2TimelineRevisionScope)
     : undefined
   const requestedSceneId = request.toolId === 'timeline.patch'
     ? (checked.arguments.sceneId as string | undefined)
@@ -323,6 +318,9 @@ export async function dispatchV2AgentTool(input: {
   const existingSceneIds = new Set((existing?.spec.scenes ?? []).map((scene) => scene.id))
   const requestedTransitionIds = request.toolId === 'timeline.patch' && patchScope === 'transition'
     ? (checked.arguments.transitionIds as string[])
+    : undefined
+  const requestedStructureSceneIds = request.toolId === 'timeline.patch' && patchScope === 'structure'
+    ? (checked.arguments.sceneIds as string[])
     : undefined
   const existingTransitionIds = new Set((existing?.spec.transitions ?? []).map((transition) => transition.id))
   const resolvedSceneId = requestedSceneId
@@ -343,6 +341,32 @@ export async function dispatchV2AgentTool(input: {
     }
   }
   const missingTransitionIds = (requestedTransitionIds ?? []).filter((id) => !existingTransitionIds.has(id))
+  const missingStructureSceneIds = (requestedStructureSceneIds ?? []).filter((id) => !existingSceneIds.has(id))
+  if (request.toolId === 'timeline.patch' && existing && missingStructureSceneIds.length > 0) {
+    return {
+      callId: request.callId,
+      toolId: request.toolId,
+      ok: false,
+      gate: 'dispatcher_target',
+      summary: `目标场景不存在：${missingStructureSceneIds.join('、')}。`,
+      recovery: '请从当前草稿的场景对象中选择一个连续范围后重试。',
+    }
+  }
+  if (request.toolId === 'timeline.patch' && existing && requestedStructureSceneIds) {
+    const indices = requestedStructureSceneIds
+      .map((id) => existing.spec.scenes.findIndex((scene) => scene.id === id))
+      .sort((a, b) => a - b)
+    if (indices.some((index, offset) => index !== indices[0]! + offset)) {
+      return {
+        callId: request.callId,
+        toolId: request.toolId,
+        ok: false,
+        gate: 'dispatcher_scope',
+        summary: '结构修订的目标场景必须是一个连续范围。',
+        recovery: '请缩小为连续镜头范围；不连续区域应分别修订。',
+      }
+    }
+  }
   if (request.toolId === 'timeline.patch' && existing && missingTransitionIds.length > 0) {
     return {
       callId: request.callId,
@@ -369,7 +393,9 @@ export async function dispatchV2AgentTool(input: {
     }
   }
   if (request.toolId === 'timeline.plan' || request.toolId === 'timeline.patch') {
-    const promotedComponents = await listPromotedComponents()
+    const targetCanvas = existing?.spec.canvas
+      ?? canvas(input.context.effectiveCreativeConfig?.aspectRatio ?? input.context.slots.aspectRatio)
+    const promotedComponents = await listPromotedComponents(targetCanvas)
     const authorizedDraftComponents = (await Promise.all(
       (input.authorizedDraftComponentIds ?? []).map((id) => readRenderComponent(id)),
     )).flatMap((component) => component?.manifest.status === 'draft'
@@ -385,9 +411,7 @@ export async function dispatchV2AgentTool(input: {
       taskId: `v2_tool_${Date.now()}_${randomUUID().slice(0, 8)}`,
       prompt: input.requestInstruction ?? input.prompt,
       context: input.context,
-      workspace: request.toolId === 'timeline.plan'
-        ? { ...input.workspace, draftId: undefined, baseRevision: undefined, selectedItemId: undefined }
-        : input.workspace,
+      workspace: input.workspace,
       authorization: input.authorization,
       stage: input.stage,
       recalledCreativeMemories: input.recalledCreativeMemories,
@@ -418,6 +442,7 @@ export async function dispatchV2AgentTool(input: {
         revisionBaseSpec: existing.spec,
         revisionScope: patchScope,
         revisionSceneId: resolvedSceneId,
+        revisionSceneIds: requestedStructureSceneIds,
         revisionTransitionIds: requestedTransitionIds,
         revisionContext: buildV2TimelineRevisionContext({ draftId: input.workspace.draftId, baseRevision: input.workspace.baseRevision, spec: existing.spec, selectedClipId }),
       }
@@ -434,13 +459,27 @@ export async function dispatchV2AgentTool(input: {
       },
     )
     const spec = preview.spec
+    try {
+      await ensureTimelineRenderComponentVisualEvidence(spec)
+    } catch (error) {
+      return {
+        callId: request.callId,
+        toolId: request.toolId,
+        ok: false,
+        gate: 'component_visual_validation',
+        summary: `自定义组件未通过当前画幅验收：${error instanceof Error ? error.message : String(error)}`,
+        recovery: '保留当前草稿；可改用其他已注册组件，或重新创作适配当前画幅的组件。',
+        plannerInvoked: true,
+      }
+    }
     if (request.toolId === 'timeline.patch' && existing) {
-      const scope = patchScope as 'subtitle' | 'scene' | 'visual_strategy' | 'transition' | 'global'
+      const scope = patchScope as V2TimelineRevisionScope
       const commit = evaluateV2TimelineRevisionCommit({
         baseSpec: existing.spec,
         candidateSpec: spec,
         scope,
         sceneId: resolvedSceneId,
+        sceneIds: requestedStructureSceneIds,
         transitionIds: requestedTransitionIds,
       })
       if (!commit.ok) {
@@ -475,7 +514,7 @@ export async function dispatchV2AgentTool(input: {
         plannerInvoked: true,
       }
     }
-    return { callId: request.callId, toolId: request.toolId, ok: true, summary: request.toolId === 'timeline.patch' ? 'V2 时间线修订已保存为新的草稿版本。' : 'V2 时间线方案已保存为可编辑草稿。', draft: { id: draft.id, revision: draft.revision, spec: draft.spec, traceDir: preview.traceDir }, output: { timelineFacts: timelineFacts(draft.revision, draft.spec), validation }, plannerInvoked: true }
+    return { callId: request.callId, toolId: request.toolId, ok: true, summary: request.toolId === 'timeline.patch' ? 'V2 时间线修订已保存为新的草稿版本。' : 'V2 时间线方案已保存为可编辑草稿。', draft: { id: draft.id, revision: draft.revision, spec: draft.spec, traceDir: preview.traceDir }, output: { timelineFacts: buildDirectorTimelineFacts(draft.revision, draft.spec), validation }, plannerInvoked: true }
   }
   if (request.toolId === 'timeline.render') {
     if (!existing) return { callId: request.callId, toolId: request.toolId, ok: false, summary: '正式渲染需要当前 V2 草稿版本。', recovery: checked.tool.recovery }
@@ -524,5 +563,5 @@ export async function dispatchV2AgentTool(input: {
 }
 
 export function toolResultTimelineFacts(result: V2AgentToolResult): DirectorTimelineFacts | undefined {
-  return result.draft ? timelineFacts(result.draft.revision, result.draft.spec) : undefined
+  return result.draft ? buildDirectorTimelineFacts(result.draft.revision, result.draft.spec) : undefined
 }

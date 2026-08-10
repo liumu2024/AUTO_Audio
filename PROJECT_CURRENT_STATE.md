@@ -10,7 +10,7 @@
 - 新的视频生成、规划、素材生成、渲染能力优先接入 `backend/src/pipeline-v2/`。
 - V2 的核心协议是 `shared/types/remotion-timeline-spec.v1.ts` 中的 `RemotionTimelineSpecV1`。
 - V2 导演正式执行入口是后端 `modules/director-agent/director-agent.service.ts`，Tool/Skill 权威目录与调度位于 `backend/src/pipeline-v2/agent-tools/`、`agent-skills/`；前端只发送输入、展示事件并同步服务端草稿快照。
-- V2 的后端 API 是 `/api/v2/sample/analyze`、`/api/v2/timeline/preview`、`/api/v2/timeline/run`。
+- V2 的后端 API 是 `/api/v2/sample/analyze`、`/api/v2/timeline/preview`、`/api/v2/timeline-drafts/:draftId/runs`。
 - V2 的 trace 在 `backend/tmp/v2-traces/`：导演会话走 `sessions/<workspace>/operations/<operation>/`，独立调用走 `tasks/<taskId>/`；不要把旧的 `backend/tmp/agent-trace` 当成主线证据。
 - V2 支持三条分支：有样例视频的 `sample_replicate`、无样例但有素材的 `material_brief`、纯文字的 `text_to_video`。
 - 不要把“生成视频”重新绑定成“必须先上传样例视频”。
@@ -87,7 +87,7 @@
 - `GET/POST /api/creative-memories`、`GET /api/creative-memories/search`、`PATCH/DELETE /api/creative-memories/:memoryId`：创作偏好记忆的查询、新增、检索、修改与删除。
 - `POST /api/v2/sample/analyze`：V2 样例视频理解。
 - `POST /api/v2/timeline/preview`：V2 时间线方案预览，只规划和校验，不渲染。
-- `POST /api/v2/timeline/run`：V2 时间线执行，包含素材生成、标准化、Remotion 渲染和基础评估。
+- `POST /api/v2/timeline-drafts/:draftId/runs`：对已保存的 V2 草稿版本执行素材生成、标准化、Remotion 渲染和基础评估，并持久化 RenderRun。
 - `/uploads`：本地上传素材静态访问。
 - `/renders`：旧渲染结果静态访问。
 - `/v2-renders`：V2 渲染结果静态访问。
@@ -194,7 +194,7 @@ V2 run 链路：
 5. Tool 真实结果先写回 V2 草稿/会话，再由理解模型基于结果生成自然回复。
 6. 前端消费 `skill_selected`、`skill_loaded`、`tool_*`、`assistant_reply` 和 `workspace_snapshot` 事件，更新右侧预览区、时间线和 trace 地址。
 
-`/api/v2/sample/analyze`、`/api/v2/timeline/preview`、`/api/v2/timeline/run` 仍保留给直接 API 与 smoke；导演正式链路不再由前端 action 映射决定执行顺序。
+`/api/v2/sample/analyze`、`/api/v2/timeline/preview` 和草稿 RenderRun API 仍可直接调用；导演正式链路不再由前端 action 映射决定执行顺序。
 
 当前前端同时存在 V1 数据结构适配层和 V2 timeline store，这能保证旧 UI 仍可显示，但也增加了状态同步复杂度。
 
@@ -326,7 +326,7 @@ V2 run 链路：
   - 返回 `RemotionTimelineSpecV1`、validation、review、traceDir。
 
 - 时间线渲染：
-  - `POST /api/v2/timeline/run`
+  - `POST /api/v2/timeline-drafts/:draftId/runs`
   - 返回最终 spec、素材生成报告、标准化资产、渲染结果、evaluation 和 traceDir。
 
 V2 任务进度通过 Director SSE 的 `tool_progress` 事件推送；旧 `/ws/tasks` WebSocket 任务通道已移除（2026-08-04）。
@@ -665,7 +665,7 @@ V2 trace 默认写入（2026-08-04 起统一根目录与分层，旧目录与运
 - 用户对话最终应进入 V2 director action。
 - 视频方案协议应以 `RemotionTimelineSpecV1` 为准。
 - 生成方案应走 `/api/v2/timeline/preview`。
-- 渲染成片应走 `/api/v2/timeline/run`。
+- 渲染成片应走 `/api/v2/timeline-drafts/:draftId/runs`。
 - 样例理解应走 `/api/v2/sample/analyze`。
 - 新增能力优先接入 `backend/src/pipeline-v2/` 和 V2 前端 store。
 
@@ -705,7 +705,7 @@ V1 代码不是全部无用。它目前仍承担历史兼容、UI 适配、旧�
 - `RemotionTimelineSpecV1`
 - `/api/v2/sample/analyze`
 - `/api/v2/timeline/preview`
-- `/api/v2/timeline/run`
+- `/api/v2/timeline-drafts/:draftId/runs`
 - `v2TimelineStore`
 - `tmp/v2-traces`
 - `v2-renders`
@@ -849,7 +849,7 @@ V1 代码不是全部无用。它目前仍承担历史兼容、UI 适配、旧�
 1. 有样例视频：能走 `sample_replicate`。
 2. 无样例、有图片：能走 `material_brief`。
 3. 无样例、无素材、只有文字：能走 `text_to_video` 或明确提示视频生成 provider 能力不足。
-4. 已有 V2 timeline 后说“渲染”：应走 `/api/v2/timeline/run`，不应重新生成方案。
+4. 已有 V2 timeline 后说“渲染”：应对当前草稿走 `/api/v2/timeline-drafts/:draftId/runs`，不应重新生成方案。
 5. 用户只是问问题：应自然回答，不应强制要求上传样例或素材。
 6. trace 位置应是 `backend/tmp/v2-traces/<taskId>`。
 
@@ -1305,7 +1305,7 @@ Content-Type: application/json
 - V2 trace 仍写入 `backend/tmp/v2-traces/<taskId>`。
 - `sample_replicate`、`material_brief`、`text_to_video` 三分支没有被破坏。
 - “生成方案”走 `/api/v2/timeline/preview`。
-- “渲染当前方案”走 `/api/v2/timeline/run`。
+- “渲染当前方案”走 `/api/v2/timeline-drafts/:draftId/runs`。
 - 没有新增 V1 对 V2 的硬依赖。
 - 没有把样例视频重新设为所有生成任务的必要条件。
 - 没有把用户素材重新设为所有生成任务的必要条件。
@@ -1366,7 +1366,7 @@ flowchart TD
   ROUTER --> ACTION{"nextAction"}
   ACTION -->|ANALYZE_SAMPLE| SAMPLE["POST /api/v2/sample/analyze"]
   ACTION -->|GENERATE_VIDEO| PREVIEW["POST /api/v2/timeline/preview"]
-  ACTION -->|RENDER| RUN["POST /api/v2/timeline/run"]
+  ACTION -->|RENDER| RUN["POST /api/v2/timeline-drafts/:draftId/runs"]
   ACTION -->|ASK_USER / ACKNOWLEDGE| MSG["只返回自然语言消息"]
   SAMPLE --> UNDERSTANDING["V2SampleUnderstandingResult"]
   UNDERSTANDING --> STORE_SAMPLE["前端同步样例理解状态"]
@@ -1418,7 +1418,7 @@ sequenceDiagram
   FE-->>User: 展示可编辑方案
 
   User->>FE: 渲染当前方案
-  FE->>BE: /api/v2/timeline/run
+  FE->>BE: /api/v2/timeline-drafts/:draftId/runs
   BE->>Video: 按 material_jobs 生成缺失素材
   Video-->>BE: 生成视频素材
   BE->>BE: FFmpeg 标准化

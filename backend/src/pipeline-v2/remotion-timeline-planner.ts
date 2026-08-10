@@ -220,9 +220,20 @@ export function buildDeterministicRemotionTimelineSpec(
   const requestedSceneCount = parseRequestedSceneCount(input.prompt)
   const segmentCount = structuredSegmentCount(input.prompt)
   const shouldCoverAll = wantsFullMaterialCoverage(input.prompt)
-  const defaultSceneCount = visualAssets.length
-    ? Math.min(MAX_TIMELINE_SCENES, Math.max(3, visualAssets.length))
-    : 3
+  const sampleShotCount = creationMode === 'sample_replicate'
+    ? (input.sampleUnderstanding?.shot_evidence ?? []).filter((shot) => shot.confidence >= 0.6).length
+    : 0
+  const neutralSampleSceneCount = Math.max(4, Math.min(
+    8,
+    Math.round((input.durationSec ?? input.sampleUnderstanding?.sample.duration_sec ?? 12) / 2.5),
+  ))
+  const defaultSceneCount = sampleShotCount
+    ? Math.min(MAX_TIMELINE_SCENES, sampleShotCount)
+    : creationMode === 'sample_replicate'
+      ? neutralSampleSceneCount
+      : visualAssets.length
+        ? Math.min(MAX_TIMELINE_SCENES, Math.max(3, visualAssets.length))
+        : 3
   const sceneCount = Math.max(
     1,
     Math.min(
@@ -246,7 +257,9 @@ export function buildDeterministicRemotionTimelineSpec(
   for (let index = 0; index < sceneCount; index += 1) {
     const start = Number(cursor.toFixed(3))
     const duration = durations[index]!
-    const asset = visualAssets[index % Math.max(visualAssets.length, 1)]
+    const asset = creationMode === 'sample_replicate'
+      ? visualAssets[index]
+      : visualAssets[index % Math.max(visualAssets.length, 1)]
     const role = roleForIndex(index, sceneCount)
     const sceneId = `scene_${String(index + 1).padStart(3, '0')}`
     const sceneCaptions = captionsForScene(requiredCaptions, index, sceneCount)
@@ -326,19 +339,20 @@ export function buildDeterministicRemotionTimelineSpec(
         fallback_kind: 'none',
       })
     } else {
+      const generateMissingFootage = creationMode === 'text_to_video' || creationMode === 'sample_replicate'
       scenes.push({
         id: sceneId,
-        type: 'remotion_card',
+        type: generateMissingFootage ? 'ai_video' : 'remotion_card',
         start_sec: start,
         duration_sec: duration,
         title: index === 0 && !captionSummary ? copy.title : title,
-        subtitle: creationMode === 'text_to_video' ? '视频模型待生成' : copy.subtitle,
+        subtitle: generateMissingFootage ? '视频模型待生成' : copy.subtitle,
         body,
         accent_color: index % 2 === 0 ? '#38bdf8' : '#f59e0b',
         visual_role: role,
         creative_intent: { title, description: body },
       })
-      if (creationMode === 'text_to_video') {
+      if (generateMissingFootage) {
         materialJobs.push({
           id: `job_generate_${sceneId}`,
           scene_id: sceneId,
@@ -354,7 +368,7 @@ export function buildDeterministicRemotionTimelineSpec(
           output_asset_id: `generated_${sceneId}`,
           input_asset_id: input.imageSrc || input.inputImageUrl ? 'planner_image_asset' : undefined,
           provider: 'ark_seedance',
-          fallback_kind: 'blank_card',
+          fallback_kind: 'none',
         })
       }
     }

@@ -6,6 +6,7 @@ import {
   compactDirectorWorkspaceContext,
   compactDirectorWorkspaceTurns,
   createDirectorWorkspaceState,
+  hydrateDirectorWorkspaceState,
 } from '../src/modules/director-agent/director-workspace-session.js'
 
 const state = createDirectorWorkspaceState({
@@ -19,7 +20,6 @@ const state = createDirectorWorkspaceState({
       aspectRatio: '9:16',
       durationSec: 15,
       styleIntensity: 'strong',
-      subtitlePolicy: 'rewrite',
     },
   },
 })
@@ -46,9 +46,23 @@ assert.equal(historicalDraftState.baseRevision, 3)
 
 const preserved = applyDirectorWorkspacePatch(state, {
   context: { slots: { durationSec: undefined, styleIntensity: undefined } },
+  recentVisualMaterialIds: ['material_mountain', 'material_river'],
 })
 assert.equal(preserved.context.slots.durationSec, 15)
 assert.equal(preserved.context.slots.styleIntensity, 'strong')
+assert.deepEqual(preserved.recentVisualMaterialIds, ['material_mountain', 'material_river'])
+assert.deepEqual(
+  compactDirectorWorkspaceContext(preserved).durableFacts.recentVisualMaterialIds,
+  ['material_mountain', 'material_river'],
+)
+const hydratedLegacySubtitleState = hydrateDirectorWorkspaceState({
+  ...preserved,
+  context: {
+    ...preserved.context,
+    slots: { ...preserved.context.slots, subtitlePolicy: 'keep' } as typeof preserved.context.slots,
+  },
+})
+assert.equal('subtitlePolicy' in hydratedLegacySubtitleState.context.slots, false)
 
 const withOutcome = applyDirectorWorkspacePatch(preserved, {
   draftId: 'draft_v2_1',

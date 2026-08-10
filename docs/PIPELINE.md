@@ -54,7 +54,7 @@ panels. It is not the active render contract.
 | --- | --- | --- |
 | `POST` | `/api/uploads` | Upload sample or material files |
 | `POST` | `/api/v2/timeline/preview` | Create a timeline spec and Chinese planning review |
-| `POST` | `/api/v2/timeline/run` | Resolve materials, standardize media, render MP4, return trace |
+| `POST` | `/api/v2/timeline-drafts/:draftId/runs` | Render one saved revision, persist the RenderRun, and return the output URL and trace |
 | `GET` | `/api/tasks/:id/pipeline` | Compatibility load for older task rows |
 | `PATCH` | `/api/tasks/:id/render-plan` | Legacy RenderPlan save |
 

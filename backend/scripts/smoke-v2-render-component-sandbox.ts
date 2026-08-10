@@ -20,6 +20,7 @@ try {
     markRenderFailed,
     readRenderComponent,
     registerRenderComponent,
+    renderComponentEvidenceMatchesCanvas,
     renderComponentsRoot,
     promoteRenderComponent,
     validateRenderComponentReferences,
@@ -30,8 +31,10 @@ try {
     effectBrief: effectSummary,
     acceptanceCriteria: [effectSummary],
   })
-  const evidence = (criterion: string) => ({
+  const evidence = (criterion: string, canvas = { width: 360, height: 640 }) => ({
     verdict: 'passed' as const,
+    policyVersion: 'render_component_visual.v2',
+    canvas,
     frameCount: 5,
     summary: 'fixture preview passed',
     criteria: [{ criterion, passed: true, evidence: 'fixture evidence' }],
@@ -75,6 +78,23 @@ export default function BlurRise(props) {
     ...metadata('模糊溶解过渡：前一镜头模糊消失、后一镜头清晰显现'),
   })
   await promoteRenderComponent({ id: 'cmp_blur_dissolve', previewEvidence: evidence('模糊溶解过渡：前一镜头模糊消失、后一镜头清晰显现') })
+  await registerRenderComponent({
+    id: 'cmp_legacy_visual_policy', source: `${valid}\n// legacy visual policy`,
+    ...metadata('legacy visual policy'), purpose: 'scene',
+  })
+  await promoteRenderComponent({
+    id: 'cmp_legacy_visual_policy',
+    previewEvidence: {
+      verdict: 'passed', frameCount: 5, summary: 'legacy evidence',
+      criteria: [{ criterion: 'legacy visual policy', passed: true, evidence: 'legacy evidence' }],
+      reviewedAt: new Date().toISOString(),
+    },
+  })
+  assert.equal(
+    (await listPromotedComponents()).some((item) => item.id === 'cmp_legacy_visual_policy'),
+    true,
+    'legacy promoted components remain discoverable so the selected component can be revalidated on demand',
+  )
   assert.equal(registered.manifest.status, 'draft', 'new components start as draft')
   assert.equal(registered.manifest.displayName, 'blur rise')
   assert.equal(registered.manifest.renderedTimes, 0)
@@ -106,6 +126,34 @@ export default function BlurRise(props) {
   assert.equal(promoted?.renderedTimes, 2)
   assert.equal(promoted?.promotedAt !== undefined, true)
   assert.equal((await listPromotedComponents()).find((item) => item.id === 'cmp_blur_rise')?.displayName, 'blur rise')
+  assert.equal(
+    (await listPromotedComponents({ width: 720, height: 1280 })).some((item) => item.id === 'cmp_blur_rise'),
+    true,
+    'a responsive component accepted at the same aspect ratio remains reusable',
+  )
+  assert.equal(
+    (await listPromotedComponents({ width: 1280, height: 720 })).some((item) => item.id === 'cmp_blur_rise'),
+    true,
+    'cross-aspect components remain discoverable but must pass current-canvas revalidation before persistence',
+  )
+  assert.match(
+    (await validateRenderComponentReferences(
+      [{ id: 'cmp_blur_rise', purpose: 'scene' }],
+      new Set(),
+      { width: 1280, height: 720 },
+    ))[0] ?? '',
+    /aspect ratio/,
+    'a forged or historical cross-aspect reference to a current-policy component is rejected at persistence/render boundaries',
+  )
+  assert.match(
+    (await validateRenderComponentReferences(
+      [{ id: 'cmp_legacy_visual_policy', purpose: 'scene' }],
+      new Set(),
+      { width: 1280, height: 720 },
+    ))[0] ?? '',
+    /current visual evidence/,
+    'legacy promoted references cannot bypass the current visual policy through a saved or direct spec',
+  )
   const boundFromRegistry = await bindRegisteredRenderComponentDisplayNames({
     schema_version: 'remotion_timeline_spec.v1',
     task_id: 'component_name_binding',
@@ -129,6 +177,30 @@ export default function BlurRise(props) {
   const promotedAgain = await markRenderSucceeded('cmp_blur_rise')
   assert.equal(promotedAgain?.renderedTimes, 3)
   assert.equal(promotedAgain?.status, 'promoted')
+
+  // Visual evidence is reusable per aspect ratio, and concurrent manifest
+  // updates must merge rather than silently losing one accepted preview.
+  const beforeConcurrentPromotions = (await readRenderComponent('cmp_blur_rise'))!.manifest.renderedTimes
+  await Promise.all([
+    promoteRenderComponent({
+      id: 'cmp_blur_rise',
+      previewEvidence: evidence('portrait acceptance', { width: 360, height: 640 }),
+    }),
+    promoteRenderComponent({
+      id: 'cmp_blur_rise',
+      previewEvidence: evidence('landscape acceptance', { width: 640, height: 360 }),
+    }),
+  ])
+  const multiAspectManifest = (await readRenderComponent('cmp_blur_rise'))!.manifest
+  assert.equal(multiAspectManifest.renderedTimes, beforeConcurrentPromotions + 2)
+  assert.equal(renderComponentEvidenceMatchesCanvas(
+    multiAspectManifest.previewEvidenceByAspect,
+    { width: 720, height: 1280 },
+  ), true)
+  assert.equal(renderComponentEvidenceMatchesCanvas(
+    multiAspectManifest.previewEvidenceByAspect,
+    { width: 1280, height: 720 },
+  ), true)
 
   // Behavior-weighted ordering: more successful renders rank higher, and a
   // failed render acts as negative feedback that demotes the component.

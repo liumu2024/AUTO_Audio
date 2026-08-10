@@ -3,6 +3,8 @@ import { spawnSync } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
+import { summarizeFormalExecution } from '../src/evaluation-v2/formal-regression-summary.js'
+
 function argument(name: string) {
   const index = process.argv.indexOf(name)
   return index >= 0 ? process.argv[index + 1] : undefined
@@ -43,8 +45,11 @@ const preparedMemory = await writeMemoryDecisionSuite({
 })
 
 const tsxCli = path.resolve('node_modules/tsx/dist/cli.mjs')
-const commands: Array<{ id: string; script: string; args?: string[] }> = [
+const commands: Array<{ id: string; script: string; args?: string[]; tsconfig?: string }> = [
   { id: 'structured_protocol', script: 'scripts/smoke-v2-structured-model-protocol.ts' },
+  { id: 'director_routing', script: 'scripts/smoke-v2-director-routing.ts' },
+  { id: 'director_workspace', script: 'scripts/smoke-v2-director-workspace-session.ts' },
+  { id: 'director_ui_constraints', script: 'scripts/smoke-v2-director-ui-constraints.ts', tsconfig: '../fonted/tsconfig.app.json' },
   { id: 'agent_tool_protocol', script: 'scripts/smoke-v2-agent-tool-skill-registry.ts' },
   { id: 'creative_memory_state', script: 'scripts/smoke-v2-creative-memory.ts' },
   { id: 'creative_memory_retrieval', script: 'scripts/smoke-v2-creative-memory-retrieval.ts' },
@@ -53,6 +58,8 @@ const commands: Array<{ id: string; script: string; args?: string[] }> = [
   { id: 'director_tool_instruction', script: 'scripts/smoke-v2-director-tool-instruction.ts' },
   { id: 'evaluation_metrics', script: 'scripts/smoke-v2-agent-evaluation.ts' },
   { id: 'sci_fi_scoped_edit', script: 'scripts/smoke-v2-scifi-scoped-edit.ts' },
+  { id: 'timeline_revision_outcome', script: 'scripts/smoke-v2-timeline-revision-outcome.ts' },
+  { id: 'creation_modes', script: 'scripts/smoke-v2-remotion-timeline-creation-modes.ts' },
   { id: 'review_development_loop', script: 'scripts/smoke-v2-review-development-loop.ts' },
   { id: 'public_material_chain', script: 'scripts/smoke-v2-public-material-chain.ts' },
   { id: 'render_component_sandbox', script: 'scripts/smoke-v2-render-component-sandbox.ts' },
@@ -68,7 +75,12 @@ if (!skipRender) {
 
 const commandResults = commands.map((command) => {
   const started = Date.now()
-  const result = spawnSync(process.execPath, [tsxCli, command.script, ...(command.args ?? [])], {
+  const result = spawnSync(process.execPath, [
+    tsxCli,
+    ...(command.tsconfig ? ['--tsconfig', command.tsconfig] : []),
+    command.script,
+    ...(command.args ?? []),
+  ], {
     cwd: process.cwd(),
     encoding: 'utf8',
     timeout: command.id === 'remotion_delivery' ? 600_000 : 120_000,
@@ -173,13 +185,15 @@ for (const turn of keyReport?.turns ?? []) {
 const keyStabilityPassed = keyScenarioRuns.size > 0
   && [...keyScenarioRuns.values()].every((values) => values.every(Boolean))
 const renderResult = commandResults.find((item) => item.id === 'remotion_delivery')
-const renderDeliverySuccessRate = renderResult ? (renderResult.ok ? 1 : 0) : null
 let renderDetails: Record<string, unknown> | null = null
 try {
   renderDetails = renderResult?.stdout ? JSON.parse(renderResult.stdout) as Record<string, unknown> : null
 } catch {
   renderDetails = null
 }
+const executionSummary = summarizeFormalExecution({ commandResults, turns, renderDetails })
+const failures = executionSummary.failures
+const renderDeliverySuccessRate = executionSummary.renderDelivery?.rate ?? null
 const datasetFiles = [
   path.resolve('evals/v2-agent/core.v2.json'),
   path.resolve('evals/v2-agent/memory-decisions.v1.json'),
@@ -191,14 +205,6 @@ const datasetFiles = [
   path.resolve('evals/v2-agent/human-review.v1.json'),
 ]
 const datasetHashes = Object.fromEntries(await Promise.all(datasetFiles.map(async (file) => [file, await sha256(file)])))
-const failures = turns.filter((turn) => !turn.deterministicPass || turn.judgePass === false).map((turn) => ({
-  caseId: turn.caseId,
-  run: turn.run,
-  turn: turn.turn,
-  deterministicFailures: turn.deterministicFailures,
-  judgeFailure: turn.judgeFailure,
-  traceDir: turn.traceDir,
-}))
 const formal = {
   manifest: {
     startedAt,
@@ -211,7 +217,7 @@ const formal = {
     memoryDecisionSamples: preparedMemory.samples,
     memoryHoldoutCases: preparedMemory.holdoutCases,
     artifactScenarios: 20,
-    remotionScenarios: skipRender ? 0 : 6,
+    remotionScenarios: skipRender ? 0 : executionSummary.renderScenarioCount,
     datasetHashes,
     sourceReports: liveReports,
   },
@@ -228,7 +234,9 @@ const formal = {
       turns.filter((turn) => turn.judgePass).length,
       turns.filter((turn) => turn.judgeRequested && turn.judgePass !== undefined).length,
     ),
-    renderDeliverySuccessRate: skipRender ? null : wilson(renderResult?.ok ? 6 : 0, 6),
+    renderDeliverySuccessRate: skipRender || !executionSummary.renderDelivery
+      ? null
+      : wilson(executionSummary.renderDelivery.successes, executionSummary.renderDelivery.total),
   } : {},
   failures,
   uncovered: [
@@ -268,7 +276,9 @@ const markdown = [
   '## 硬门禁', '',
   ...(summary ? Object.entries(summary.hardBlockers).map(([key, value]) => `- ${key}：${value}`) : ['- live Agent 未运行']), '',
   '## 失败与 Trace', '',
-  ...(failures.length ? failures.map((item) => `- ${item.caseId} r${item.run} t${item.turn}：${item.traceDir}`) : ['- 无']), '',
+  ...(failures.length ? failures.map((item) => item.source === 'smoke'
+    ? `- smoke ${item.id}：status ${String(item.status ?? 'unknown')}`
+    : `- ${item.caseId} r${item.run} t${item.turn}：${item.traceDir}`) : ['- 无']), '',
   '## Remotion 产物与 Trace', '',
   ...(Array.isArray(renderDetails?.scenarios)
     ? renderDetails.scenarios.map((item) => {
@@ -291,7 +301,7 @@ console.log(JSON.stringify({
   liveReports: liveReports.length,
   failures: failures.length,
 }, null, 2))
-if (commandResults.some((item) => !item.ok)
+if (failures.length > 0
   || retrieval.crossScopeRetrievalCount > 0
   || retrieval.unrelatedRetrievalCount > 0) {
   process.exitCode = 1

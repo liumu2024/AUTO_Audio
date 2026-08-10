@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { timelineRenderComponentReferences } from '../modules/render-components/component-registry.js'
+import { ensureTimelineRenderComponentVisualEvidence } from '../modules/render-components/component-authoring-agent.js'
 import {
   runV2RemotionTimeline,
   type V2TimelineRunOptions,
@@ -44,6 +45,7 @@ export async function executeV2TimelineDraftRun(input: {
     input.repository.getRevision(input.draftId, input.revision, input.userId),
   ])
   if (!draft || !source) throw new Error('V2 timeline draft revision not found.')
+  await ensureTimelineRenderComponentVisualEvidence(source.spec)
 
   const runId = `v2_run_${Date.now()}_${randomUUID().slice(0, 8)}`
   await input.repository.createRenderRun({

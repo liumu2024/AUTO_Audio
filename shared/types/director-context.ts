@@ -3,6 +3,7 @@ import type {
   DirectorTimelineSnapshot,
 } from './director-state.js'
 import type { V2SampleUnderstandingResult } from './v2-sample-understanding.js'
+import type { RemotionTimelineMaterialJob, RemotionTimelineScene } from './remotion-timeline-spec.v1.js'
 
 export type DirectorGoal =
   | 'analyze_sample'
@@ -56,8 +57,6 @@ export type DirectorSampleVideoStatus = 'missing' | 'attached' | 'parsed'
 
 export type DirectorMaterialStatus = 'missing' | 'partial' | 'ready'
 
-export type DirectorSubtitlePolicy = 'keep' | 'none' | 'rewrite'
-
 export interface DirectorPendingConfirmation {
   intent: DirectorConversationIntent
   summary: string
@@ -71,7 +70,6 @@ export interface DirectorContextSlots {
   aspectRatio: DirectorAspectRatio
   durationSec?: number
   styleIntensity: 'light' | 'medium' | 'strong'
-  subtitlePolicy: DirectorSubtitlePolicy
   selectedClipId?: string
   /** A video material explicitly selected by the director as the sample reference. */
   sampleMaterialId?: string
@@ -152,6 +150,8 @@ export interface DirectorReferenceSummary {
   rhythm?: string
   reusableStyle?: string
   segmentCount: number
+  /** Count of high-confidence visual shots, distinct from semantic chapters. */
+  shotCount: number
   warnings?: string[]
 }
 
@@ -211,7 +211,26 @@ export interface DirectorTimelineContext extends DirectorTimelineSnapshot {
 /** Read-only factual projection of the persisted V2 revision for later chat. */
 export interface DirectorTimelineFacts {
   revision: number
-  scenes: Array<{ id: string; title?: string; description?: string; visualRole?: string; durationSec: number }>
+  scenes: Array<{
+    id: string
+    title?: string
+    description?: string
+    visualRole?: string
+    durationSec: number
+    type: RemotionTimelineScene['type']
+    assetId?: string
+    motion?: RemotionTimelineScene['motion']
+    customRenderComponentId?: string
+    captionCount: number
+    materialJobs: Array<{
+      id: string
+      type: RemotionTimelineMaterialJob['type']
+      status: RemotionTimelineMaterialJob['status']
+      inputAssetId?: string
+      outputAssetId?: string
+      fallbackKind?: RemotionTimelineMaterialJob['fallback_kind']
+    }>
+  }>
   visibleText: Array<{
     id: string
     sceneId?: string

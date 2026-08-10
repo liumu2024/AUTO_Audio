@@ -237,6 +237,7 @@ function compactSampleUnderstanding(input: V2RemotionTimelinePlannerInput) {
       reusable_style_zh: segment.reusable_style_zh,
       material_hint_zh: segment.material_hint_zh,
     })),
+    shot_evidence: (understanding.shot_evidence ?? []).slice(0, 40),
   }
 }
 
@@ -262,6 +263,8 @@ export function buildV2TimelinePlannerPrompt(
     '- Do not output React, Remotion code, HTML, CSS, FFmpeg commands, or free-form component code.',
     '- Remotion may compose scenes, transitions, captions, text cards, image motion, labels, shapes, and light sweep overlays.',
     '- Realistic missing visual content must be represented as material_jobs with type "generate_video".',
+    '- image_motion cannot invent new visual elements; it only pans, zooms, or crops pixels from its bound image asset. If the requested shot adds a person, animal, vehicle, weather event, or other content absent from the source image, use ai_video with a generate_video job.',
+    '- remotion_card is an intentional typography or motion-graphics scene, not a placeholder for missing photographic footage. Use it only when a card or graphic is part of the creative design; use ai_video with generate_video for a requested realistic moving shot.',
     '- The planner does not own execution status. New generate_video jobs must use status "planned"; only the backend may mark them fulfilled after a real output asset exists.',
     '- assets contains only already-resolved, renderable assets and every asset src must be non-empty. Do not add an empty placeholder asset for a planned generation; reference its material_job output_asset_id from the scene instead.',
     '- This V2 plan has no audio-generation tool. When the user requests a BGM strategy but provides no audio asset, describe it in notes only; do not create audio clips, empty audio assets, or generate_video jobs for music.',
@@ -273,7 +276,7 @@ export function buildV2TimelinePlannerPrompt(
     '- creation_mode controls the task branch:',
     '  - sample_replicate: learn structure, pacing, atmosphere, and transitions from sample_understanding; user materials or generated assets provide final visuals.',
     '  - material_brief: no sample video is available; infer structure from user_prompt and material_assets only. Do not mention sample rhythm or sample style.',
-    '  - text_to_video: no sample and no visual material are available; plan AI video scenes for realistic visuals when the provider can support them, and keep Remotion captions/cards as fallback.',
+    '  - text_to_video: no sample and no visual material are available; plan AI video scenes for realistic visuals. Remotion captions remain overlays, while cards are allowed only when the creative design intentionally calls for typography or motion graphics—not as fallback footage.',
     '- planning_context contains stable draft/version facts and activeRequirements.',
     '- planning_context.activeRequirements is authoritative. Apply every active statement and ignore requirements mentioned only in conversation_summary.',
     '- planning_context.recalledCreativeMemories contains relevant active long-term knowledge for this turn. Use it only when compatible with the current request; the current request and activeRequirements take priority on conflict.',
@@ -287,7 +290,7 @@ export function buildV2TimelinePlannerPrompt(
     '- When the user asks for original subtitles from themes or keywords, create audience-facing copy yourself; do not repeat the instruction text. If the user asks for a line limit or placement, express it with caption track defaults and overlay geometry/max_lines while preserving or creating appropriate copy.',
     '- A narrow revision such as audio strategy, transition, subtitle layout, or one selected scene must not replace unrelated subject matter, visual intent, confirmed captions, or sample-use boundaries.',
     '- The selected revision item identifies the user\'s current focus, not an instruction to ignore the rest of the timeline.',
-    '- revision_scope is the tool-authorized boundary: subtitle changes captions only; scene changes only the scene with revision_scene_id plus its caption overlays/track and transitions adjacent to it; visual_strategy changes only the visual strategy fields (type/fit/motion/background/asset binding) of the scene with revision_scene_id and that scene\'s material jobs; transition changes only revision_transition_ids; global allows a full rewrite only when the user explicitly requests a broader change.',
+    '- revision_scope is the tool-authorized boundary: subtitle changes captions only; scene changes only the scene with revision_scene_id plus its caption overlays/track and transitions adjacent to it; structure may split, merge, insert, or remove only the contiguous revision_scene_ids range while preserving its total duration and all surrounding scenes; visual_strategy changes only the visual strategy fields (type/fit/motion/background/asset binding) of the scene with revision_scene_id and that scene\'s material jobs; transition changes only revision_transition_ids; global allows a full rewrite only when the user explicitly requests a broader change.',
     '- When the user requests an effect (filter, compositing, animation, transition) outside the preset set and the instruction explicitly names a sedimented component id, reference it with custom_render { component_id, params } on the target scene or transition. Do not invent component ids that are not explicitly given; do not output React/Remotion code here (components are authored separately through render.author).',
     ...(input.availableComponents?.length
       ? [
@@ -336,6 +339,7 @@ export function buildV2TimelinePlannerPrompt(
         revision_context: input.revisionContext ?? null,
         revision_scope: input.revisionScope ?? null,
         revision_scene_id: input.revisionSceneId ?? null,
+        revision_scene_ids: input.revisionSceneIds ?? null,
         revision_transition_ids: input.revisionTransitionIds ?? null,
         agent_skill_context: input.agentSkillContext ?? null,
         agent_tool_context: input.agentToolContext ?? null,

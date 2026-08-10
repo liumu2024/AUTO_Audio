@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { validateRemotionTimelineSpec } from '../../shared/lib/remotion-timeline-validator.js'
+import type { RemotionTimelineSpecV1 } from '../../shared/types/remotion-timeline-spec.v1.js'
 
 const dataDir = mkdtempSync(path.join(os.tmpdir(), 'v2-scifi-scoped-edit-'))
 process.env.DPL304_LOCAL_MODE = 'true'
@@ -290,7 +291,117 @@ try {
     /requires a sceneId/,
   )
 
-  // 4d. visual_strategy scope: only the target scene's visual fields and its
+  // 4d. A structural revision may replace one contiguous scene range while
+  // preserving every scene and object outside that range.
+  const replacementSceneIds = [`scene_${randomUUID()}`, `scene_${randomUUID()}`]
+  const structureCandidate = structuredClone(base)
+  const usedStructureAssetId = `asset_${randomUUID()}`
+  const unrelatedStructureAssetId = `asset_${randomUUID()}`
+  structureCandidate.assets.push(
+    { id: usedStructureAssetId, type: 'image', src: 'https://example.invalid/used.png' },
+    { id: unrelatedStructureAssetId, type: 'image', src: 'https://example.invalid/unrelated.png' },
+  )
+  structureCandidate.scenes = [
+    { ...base.scenes[0]!, creative_intent: 'UNRELATED prefix rewrite' },
+    base.scenes[1]!,
+    { ...base.scenes[2]!, id: replacementSceneIds[0], start_sec: 8, asset_id: usedStructureAssetId, creative_intent: 'split first half' },
+    { ...base.scenes[2]!, id: replacementSceneIds[1], start_sec: 10, creative_intent: 'split second half' },
+    base.scenes[3]!,
+    { ...base.scenes[4]!, creative_intent: 'UNRELATED suffix rewrite' },
+  ]
+  structureCandidate.transitions = [
+    base.transitions[0]!,
+    { id: `transition_${randomUUID()}`, from_scene_id: 'scene_2', to_scene_id: replacementSceneIds[0], type: 'cut' },
+    { id: `transition_${randomUUID()}`, from_scene_id: replacementSceneIds[0], to_scene_id: replacementSceneIds[1], type: 'cut' },
+    { id: `transition_${randomUUID()}`, from_scene_id: replacementSceneIds[1], to_scene_id: 'scene_4', type: 'fade' },
+    base.transitions[3]!,
+  ]
+  structureCandidate.overlays = [
+    { ...base.overlays[0]!, text: 'UNRELATED caption rewrite' },
+    ...base.overlays.slice(1),
+    { id: `caption_${randomUUID()}`, type: 'caption', scene_id: replacementSceneIds[0], text: 'split caption', start_sec: 8, end_sec: 10 },
+  ]
+  structureCandidate.material_jobs = [
+    ...base.material_jobs,
+    { id: `job_${randomUUID()}`, scene_id: replacementSceneIds[1], type: 'generate_video', status: 'planned', prompt: 'split second half' },
+  ]
+  const structureScoped = applyV2TimelineRevisionScope({
+    baseSpec: base,
+    candidateSpec: structureCandidate,
+    scope: 'structure',
+    sceneIds: ['scene_3'],
+  })
+  assert.deepEqual(
+    structureScoped.scenes.map((scene) => scene.id),
+    ['scene_1', 'scene_2', ...replacementSceneIds, 'scene_4', 'scene_5'],
+  )
+  assert.deepEqual(structureScoped.scenes[0], base.scenes[0])
+  assert.deepEqual(structureScoped.scenes.at(-1), base.scenes.at(-1))
+  assert.equal(structureScoped.overlays.find((overlay) => overlay.id === 'cap_1')?.text, base.overlays[0]?.text)
+  assert.ok(structureScoped.overlays.some((overlay) => overlay.scene_id === replacementSceneIds[0]))
+  assert.deepEqual(
+    structureScoped.material_jobs.filter((job) => job.scene_id === 'scene_2' || job.scene_id === 'scene_4'),
+    base.material_jobs,
+  )
+  assert.ok(structureScoped.material_jobs.some((job) => job.scene_id === replacementSceneIds[1]))
+  assert.ok(structureScoped.assets.some((asset) => asset.id === usedStructureAssetId))
+  assert.equal(structureScoped.assets.some((asset) => asset.id === unrelatedStructureAssetId), false)
+  assert.deepEqual(structureScoped.transitions[0], base.transitions[0])
+  assert.deepEqual(structureScoped.transitions.at(-1), base.transitions.at(-1))
+
+  assert.equal(evaluateV2TimelineRevisionCommit({
+    baseSpec: base,
+    candidateSpec: structureScoped,
+    scope: 'structure',
+    sceneIds: ['scene_3'],
+  }).ok, true)
+  assert.throws(
+    () => applyV2TimelineRevisionScope({ baseSpec: base, candidateSpec: structureCandidate, scope: 'structure', sceneIds: ['scene_2', 'scene_4'] }),
+    /contiguous/,
+  )
+
+  // Candidate timestamps can be based on illegal edits to protected scenes.
+  // When the replacement scenes are normalized back to the persisted range,
+  // their bound overlays must keep the same scene-relative timing.
+  const timingBase = {
+    schema_version: 'remotion_timeline_spec.v1',
+    task_id: 'structure_timing_base',
+    canvas: { width: 1920, height: 1080, fps: 30, duration_sec: 6 },
+    assets: [],
+    scenes: [
+      { id: 'anchor_before', type: 'remotion_card', start_sec: 0, duration_sec: 2 },
+      { id: 'replace_me', type: 'remotion_card', start_sec: 2, duration_sec: 2 },
+      { id: 'anchor_after', type: 'remotion_card', start_sec: 4, duration_sec: 2 },
+    ],
+    transitions: [],
+    overlays: [
+      { id: 'old_caption', type: 'caption', scene_id: 'replace_me', text: 'old', start_sec: 2.2, end_sec: 3.8, x_pct: 10, y_pct: 80 },
+    ],
+    material_jobs: [],
+    render_policy: { renderer: 'remotion_timeline' },
+  } satisfies RemotionTimelineSpecV1
+  const timingCandidate = structuredClone(timingBase)
+  timingCandidate.scenes = [
+    { ...timingBase.scenes[0]!, duration_sec: 3 },
+    { id: 'replacement_a', type: 'remotion_card', start_sec: 3, duration_sec: 1 },
+    { id: 'replacement_b', type: 'remotion_card', start_sec: 4, duration_sec: 1 },
+    { ...timingBase.scenes[2]!, start_sec: 5, duration_sec: 1 },
+  ]
+  timingCandidate.overlays = [
+    { id: 'new_caption', type: 'caption', scene_id: 'replacement_a', text: 'new', start_sec: 3.1, end_sec: 3.9, x_pct: 10, y_pct: 80 },
+  ]
+  const timingScoped = applyV2TimelineRevisionScope({
+    baseSpec: timingBase,
+    candidateSpec: timingCandidate,
+    scope: 'structure',
+    sceneIds: ['replace_me'],
+  })
+  const normalizedOverlay = timingScoped.overlays.find((overlay) => overlay.id === 'new_caption')
+  assert.equal(normalizedOverlay?.start_sec, 2.1)
+  assert.equal(normalizedOverlay?.end_sec, 2.9)
+  assert.equal(validateRemotionTimelineSpec(timingScoped).ok, true)
+
+  // 4e. visual_strategy scope: only the target scene's visual fields and its
   // material jobs may change; captions, audio, transitions and other scenes
   // stay untouched.
   const vsCandidate = structuredClone(base)

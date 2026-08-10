@@ -21,10 +21,15 @@ import { renderV2RemotionTimeline } from '../../pipeline-v2/remotion-timeline-re
 import {
   findPromotedRenderComponentBySource,
   promoteRenderComponent,
+  RENDER_COMPONENT_VISUAL_POLICY_VERSION,
+  readRenderComponent,
   registerRenderComponent,
   removeDraftRenderComponent,
+  renderComponentEvidenceForCanvas,
+  renderComponentEvidenceMatchesCanvas,
   renderComponentId,
   setRenderComponentDisplayName,
+  timelineRenderComponentReferences,
 } from './component-registry.js'
 
 const GeneratedComponentSchema = z.object({
@@ -328,6 +333,7 @@ async function defaultRenderPreview(input: {
       outputDir: previewDir,
       outputName: 'preview.mp4',
       authorizedDraftComponentIds: [input.componentId],
+      authorizedPreviewComponentIds: [input.componentId],
       recordComponentOutcomes: false,
     })
     const ffmpeg = findV2FfmpegBinary(path.resolve(process.cwd(), '..'))
@@ -418,6 +424,85 @@ async function defaultCleanupPreview(preview: PreviewEvidence): Promise<void> {
   if (preview.previewDir) await rm(preview.previewDir, { recursive: true, force: true })
 }
 
+export async function ensureRenderComponentVisualEvidence(
+  input: {
+    componentId: string
+    canvas: RenderComponentAuthoringInput['canvas']
+  },
+  dependencies: Pick<
+    RenderComponentAuthoringDependencies,
+    'renderPreview' | 'reviewPreview' | 'cleanupPreview'
+  > = {},
+): Promise<void> {
+  const component = await readRenderComponent(input.componentId)
+  if (!component || component.manifest.status !== 'promoted') {
+    throw new Error(`Promoted render component not found: ${input.componentId}`)
+  }
+  if (renderComponentEvidenceMatchesCanvas(component.manifest.previewEvidenceByAspect, input.canvas)) return
+  const authoring = authoringInputWithIntegrityCriteria({
+    purpose: component.manifest.purpose,
+    displayName: component.manifest.displayName,
+    effectBrief: component.manifest.effectBrief,
+    acceptanceCriteria: component.manifest.acceptanceCriteria,
+    canvas: input.canvas,
+    skillContent: '',
+    sourceWorkspaceSessionId: component.manifest.sourceWorkspaceSessionId,
+  })
+  if (!authoring.effectBrief.trim() || authoring.acceptanceCriteria.length === 0) {
+    throw new Error(`Component ${input.componentId} has no reusable visual acceptance contract.`)
+  }
+  const renderPreview = dependencies.renderPreview ?? defaultRenderPreview
+  const reviewPreview = dependencies.reviewPreview ?? defaultReviewPreview
+  const cleanupPreview = dependencies.cleanupPreview ?? defaultCleanupPreview
+  let preview: PreviewEvidence | undefined
+  try {
+    preview = await renderPreview({
+      componentId: component.id,
+      purpose: component.manifest.purpose,
+      canvas: input.canvas,
+    })
+    const verdict = await requireVisualAcceptance({ authoring, preview, reviewPreview })
+    const promoted = await promoteRenderComponent({
+      id: component.id,
+      previewEvidence: {
+        verdict: 'passed',
+        policyVersion: RENDER_COMPONENT_VISUAL_POLICY_VERSION,
+        canvas: { width: input.canvas.width, height: input.canvas.height },
+        frameCount: preview.framePaths.length,
+        summary: verdict.summary,
+        criteria: verdict.criteria,
+        reviewedAt: new Date().toISOString(),
+      },
+    })
+    if (!promoted) throw new Error(`Component ${component.id} visual evidence update failed.`)
+  } finally {
+    if (preview) await cleanupPreview(preview)
+  }
+}
+
+export async function ensureTimelineRenderComponentVisualEvidence(
+  spec: RemotionTimelineSpecV1,
+  dependencies: Pick<
+    RenderComponentAuthoringDependencies,
+    'renderPreview' | 'reviewPreview' | 'cleanupPreview'
+  > = {},
+): Promise<void> {
+  const componentIds = [...new Set(timelineRenderComponentReferences(spec).map((reference) => reference.id))]
+  for (const componentId of componentIds) {
+    const component = await readRenderComponent(componentId)
+    if (component?.manifest.status !== 'promoted') continue
+    await ensureRenderComponentVisualEvidence({
+      componentId,
+      canvas: {
+        width: spec.canvas.width,
+        height: spec.canvas.height,
+        fps: spec.canvas.fps,
+        durationSec: spec.canvas.duration_sec,
+      },
+    }, dependencies)
+  }
+}
+
 function failureStage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   if (/audit|compil|esbuild|import|default export/i.test(message)) return 'audit_compile'
@@ -468,7 +553,14 @@ export async function authorRenderComponent(
         const sameCriteria = existing.manifest.effectBrief === input.effectBrief
           && existing.manifest.acceptanceCriteria.length === input.acceptanceCriteria.length
           && existing.manifest.acceptanceCriteria.every((item, index) => item === input.acceptanceCriteria[index])
-        if (sameCriteria && existing.manifest.previewEvidence) {
+        const reusableEvidence = renderComponentEvidenceForCanvas(
+          existing.manifest.previewEvidenceByAspect,
+          input.canvas,
+        )
+        if (
+          sameCriteria
+          && reusableEvidence
+        ) {
           const manifest = await useRequestedDisplayName()
           return {
             ok: true,
@@ -482,13 +574,26 @@ export async function authorRenderComponent(
             reused: true,
             visualVerdict: VisualVerdictSchema.parse({
               passed: true,
-              criteria: existing.manifest.previewEvidence.criteria,
-              summary: existing.manifest.previewEvidence.summary,
+              criteria: reusableEvidence.criteria,
+              summary: reusableEvidence.summary,
             }),
           }
         }
         preview = await renderPreview({ componentId, purpose: input.purpose, canvas: input.canvas })
         const verdict = await requireVisualAcceptance({ authoring: input, preview, reviewPreview })
+        const accepted = await promoteRenderComponent({
+          id: componentId,
+          previewEvidence: {
+            verdict: 'passed',
+            policyVersion: RENDER_COMPONENT_VISUAL_POLICY_VERSION,
+            canvas: { width: input.canvas.width, height: input.canvas.height },
+            frameCount: preview.framePaths.length,
+            summary: verdict.summary,
+            criteria: verdict.criteria,
+            reviewedAt: new Date().toISOString(),
+          },
+        })
+        if (!accepted) throw new Error('Component preview evidence update failed.')
         const manifest = await useRequestedDisplayName()
         return {
           ok: true,
@@ -521,6 +626,8 @@ export async function authorRenderComponent(
         id: componentId,
         previewEvidence: {
           verdict: 'passed',
+          policyVersion: RENDER_COMPONENT_VISUAL_POLICY_VERSION,
+          canvas: { width: input.canvas.width, height: input.canvas.height },
           frameCount: preview.framePaths.length,
           summary: verdict.summary,
           criteria: verdict.criteria,

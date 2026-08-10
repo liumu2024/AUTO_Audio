@@ -18,6 +18,14 @@ export interface V2SampleUnderstandingSegment {
     material_hint_zh: string;
     caution_zh?: string;
 }
+export interface V2SampleShotEvidence {
+    id: string;
+    start_sec: number;
+    end_sec: number;
+    boundary: 'hard_cut' | 'soft_transition' | 'continuous' | 'end' | 'unknown';
+    confidence: number;
+    description_zh?: string;
+}
 export interface V2SampleUnderstandingResult {
     schema_version: typeof V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION;
     task_id: string;
@@ -37,6 +45,8 @@ export interface V2SampleUnderstandingResult {
     reusable_style_zh: string;
     not_reusable_zh: string;
     segments: V2SampleUnderstandingSegment[];
+    /** Visual shot boundaries, distinct from semantic story chapters. */
+    shot_evidence?: V2SampleShotEvidence[];
     questions_for_user_zh: string[];
     warnings_zh: string[];
 }

@@ -13,7 +13,7 @@ directly.
 | `src/components/canvas/` | Preview and generated-player surfaces. |
 | `src/components/layout/` | Editor layout and property panels. |
 | `src/services/director/` | Frontend director context, action execution, and action-to-tool wiring. |
-| `src/services/director/v2DirectorTimeline.ts` | Adapter from director actions to `/api/v2/timeline/preview` and `/api/v2/timeline/run`. |
+| `src/services/director/v2DirectorTimeline.ts` | Adapter from director actions to draft preview and revision RenderRun APIs. |
 | `src/stores/` | Zustand stores for creation, V2 timeline, compatibility pipeline hydration, task progress, and director state. |
 | `src/types/` | Frontend-facing protocol aliases. Shared protocol source remains in `../shared`. |
 

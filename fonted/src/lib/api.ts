@@ -126,6 +126,8 @@ export interface DirectorAgentChatPayload {
   context: DirectorContext
   runtime: DirectorConversationRuntime
   currentTurnMaterialIds?: string[]
+  contextMaterialsAuthoritative?: boolean
+  contextSampleAuthoritative?: boolean
   workspaceSessionId?: string
   turnRequestId?: string
 }
@@ -273,25 +275,6 @@ export interface V2TimelineDraftPreviewResult extends V2TimelinePreviewResult {
   draft: V2TimelineDraftDto
 }
 
-export interface V2TimelineRunResult {
-  ok: boolean
-  taskId: string
-  plannerSource: string
-  spec: RemotionTimelineSpecV1
-  outputPath: string
-  outputUrl?: string
-  traceDir: string
-  review: V2TimelinePlanningReview
-  validation: unknown
-  materialResolution: unknown
-  standardizedAssets: Array<{ id: string; src: string }>
-  evaluation: {
-    ok: boolean
-    metrics: Record<string, number>
-    warnings: string[]
-  }
-}
-
 export interface V2TimelineDraftRunResult {
   ok: boolean
   draftId: string
@@ -306,7 +289,11 @@ export interface V2TimelineDraftRunResult {
   validation: unknown
   materialResolution: unknown
   standardizedAssets: Array<{ id: string; src: string }>
-  evaluation: V2TimelineRunResult['evaluation']
+  evaluation: {
+    ok: boolean
+    metrics: Record<string, number>
+    warnings: string[]
+  }
 }
 
 export interface CreativeMemoryDto {
@@ -433,13 +420,6 @@ export async function deleteCreativeMemory(id: string) {
 
 export async function previewV2Timeline(payload: V2TimelinePayload) {
   return request<V2TimelinePreviewResult>('/api/v2/timeline/preview', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
-export async function runV2Timeline(payload: V2TimelinePayload) {
-  return request<V2TimelineRunResult>('/api/v2/timeline/run', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

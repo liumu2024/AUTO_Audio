@@ -136,7 +136,7 @@ async function createCustomComponentRegistry(input: {
     await writeFile(entryPath, registry, 'utf8')
     return { dir: customDir, entryPath }
   } catch (error) {
-    await rm(customDir, { recursive: true, force: true })
+    await rm(customDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     throw error
   }
 }
@@ -147,6 +147,7 @@ export async function renderV2RemotionTimeline(input: {
   outputDir: string
   outputName?: string
   authorizedDraftComponentIds?: readonly string[]
+  authorizedPreviewComponentIds?: readonly string[]
   recordComponentOutcomes?: boolean
 }): Promise<V2TimelineRenderResult> {
   const spec = assertValidRemotionTimelineSpec(input.spec)
@@ -154,6 +155,8 @@ export async function renderV2RemotionTimeline(input: {
   const componentIssues = await validateRenderComponentReferences(
     timelineRenderComponentReferences(spec),
     new Set(input.authorizedDraftComponentIds),
+    spec.canvas,
+    new Set(input.authorizedPreviewComponentIds),
   )
   if (componentIssues.length) throw new Error(`Invalid custom render component reference: ${componentIssues.join('; ')}`)
   const remotionRoot = resolveFromCwd(input.remotionRoot ?? '../remotion')
@@ -191,7 +194,7 @@ export async function renderV2RemotionTimeline(input: {
     }
     throw error
   } finally {
-    await rm(customRegistry.dir, { recursive: true, force: true })
+    await rm(customRegistry.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
   const file = await stat(outputPath)
   if (input.recordComponentOutcomes !== false) {

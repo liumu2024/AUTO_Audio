@@ -1,4 +1,4 @@
-import { type RemotionTimelineSpecV1 } from '../types/remotion-timeline-spec.v1.js';
+import { type RemotionTimelineMaterialJob, type RemotionTimelineSpecV1 } from '../types/remotion-timeline-spec.v1.js';
 export interface RemotionTimelineValidationIssue {
     path: string;
     message: string;
@@ -16,6 +16,7 @@ export interface RemotionTimelineValidationReport {
         duration_sec: number;
     };
 }
+export declare function materialJobMissingRequiredOutput(job: RemotionTimelineMaterialJob, assetIds: ReadonlySet<string>): boolean;
 export declare function validateRemotionTimelineSpec(value: unknown): RemotionTimelineValidationReport;
 export declare function assertValidRemotionTimelineSpec(value: unknown): RemotionTimelineSpecV1;
 //# sourceMappingURL=remotion-timeline-validator.d.ts.map

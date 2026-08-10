@@ -12,7 +12,11 @@ const { buildDeterministicRemotionTimelineSpec } = await import(
 const { createV2TimelineDraftRepository } = await import(
   '../src/pipeline-v2/timeline-draft-repository.js'
 )
-const { promoteRenderComponent, registerRenderComponent } = await import(
+const {
+  promoteRenderComponent,
+  registerRenderComponent,
+  RENDER_COMPONENT_VISUAL_POLICY_VERSION,
+} = await import(
   '../src/modules/render-components/component-registry.js'
 )
 const {
@@ -72,7 +76,10 @@ await registerRenderComponent({
 await promoteRenderComponent({
   id: 'cmp_history_transition',
   previewEvidence: {
-    verdict: 'passed', frameCount: 5, summary: 'fixture', reviewedAt: new Date().toISOString(),
+    verdict: 'passed',
+    policyVersion: RENDER_COMPONENT_VISUAL_POLICY_VERSION,
+    canvas: { width: spec.canvas.width, height: spec.canvas.height },
+    frameCount: 5, summary: 'fixture', reviewedAt: new Date().toISOString(),
     criteria: [{ criterion: '测试 fixture', passed: true, evidence: 'fixture' }],
   },
 })

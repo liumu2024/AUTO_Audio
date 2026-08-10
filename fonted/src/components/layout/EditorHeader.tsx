@@ -9,7 +9,7 @@ import {
   v2MaterialsFromAttachments,
 } from '@/services/director/v2DirectorTimeline'
 import { startNewV2DraftWorkspace } from '@/services/director/v2DirectorDraftWorkspace'
-import { rememberActiveDirectorWorkspaceSessionId } from '@/services/director/workspaceSessionLifecycle'
+import { replaceActiveDirectorWorkspaceSession } from '@/services/director/workspaceSessionLifecycle'
 import { useCreationStore } from '@/stores/creationStore'
 import { useDirectorChatStore } from '@/stores/directorChatStore'
 import { useEditorStore } from '@/stores/editorStore'
@@ -32,10 +32,10 @@ export function EditorHeader() {
   const handleNewDraft = () => {
     if (saving || exporting || isTaskRunning || copilotLoading || isDirectorSending || isAnalyzing) return
     if (v2HasLocalEdits && !window.confirm('当前草稿有未保存修改，仍要新建草稿吗？')) return
-    rememberActiveDirectorWorkspaceSessionId(
-      window.sessionStorage,
-      `v2_director_${crypto.randomUUID()}`,
-    )
+    replaceActiveDirectorWorkspaceSession({
+      sessionStorage: window.sessionStorage,
+      createId: () => `v2_director_${crypto.randomUUID()}`,
+    })
     startNewV2DraftWorkspace()
   }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { existsSync, mkdtempSync, readdirSync } from 'node:fs'
+import { readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -8,7 +8,11 @@ const dataDir = mkdtempSync(path.join(os.tmpdir(), 'v2-custom-render-'))
 process.env.RENDER_COMPONENTS_DIR = path.join(dataDir, 'components')
 
 try {
-  const { promoteRenderComponent, registerRenderComponent } = await import('../src/modules/render-components/component-registry.js')
+  const {
+    promoteRenderComponent,
+    registerRenderComponent,
+    RENDER_COMPONENT_VISUAL_POLICY_VERSION,
+  } = await import('../src/modules/render-components/component-registry.js')
   const { renderV2RemotionTimeline } = await import('../src/pipeline-v2/remotion-timeline-renderer.js')
   const { readRenderComponent } = await import('../src/modules/render-components/component-registry.js')
   const type = await import('../../shared/types/remotion-timeline-spec.v1.js')
@@ -119,15 +123,17 @@ export default function BlurDissolve({ children, progress, direction }) {
   assert.equal(renderedScene?.manifest.renderedTimes, 1)
   const renderedTransition = await readRenderComponent('cmp_blur_dissolve')
   assert.equal(renderedTransition?.manifest.status, 'draft')
-  const previewEvidence = {
+  const previewEvidence = (canvas: { width: number; height: number }) => ({
     verdict: 'passed' as const,
+    policyVersion: RENDER_COMPONENT_VISUAL_POLICY_VERSION,
+    canvas,
     frameCount: 5,
     summary: 'fixture preview passed',
     criteria: [{ criterion: 'fixture renders', passed: true, evidence: 'real Remotion output exists' }],
     reviewedAt: new Date().toISOString(),
-  }
-  await promoteRenderComponent({ id: 'cmp_blur_rise', previewEvidence })
-  await promoteRenderComponent({ id: 'cmp_blur_dissolve', previewEvidence })
+  })
+  await promoteRenderComponent({ id: 'cmp_blur_rise', previewEvidence: previewEvidence(spec.canvas) })
+  await promoteRenderComponent({ id: 'cmp_blur_dissolve', previewEvidence: previewEvidence(spec.canvas) })
 
   const concurrentSpec: type.RemotionTimelineSpecV1 = {
     ...spec,
@@ -136,6 +142,7 @@ export default function BlurDissolve({ children, progress, direction }) {
     scenes: [{ ...spec.scenes[0]!, start_sec: 0, duration_sec: 0.5 }],
     transitions: [],
   }
+  await promoteRenderComponent({ id: 'cmp_blur_rise', previewEvidence: previewEvidence(concurrentSpec.canvas) })
   const concurrent = await Promise.all([
     renderV2RemotionTimeline({
       spec: concurrentSpec,
@@ -155,6 +162,13 @@ export default function BlurDissolve({ children, progress, direction }) {
   assert.notEqual(registryPaths[0], registryPaths[1], 'parallel renders must use isolated component registries')
   assert.equal(registryPaths.every((registryPath) => !existsSync(registryPath)), true, 'temporary registries must be removed')
 
+  await promoteRenderComponent({ id: 'cmp_blur_rise', previewEvidence: previewEvidence(spec.canvas) })
+  await promoteRenderComponent({ id: 'cmp_blur_dissolve', previewEvidence: previewEvidence(spec.canvas) })
+
+  const remotionRoot = path.resolve('..', 'remotion')
+  const customRegistryDirs = () => readdirSync(remotionRoot)
+    .filter((entry) => entry.startsWith('.v2-custom-components-'))
+  const registriesBeforeBrowserFailure = new Set(customRegistryDirs())
   const previousBrowserExecutable = process.env.REMOTION_BROWSER_EXECUTABLE
   process.env.REMOTION_BROWSER_EXECUTABLE = path.join(dataDir, 'missing-browser.exe')
   try {
@@ -167,6 +181,11 @@ export default function BlurDissolve({ children, progress, direction }) {
     if (previousBrowserExecutable === undefined) delete process.env.REMOTION_BROWSER_EXECUTABLE
     else process.env.REMOTION_BROWSER_EXECUTABLE = previousBrowserExecutable
   }
+  assert.deepEqual(
+    customRegistryDirs().filter((entry) => !registriesBeforeBrowserFailure.has(entry)),
+    [],
+    'failed renders must not leave task-local component registries behind',
+  )
   assert.equal(
     (await readRenderComponent('cmp_blur_rise'))?.manifest.failedRenders,
     0,
@@ -180,5 +199,5 @@ export default function BlurDissolve({ children, progress, direction }) {
 
   console.log('[smoke-v2-render-custom-component] OK')
 } finally {
-  rmSync(dataDir, { recursive: true, force: true })
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 }

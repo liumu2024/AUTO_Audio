@@ -16,6 +16,23 @@ function hasUserMaterial(attachments: InputAttachment[]): boolean {
   return attachments.some((item) => item.type === 'video' || item.type === 'image')
 }
 
+export function buildDirectorSampleVideoFromUI(input: {
+  sampleUrl: string
+  sampleName?: string
+  existing?: DirectorContext['sampleVideo']
+}): DirectorContext['sampleVideo'] {
+  if (!input.sampleUrl.trim()) return undefined
+  const existing = input.existing?.url === input.sampleUrl ? input.existing : undefined
+  return {
+    id: existing?.id ?? 'sample_video',
+    url: input.sampleUrl,
+    name: input.sampleName,
+    styleRecipe: existing?.styleRecipe,
+    reference: existing?.reference,
+    sampleUnderstanding: existing?.sampleUnderstanding,
+  }
+}
+
 export function buildDirectorContextFromUI(input: {
   sampleUrl: string
   sampleName?: string
@@ -56,15 +73,11 @@ export function buildDirectorContextFromUI(input: {
   }
 
   return {
-    sampleVideo: input.sampleUrl.trim()
-      ? {
-          id: 'sample_video',
-          url: input.sampleUrl,
-          name: input.sampleName,
-          styleRecipe: input.existing?.sampleVideo?.styleRecipe,
-          reference: input.existing?.sampleVideo?.reference,
-        }
-      : undefined,
+    sampleVideo: buildDirectorSampleVideoFromUI({
+      sampleUrl: input.sampleUrl,
+      sampleName: input.sampleName,
+      existing: input.existing?.sampleVideo,
+    }),
     materials: input.attachments.map((att) => ({
       id: att.materialId ?? att.id.replace(/^att_/, ''),
       type: att.type,

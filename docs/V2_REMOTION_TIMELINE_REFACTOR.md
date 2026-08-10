@@ -53,11 +53,11 @@ fonted/src/components/shell/V2TimelineView.tsx
 ## API
 
 ```text
-POST /api/v2/timeline/preview
-POST /api/v2/timeline/run
+POST /api/v2/timeline-drafts/preview
+POST /api/v2/timeline-drafts/:draftId/runs
 ```
 
-`preview` 只负责规划和审查。`run` 负责根据审查后的 spec 执行素材补全、视频标准化、Remotion 渲染和 trace 落盘。
+`preview` 负责规划、审查并保存草稿版本。`runs` 只消费指定 revision，执行素材补全、视频标准化、Remotion 渲染、RenderRun 和 trace 落盘。
 
 ## 已清理内容
 

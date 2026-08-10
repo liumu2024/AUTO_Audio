@@ -58,7 +58,6 @@ export function createDefaultDirectorSlots(partial) {
         contentDomain: 'general',
         aspectRatio: '9:16',
         styleIntensity: 'medium',
-        subtitlePolicy: 'keep',
         ...partial,
     };
 }
@@ -107,6 +106,7 @@ export function summarizeDirectorReference(understanding) {
         rhythm: understanding.rhythm_zh,
         reusableStyle: understanding.reusable_style_zh,
         segmentCount: understanding.segments.length,
+        shotCount: (understanding.shot_evidence ?? []).filter((shot) => shot.confidence >= 0.6).length,
         warnings: understanding.warnings_zh,
     };
 }

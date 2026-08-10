@@ -1,7 +1,12 @@
 import { directorActionFromIntentResult } from '../../../../shared/lib/director-action-engine.js'
+import {
+  deriveRuntimeSlotStatus,
+  summarizeDirectorReference,
+} from '../../../../shared/lib/director-understanding.js'
+import type { V2SampleUnderstandingResult } from '../../../../shared/types/v2-sample-understanding.js'
 import { randomUUID } from 'node:crypto'
 import { createV2TraceWriter } from '../../pipeline-v2/trace.js'
-import { buildV2TimelineFactDigest } from '../../pipeline-v2/timeline-revision-outcome-review.js'
+import { buildDirectorTimelineFacts } from '../../pipeline-v2/timeline-revision-outcome-review.js'
 import { createV2TimelineDraftRepository } from '../../pipeline-v2/timeline-draft-repository.js'
 import {
   dispatchV2AgentTool,
@@ -41,43 +46,6 @@ import type {
 const workspaceSessions = createDirectorWorkspaceSessionRepository()
 const timelineDrafts = createV2TimelineDraftRepository()
 
-function directorTimelineFacts(input: {
-  revision: number
-  spec: Parameters<typeof buildV2TimelineFactDigest>[0]
-}) {
-  const digest = buildV2TimelineFactDigest(input.spec)
-  return {
-    revision: input.revision,
-    scenes: digest.scenes.map((scene) => ({
-      id: scene.id,
-      title: scene.title,
-      description: scene.description,
-      visualRole: scene.visual_role,
-      durationSec: scene.duration_sec,
-    })),
-    visibleText: digest.visible_text.map((text) => ({
-      id: text.id,
-      sceneId: text.scene_id,
-      type: text.type,
-      text: text.text,
-      yPct: text.position.y_pct,
-      maxLines: text.position.max_lines,
-      animation: text.animation,
-    })),
-    transitions: digest.transitions.map((transition) => ({
-      id: transition.id,
-      fromSceneId: transition.from_scene_id,
-      toSceneId: transition.to_scene_id,
-      fromSceneIndex: digest.scenes.findIndex((scene) => scene.id === transition.from_scene_id) + 1,
-      toSceneIndex: digest.scenes.findIndex((scene) => scene.id === transition.to_scene_id) + 1,
-      type: transition.type,
-      durationSec: transition.duration_sec,
-    })),
-    audioClipCount: digest.audio.length,
-    notes: digest.notes,
-  }
-}
-
 export async function getDirectorWorkspaceSession(input: {
   workspaceSessionId: string
   userId: number
@@ -102,7 +70,7 @@ export async function recordDirectorWorkspaceOutcome(input: {
     ? await timelineDrafts.getRevision(draftId, revision, input.userId)
     : null
   const timelineFacts = persistedRevision
-    ? directorTimelineFacts({ revision: persistedRevision.revision, spec: persistedRevision.spec })
+    ? buildDirectorTimelineFacts(persistedRevision.revision, persistedRevision.spec)
     : undefined
   let state = applyDirectorWorkspacePatch(current.state, {
     context: input.currentTimeline
@@ -183,17 +151,18 @@ function workspaceId(value: string | undefined): string {
 }
 
 function runtimeObservationPatch(input: DirectorAgentChatRequest) {
-  const slots = input.context.slots
   const explicitUiControls = input.context.explicitUiControls
   return {
     context: {
-      sampleVideo: input.context.sampleVideo,
-      materials: input.context.materials,
+      ...(input.contextSampleAuthoritative
+        ? { sampleVideo: input.context.sampleVideo ?? null }
+        : {}),
+      ...(input.contextMaterialsAuthoritative
+        ? { materials: input.context.materials }
+        : {}),
       currentTimeline: input.context.currentTimeline,
       directorState: input.context.directorState,
       slots: {
-        sampleVideoStatus: slots.sampleVideoStatus,
-        materialStatus: slots.materialStatus,
         ...(explicitUiControls?.aspectRatio ? { aspectRatio: explicitUiControls.aspectRatio } : {}),
         ...(explicitUiControls?.durationSec !== undefined ? { durationSec: explicitUiControls.durationSec } : {}),
         ...(explicitUiControls?.styleIntensity ? { styleIntensity: explicitUiControls.styleIntensity } : {}),
@@ -405,13 +374,46 @@ export async function* streamDirectorAgentChat(
   let workspaceState = persisted
     ? applyDirectorWorkspacePatch(before, runtimeObservationPatch(input))
     : before
+  const selectedSampleId = workspaceState.context.sampleVideo?.id
+  if (selectedSampleId && workspaceState.context.materials.some((material) => material.id === selectedSampleId)) {
+    workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+      context: {
+        materials: workspaceState.context.materials.filter((material) => material.id !== selectedSampleId),
+      },
+    })
+  }
+  const effectiveRuntime = {
+    ...input.runtime,
+    sampleUrl: workspaceState.context.sampleVideo?.url ?? '',
+    isSampleParsed: Boolean(
+      workspaceState.context.sampleVideo?.reference
+      || workspaceState.context.sampleVideo?.sampleUnderstanding,
+    ),
+    hasVisualMaterial: workspaceState.context.materials.some(
+      (material) => material.type === 'image' || material.type === 'video',
+    ),
+    materialCount: workspaceState.context.materials.length,
+  }
+  workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+    context: { slots: deriveRuntimeSlotStatus(effectiveRuntime) },
+  })
+  const explicitlyAttachedImages = input.currentTurnMaterialIds?.length
+    ? [...new Set(input.currentTurnMaterialIds)].filter((materialId) =>
+      workspaceState.context.materials.some((material) => material.id === materialId && material.type === 'image'))
+      .slice(0, 12)
+    : []
+  if (input.currentTurnMaterialIds?.length) {
+    workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+      recentVisualMaterialIds: explicitlyAttachedImages,
+    })
+  }
   const persistedTimelineRevision = workspaceState.draftId && workspaceState.baseRevision
     ? await timelineDrafts.getRevision(workspaceState.draftId, workspaceState.baseRevision, userId)
     : null
   workspaceState = applyDirectorWorkspacePatch(workspaceState, {
     context: {
       timelineFacts: persistedTimelineRevision
-        ? directorTimelineFacts({ revision: persistedTimelineRevision.revision, spec: persistedTimelineRevision.spec })
+        ? buildDirectorTimelineFacts(persistedTimelineRevision.revision, persistedTimelineRevision.spec)
         : null,
     },
   })
@@ -437,7 +439,7 @@ export async function* streamDirectorAgentChat(
     turn_request_id: turnRequestId,
     prompt: input.prompt,
     context: compactDirectorWorkspaceContext(workspaceState),
-    runtime: input.runtime,
+    runtime: effectiveRuntime,
   })
   const surface = routeConversationSurface(input)
 
@@ -462,9 +464,9 @@ export async function* streamDirectorAgentChat(
   yield {
     type: 'thought',
     title: '读取上下文',
-    content: `${sampleLabel(input)}；${materialLabel(
-      input.runtime.materialCount,
-      input.runtime.hasVisualMaterial,
+    content: `${sampleLabel({ ...input, runtime: effectiveRuntime })}；${materialLabel(
+      effectiveRuntime.materialCount,
+      effectiveRuntime.hasVisualMaterial,
     )}；当前画幅 ${input.context.slots.aspectRatio}。`,
   }
   await wait(20)
@@ -511,6 +513,9 @@ export async function* streamDirectorAgentChat(
   })
   const routed = await routeDirectorIntentWithLlm({
     ...input,
+    runtime: effectiveRuntime,
+    currentTurnMaterialIds: workspaceState.recentVisualMaterialIds,
+    timelineSpec: persistedTimelineRevision?.spec,
     currentTurnId: turnOperationId,
     context: workspaceState.context,
     confirmedRequirements: workspaceState.confirmedRequirements,
@@ -595,7 +600,7 @@ export async function* streamDirectorAgentChat(
   const unresovedAction = directorActionFromIntentResult({
     prompt: input.prompt,
     context: workspaceState.context,
-    runtime: input.runtime,
+    runtime: effectiveRuntime,
     result: routed.result,
   })
   const effectiveCreativeConfig = resolveEffectiveCreativeConfig({
@@ -743,7 +748,7 @@ export async function* streamDirectorAgentChat(
                 : undefined,
             userId,
             context: workspaceState.context,
-            runtime: input.runtime,
+            runtime: effectiveRuntime,
             workspace: workspaceState,
             authorization: deliveryAuthorization,
             traceSessionId: id,
@@ -841,21 +846,18 @@ export async function* streamDirectorAgentChat(
         },
       })
       const facts = toolResultTimelineFacts(result)
-      if (result.sampleUnderstanding && workspaceState.context.sampleVideo) {
-        const understanding = result.sampleUnderstanding as {
-          summary_zh?: string; atmosphere_zh?: string; editing_zh?: string; rhythm_zh?: string; reusable_style_zh?: string; segments?: unknown[]; warnings_zh?: string[]
-        }
+      if (result.sampleUnderstanding && result.sampleSelection) {
+        const understanding = result.sampleUnderstanding as V2SampleUnderstandingResult
         workspaceState = applyDirectorWorkspacePatch(workspaceState, {
           context: {
             sampleVideo: {
-              ...workspaceState.context.sampleVideo,
-              sampleUnderstanding: result.sampleUnderstanding as import('../../../../shared/types/v2-sample-understanding.js').V2SampleUnderstandingResult,
-              reference: {
-                source: 'sample_video', summary: understanding.summary_zh ?? 'V2 sample understanding completed.',
-                atmosphere: understanding.atmosphere_zh, editing: understanding.editing_zh, rhythm: understanding.rhythm_zh,
-                reusableStyle: understanding.reusable_style_zh, segmentCount: understanding.segments?.length ?? 0, warnings: understanding.warnings_zh,
-              },
+              ...result.sampleSelection,
+              sampleUnderstanding: understanding,
+              reference: summarizeDirectorReference(understanding),
             },
+            materials: workspaceState.context.materials.filter(
+              (material) => material.id !== result.sampleSelection!.id,
+            ),
           },
         })
       }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   ACTIVE_DIRECTOR_WORKSPACE_SESSION_KEY,
   LEGACY_DIRECTOR_WORKSPACE_SESSION_KEY,
+  replaceActiveDirectorWorkspaceSession,
   resolveActiveDirectorWorkspaceSessionId,
   restoreWorkspaceDraft,
   type WorkspaceSessionStorage,
@@ -56,6 +57,16 @@ const restartedSessionId = resolveActiveDirectorWorkspaceSessionId({
 })
 assert.equal(restartedSessionId, 'v2_director_after_restart')
 assert.notEqual(restartedSessionId, firstSessionId)
+
+const openedDraftSessionId = replaceActiveDirectorWorkspaceSession({
+  sessionStorage: firstWindowStorage,
+  createId: () => 'v2_director_opened_draft',
+})
+assert.equal(openedDraftSessionId, 'v2_director_opened_draft')
+assert.equal(
+  firstWindowStorage.getItem(ACTIVE_DIRECTOR_WORKSPACE_SESSION_KEY),
+  openedDraftSessionId,
+)
 
 let restoredDraftId: string | undefined
 const restored = await restoreWorkspaceDraft({

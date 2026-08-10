@@ -18,7 +18,7 @@ import type { V2AgentSkillContext, V2AgentToolContext } from './v2-input.js'
 
 const SampleUnderstandingJsonSchema = {
   type: 'object',
-  required: ['schema_version', 'task_id', 'summary_zh', 'segments'],
+  required: ['schema_version', 'task_id', 'summary_zh', 'segments', 'shot_evidence'],
   properties: {
     schema_version: { type: 'string', const: V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION },
     task_id: { type: 'string' },
@@ -30,6 +30,7 @@ const SampleUnderstandingJsonSchema = {
     reusable_style_zh: { type: 'string' },
     not_reusable_zh: { type: 'string' },
     segments: { type: 'array', items: { type: 'object' } },
+    shot_evidence: { type: 'array', items: { type: 'object' } },
     questions_for_user_zh: { type: 'array', items: { type: 'string' } },
     warnings_zh: { type: 'array', items: { type: 'string' } },
   },
@@ -133,6 +134,7 @@ function heuristicUnderstanding(input: {
     reusable_style_zh: '复用结构、节奏、镜头功能和转场位置。',
     not_reusable_zh: '样例原始画面不作为成片素材，不直接进入最终视频。',
     segments,
+    shot_evidence: [],
     questions_for_user_zh: ['你希望后续重点复用样例的节奏、镜头语言、氛围，还是具体转场方式？'],
     warnings_zh: input.warning ? [input.warning] : [],
   }
@@ -163,7 +165,8 @@ function buildPrompt(input: {
     '- rhythm_zh：说明节奏、音乐/运动依据。',
     '- reusable_style_zh：哪些结构和风格可迁移。',
     '- not_reusable_zh：哪些不应该照搬。',
-    '- segments：按镜头或段落输出 3-8 段，每段必须具体描述画面内容和镜头/转场，不要写空话。',
+    '- segments：只表示 2-8 个内容章节，不等于实际镜头数量；每章描述叙事功能和画面进展。',
+    '- shot_evidence：按实际可见切换逐镜头输出，包含 id/start_sec/end_sec/boundary/confidence/description_zh。不要为了凑数合并为固定三段或四段；无法可靠判断时返回空数组。',
     '',
     'Runtime input:',
     JSON.stringify(
@@ -369,6 +372,27 @@ function normalizeUnderstanding(raw: unknown, fallback: V2SampleUnderstandingRes
   const segments = (rawSegments.length ? rawSegments : fallback.segments).map((segment, index) =>
     normalizeSegment(segment, index, fallback.segments[index] ?? fallback.segments[fallback.segments.length - 1]),
   )
+  const shotEvidence = (Array.isArray(value.shot_evidence) ? value.shot_evidence : [])
+    .flatMap((item, index) => {
+      if (!item || typeof item !== 'object') return []
+      const record = item as Record<string, unknown>
+      const start = clamp(finiteNumber(record.start_sec, 0), 0, fallback.sample.duration_sec)
+      const end = clamp(finiteNumber(record.end_sec, start), start, fallback.sample.duration_sec)
+      const boundary = ['hard_cut', 'soft_transition', 'continuous', 'end', 'unknown'].includes(String(record.boundary))
+        ? String(record.boundary) as 'hard_cut' | 'soft_transition' | 'continuous' | 'end' | 'unknown'
+        : 'unknown'
+      if (end <= start) return []
+      return [{
+        id: typeof record.id === 'string' ? record.id : `sample_shot_${String(index + 1).padStart(3, '0')}`,
+        start_sec: start,
+        end_sec: end,
+        boundary,
+        confidence: clamp(finiteNumber(record.confidence, 0), 0, 1),
+        description_zh: typeof record.description_zh === 'string' ? record.description_zh : undefined,
+      }]
+    })
+    .sort((a, b) => a.start_sec - b.start_sec)
+    .slice(0, 80)
   return {
     ...fallback,
     source: 'llm',
@@ -384,6 +408,7 @@ function normalizeUnderstanding(raw: unknown, fallback: V2SampleUnderstandingRes
       start_sec: clamp(segment.start_sec, 0, fallback.sample.duration_sec),
       end_sec: clamp(segment.end_sec, 0.01, fallback.sample.duration_sec),
     })),
+    shot_evidence: shotEvidence,
     questions_for_user_zh: Array.isArray(value.questions_for_user_zh)
       ? value.questions_for_user_zh.filter((item): item is string => typeof item === 'string').slice(0, 4)
       : fallback.questions_for_user_zh,

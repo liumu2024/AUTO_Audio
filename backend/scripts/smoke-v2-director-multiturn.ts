@@ -51,7 +51,7 @@ const replies = [
     id: 'resp_3',
     output_text: JSON.stringify({
       replyDraft: '我会保留当前方案并只调整字幕策略。', intent: 'revise',
-      creativeConfigDelta: { subtitlePolicy: 'rewrite' }, stateActions: [],
+      creativeConfigDelta: {}, stateActions: [],
       skillRequests: [], toolRequests: [], missingInformation: [],
     }),
   },
@@ -129,6 +129,33 @@ const replies = [
       missingInformation: [],
     }),
   },
+  ...Array.from({ length: 3 }, (_, index) => ({
+    id: `resp_material_${index + 1}`,
+    output_text: JSON.stringify({
+      replyDraft: '继续讨论当前素材。', intent: 'chat', creativeConfigDelta: {},
+      stateActions: [], memoryActions: [], skillRequests: [], toolRequests: [], missingInformation: [],
+    }),
+  })),
+  {
+    id: 'resp_sample_candidate',
+    output_text: JSON.stringify({
+      replyDraft: '我会分析唯一的视频候选。', intent: 'create', creativeConfigDelta: {},
+      stateActions: [], memoryActions: [],
+      skillRequests: [{ skillId: 'sample-reference-analysis', purpose: '分析用户指定的样例视频' }],
+      toolRequests: [{
+        ref: 'analyze_sample', toolId: 'sample.analyze', skillId: 'sample-reference-analysis',
+        arguments: {}, requestedMode: 'preview', dependsOn: [],
+      }],
+      missingInformation: [],
+    }),
+  },
+  {
+    id: 'resp_sample_clear',
+    output_text: JSON.stringify({
+      replyDraft: 'Sample removed.', intent: 'chat', creativeConfigDelta: {},
+      stateActions: [], memoryActions: [], skillRequests: [], toolRequests: [], missingInformation: [],
+    }),
+  },
 ]
 const originalFetch = globalThis.fetch
 let dispatchCount = 0
@@ -145,18 +172,41 @@ async function turn(
   context = baseContext,
   overrides: Partial<typeof runtime> = {},
   failedRefs = new Set<string>(),
+  contextMaterialsAuthoritative = false,
+  contextSampleAuthoritative = false,
 ) {
   const events = [] as Array<{ type: string; [key: string]: unknown }>
-  for await (const event of streamDirectorAgentChat({
+  const request = {
     prompt,
     context,
     runtime: { ...runtime, ...overrides },
     workspaceSessionId: sessionId,
     userId: 1,
-  }, {
+    contextMaterialsAuthoritative,
+    contextSampleAuthoritative,
+  }
+  for await (const event of streamDirectorAgentChat(request, {
     dispatchTool: async (dispatchInput) => {
       const { stage } = dispatchInput
       dispatchCount += 1
+      if (stage.toolRequest.toolId === 'sample.analyze') {
+        const candidate = dispatchInput.runtime.sampleCandidates?.[0]!
+        return {
+          callId: stage.toolRequest.callId,
+          toolId: stage.toolRequest.toolId,
+          ok: true,
+          summary: '样例理解已完成。',
+          sampleSelection: candidate,
+          sampleUnderstanding: {
+            schema_version: 'v2_sample_understanding.v1' as const,
+            task_id: 'sample_candidate_smoke', source: 'llm' as const,
+            sample: { name: candidate.name, duration_sec: 8 },
+            summary_zh: '四个清晰镜头', story_zh: '开篇到收束', atmosphere_zh: '克制',
+            editing_zh: '清晰切换', rhythm_zh: '逐步加快', reusable_style_zh: '四段结构',
+            not_reusable_zh: '具体人物', segments: [], questions_for_user_zh: [], warnings_zh: [],
+          },
+        }
+      }
       if (stage.toolRequest.ref === 'apply_transition') {
         authorizedDraftComponentsSeen.push(dispatchInput.authorizedDraftComponentIds ?? [])
       }
@@ -348,7 +398,69 @@ try {
     currentTimeline: { kind: 'v2_timeline', status: 'saved', draftId: 'draft_1', currentRevision: 2 },
   }, { hasV2Timeline: true, v2SceneCount: 3 })
   assert.deepEqual(authorizedDraftComponentsSeen, [['cmp_server_generated']])
-  assert.equal(requests.length, 10)
+  const materialContext = {
+    ...baseContext,
+    materials: [{
+      id: 'material_to_clear', type: 'image' as const,
+      url: 'https://cdn.example.com/material.png', name: 'material.png',
+    }],
+    slots: { ...baseContext.slots, materialStatus: 'ready' as const },
+  }
+  const materialAdded = await turn('先讨论这张素材', materialContext, {}, new Set(), true)
+  assert.equal(
+    (materialAdded.find((event) => event.type === 'workspace_session') as { state: { context: { materials: unknown[] } } })
+      .state.context.materials.length,
+    1,
+  )
+  const reloadWithoutRestoredMaterials = await turn('页面恢复后继续讨论', baseContext)
+  assert.equal(
+    (reloadWithoutRestoredMaterials.find((event) => event.type === 'workspace_session') as { state: { context: { materials: unknown[] } } })
+      .state.context.materials.length,
+    1,
+    'an empty UI before restoration must not erase persisted materials',
+  )
+  assert.equal(
+    (reloadWithoutRestoredMaterials.find((event) => event.type === 'workspace_session') as {
+      state: { context: { slots: { materialStatus: string } } }
+    }).state.context.slots.materialStatus,
+    'ready',
+    'material status must be derived from the preserved workspace materials, not an empty non-authoritative UI snapshot',
+  )
+  const explicitlyCleared = await turn('我已移除全部素材', baseContext, {}, new Set(), true)
+  assert.equal(
+    (explicitlyCleared.find((event) => event.type === 'workspace_session') as { state: { context: { materials: unknown[] } } })
+      .state.context.materials.length,
+    0,
+    'an explicit empty material snapshot must clear persisted materials',
+  )
+  const sampleCandidateContext = {
+    ...baseContext,
+    materials: [{
+      id: 'material_sample_video', type: 'video' as const,
+      url: 'https://cdn.example.com/sample.mp4', name: 'sample.mp4',
+    }],
+    slots: { ...baseContext.slots, materialStatus: 'ready' as const },
+  }
+  const sampleCandidate = { id: 'material_sample_video', url: 'https://cdn.example.com/sample.mp4', name: 'sample.mp4' }
+  const analyzedSample = await turn(
+    '刚上传的视频就是样例，请分析，不要创建方案。',
+    sampleCandidateContext,
+    { hasVisualMaterial: true, materialCount: 1, sampleCandidates: [sampleCandidate] },
+    new Set(),
+    true,
+  )
+  const analyzedSampleState = (analyzedSample.find((event) => event.type === 'workspace_session') as {
+    state: { context: { sampleVideo?: { id: string; reference?: { summary: string } }; materials: unknown[] } }
+  }).state
+  assert.equal(analyzedSampleState.context.sampleVideo?.id, 'material_sample_video')
+  assert.equal(analyzedSampleState.context.sampleVideo?.reference?.summary, '四个清晰镜头')
+  assert.deepEqual(analyzedSampleState.context.materials, [], 'a selected sample must not remain a final-video material')
+  const clearedSample = await turn('Remove the current sample.', baseContext, {}, new Set(), false, true)
+  const clearedSampleState = (clearedSample.find((event) => event.type === 'workspace_session') as {
+    state: { context: { sampleVideo?: unknown } }
+  }).state
+  assert.equal(clearedSampleState.context.sampleVideo, undefined, 'an explicit sample clear must persist')
+  assert.equal(requests.length, 15)
 } finally {
   globalThis.fetch = originalFetch
   await restoredDraftRepository.deleteDraft(restoredDraft.id, 1)

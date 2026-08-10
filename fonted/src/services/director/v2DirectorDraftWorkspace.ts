@@ -282,6 +282,8 @@ export function startNewV2DraftWorkspace(): void {
     inputText: '',
     attachments: [],
     pendingAttachmentIds: [],
+    materialsSnapshotAuthoritative: false,
+    sampleSnapshotAuthoritative: false,
     showSampleInInputTray: false,
     aspectRatio: '9:16',
     aspectRatioExplicit: false,

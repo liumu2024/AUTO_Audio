@@ -48,6 +48,7 @@ backend/tmp/
 backend/uploads/
 backend/renders/
 backend/v2-renders/
+backend/data/
 tmp/
 output/
 

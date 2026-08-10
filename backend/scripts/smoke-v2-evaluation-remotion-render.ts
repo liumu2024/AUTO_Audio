@@ -146,9 +146,13 @@ try {
 assert.equal(Boolean(corruptFailure), true)
 results.push({ id: 'corrupt_asset_failure', ok: true, expectedFailure: corruptFailure })
 
+const deliveryResults = results.filter((item) => !('expectedFailure' in item))
+
 console.log(JSON.stringify({
   scenarios: results,
-  renderDeliverySuccessRate: results.filter((item) => item.ok).length / results.length,
+  renderDeliverySuccessRate: deliveryResults.filter(
+    (item) => item.ok && 'outputPath' in item && Boolean(item.outputPath),
+  ).length / deliveryResults.length,
   mediaGenerationCalled: false,
   remotionRenderCalled: true,
 }, null, 2))

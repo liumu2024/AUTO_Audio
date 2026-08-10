@@ -3,11 +3,30 @@ import { z } from 'zod'
 import type { DirectorConversationRuntime } from '../../../../shared/lib/director-understanding.js'
 import type { DirectorContext } from '../../../../shared/types/director-context.js'
 import type { DirectorWorkspaceState } from '../../../../shared/types/director-workspace-session.js'
+import { materialJobMissingRequiredOutput } from '../../../../shared/lib/remotion-timeline-validator.js'
 import { REMOTION_TIMELINE_TRANSITION_TYPES } from '../../../../shared/types/remotion-timeline-spec.v1.js'
+import type { RemotionTimelineSpecV1 } from '../../../../shared/types/remotion-timeline-spec.v1.js'
+import { env } from '../../config/env.js'
+import { evaluateExternalPublicationReadiness } from '../../modules/upload/asset-publisher.js'
 
 export type V2AgentToolStatus = 'available' | 'planned' | 'disabled'
 export type V2AgentToolMode = 'preview' | 'execute'
 export type V2AgentToolEffect = 'read' | 'draft' | 'delivery'
+
+export function resolveV2AgentSample(
+  context: DirectorContext,
+  runtime: DirectorConversationRuntime,
+) {
+  if (context.sampleVideo?.url?.trim()) return context.sampleVideo
+  const candidates = (runtime.sampleCandidates ?? []).filter((candidate) => {
+    if (!candidate.url.trim()) return false
+    return context.materials.some((material) =>
+      material.id === candidate.id
+      && material.type === 'video'
+      && material.url === candidate.url)
+  })
+  return candidates.length === 1 ? candidates[0] : undefined
+}
 
 export interface V2AgentToolDefinition {
   id: string
@@ -33,6 +52,12 @@ const patchInstructionSchema = z.string().trim().min(1).max(4_000).optional()
 const timelinePatchArgumentsSchema = z.discriminatedUnion('scope', [
   z.object({ scope: z.literal('subtitle'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema }).strict(),
   z.object({ scope: z.literal('scene'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema }).strict(),
+  z.object({
+    scope: z.literal('structure'),
+    sceneIds: z.array(z.string().trim().min(1).max(200)).min(1).max(20)
+      .refine((ids) => new Set(ids).size === ids.length, 'sceneIds must be unique.'),
+    instruction: patchInstructionSchema,
+  }).strict(),
   z.object({ scope: z.literal('visual_strategy'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema }).strict(),
   z.object({
     scope: z.literal('transition'),
@@ -85,6 +110,7 @@ export function evaluateV2AgentToolReadiness(input: {
   runtime: DirectorConversationRuntime
   workspace?: Pick<DirectorWorkspaceState, 'draftId' | 'baseRevision'>
   authorizationGranted?: boolean
+  timelineSpec?: RemotionTimelineSpecV1
 }): V2AgentToolReadiness {
   const blocked = (code: string, description: string, alternatives: string[] = []) => ({
     toolId: input.toolId,
@@ -100,7 +126,7 @@ export function evaluateV2AgentToolReadiness(input: {
     (input.workspace?.draftId ?? input.context.currentTimeline?.draftId)
       && (input.workspace?.baseRevision ?? input.context.currentTimeline?.currentRevision),
   )
-  if (input.toolId === 'sample.analyze' && !input.context.sampleVideo?.url?.trim()) {
+  if (input.toolId === 'sample.analyze' && !resolveV2AgentSample(input.context, input.runtime)) {
     return blocked('sample_missing', '当前没有已选样例。', ['timeline.plan'])
   }
   if (input.toolId === 'material.inspect' && input.context.materials.length === 0) {
@@ -109,8 +135,56 @@ export function evaluateV2AgentToolReadiness(input: {
   if (input.toolId === 'timeline.patch' && !hasDraft) {
     return blocked('draft_missing', '当前没有可修改的草稿。', ['timeline.plan'])
   }
+  if (input.toolId === 'timeline.plan' && hasDraft) {
+    return blocked('draft_already_exists', '当前已有可编辑草稿；结构或内容调整必须创建修订版本。', ['timeline.patch'])
+  }
   if (input.toolId === 'timeline.render' && !hasDraft) {
     return blocked('draft_missing', '当前没有可交付的草稿。', ['timeline.plan'])
+  }
+  if (input.toolId === 'timeline.render' && input.timelineSpec) {
+    const missing: V2AgentToolReadiness['missing'] = []
+    const assetById = new Map(input.timelineSpec.assets.map((asset) => [asset.id, asset]))
+    const assetIds = new Set(assetById.keys())
+    for (const job of input.timelineSpec.material_jobs) {
+      if (materialJobMissingRequiredOutput(job, assetIds)) {
+        missing.push({
+          code: 'material_output_missing',
+          description: `镜头 ${job.scene_id} 的素材任务没有可用产物。`,
+        })
+        continue
+      }
+      if (job.status === 'fulfilled') {
+        continue
+      }
+      if (job.type === 'request_user_material') {
+        missing.push({ code: 'user_material_required', description: `镜头 ${job.scene_id} 仍需要用户素材。` })
+        continue
+      }
+      if (job.type !== 'generate_video') continue
+      const fallbackAsset = job.fallback_asset_id ? assetById.get(job.fallback_asset_id) : undefined
+      const hasFallback = fallbackAsset?.type === 'video' || fallbackAsset?.type === 'image'
+      if (env.v2VideoGenerationProvider !== 'ark-seedance' && !hasFallback) {
+        missing.push({ code: 'generation_provider_unavailable', description: `镜头 ${job.scene_id} 需要生成视频，但当前未配置视频生成 Provider。` })
+      }
+      if (!job.input_asset_id) continue
+      const asset = assetById.get(job.input_asset_id)
+      if (!asset) {
+        missing.push({ code: 'generation_input_missing', description: `镜头 ${job.scene_id} 引用的生成输入素材不存在。` })
+        continue
+      }
+      const publication = evaluateExternalPublicationReadiness(asset.src)
+      if (!publication.ready) {
+        missing.push({ code: 'generation_input_unreachable', description: `${job.input_asset_id}：${publication.reason}` })
+      }
+    }
+    if (missing.length > 0) {
+      return {
+        toolId: input.toolId,
+        status: 'blocked',
+        missing,
+        alternatives: ['修改方案中的素材生成方式', '配置外部素材发布后重试'],
+      }
+    }
   }
   if (tool.requiresExplicitAuthorization && !input.authorizationGranted) {
     return { toolId: input.toolId, status: 'needs_authorization', missing: [], alternatives: [] }
@@ -141,7 +215,7 @@ export const V2_AGENT_TOOLS: readonly V2AgentToolDefinition[] = [
   { id: 'sample.analyze', name: '分析样例', summary: '读取用户明确选择的样例，提取可复用的结构、节奏和风格事实。', status: 'available', effect: 'read', cost: 'low', skills: ['sample-reference-analysis'], inputSchema: sampleAnalyzeInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '确认样例有效后重试，或继续无样例规划。' },
   { id: 'material.inspect', name: '检查素材', summary: '检查已上传的 V2 候选素材与可用角色。', status: 'available', effect: 'read', cost: 'none', skills: ['v2-timeline-authoring'], inputSchema: materialInspectInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '补充可用素材或继续文生视频。' },
   { id: 'timeline.plan', name: '创建方案', summary: '根据当前 V2 输入创建完整可编辑时间线草稿。', status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'sample-reference-analysis'], inputSchema: timelinePlanInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保留当前会话事实，修正要求后重新规划。' },
-  { id: 'timeline.patch', name: '局部修订', summary: `按 V2 范围修订已有草稿：字幕（subtitle）、单镜头与相邻转场（scene）、单镜头视觉策略（visual_strategy）、一个或多个明确转场（transition）、整案重写（global）。内置转场为 ${REMOTION_TIMELINE_TRANSITION_TYPES.join('、')}；其他效果使用已注册或新创作的 transition custom_render。`, status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'subtitle-track-authoring'], inputSchema: timelinePatchInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保持基础版本，缩小或澄清修订范围后重试。' },
+  { id: 'timeline.patch', name: '局部修订', summary: `按 V2 范围修订已有草稿：字幕（subtitle）、单镜头与相邻转场（scene）、连续镜头结构调整（structure）、单镜头视觉策略（visual_strategy）、一个或多个明确转场（transition）、整案重写（global）。内置转场为 ${REMOTION_TIMELINE_TRANSITION_TYPES.join('、')}；其他效果使用已注册或新创作的 transition custom_render。`, status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'subtitle-track-authoring'], inputSchema: timelinePatchInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保持基础版本，缩小或澄清修订范围后重试。' },
   { id: 'timeline.render', name: '正式渲染', summary: '按已保存 V2 版本执行素材解析与 Remotion 交付。', status: 'available', effect: 'delivery', cost: 'external', skills: ['v2-render-delivery'], inputSchema: timelineRenderInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '保留草稿与失败原因，修复后由用户重新确认。' },
   { id: 'audio.plan', name: '规划音频', summary: '未来独立音频轨规划接口。', status: 'planned', effect: 'draft', cost: 'low', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },
   { id: 'audio.generate_tts', name: '生成旁白', summary: '未来 TTS 旁白生成接口。', status: 'planned', effect: 'delivery', cost: 'external', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },

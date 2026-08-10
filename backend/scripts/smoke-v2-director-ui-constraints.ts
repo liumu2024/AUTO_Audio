@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 
 import { createDefaultDirectorSlots } from '../../shared/lib/director-understanding.js'
-import { buildDirectorContextFromUI } from '../../fonted/src/services/director/directorDecisionContext.js'
+import {
+  buildDirectorContextFromUI,
+  buildDirectorSampleVideoFromUI,
+} from '../../fonted/src/services/director/directorDecisionContext.js'
+import { useCreationStore } from '../../fonted/src/stores/creationStore.js'
 import { readFile } from 'node:fs/promises'
 
 const context = buildDirectorContextFromUI({
@@ -33,6 +37,153 @@ const untouchedContext = buildDirectorContextFromUI({
   isSampleParsed: false,
 })
 assert.equal(untouchedContext.userIntent.aspectRatio, undefined)
+
+const parsedSample = {
+  id: 'parsed_sample', url: '/uploads/old-sample.mp4', name: 'old-sample.mp4',
+  reference: { style: 'old style' },
+  sampleUnderstanding: { schema_version: 'v2_sample_understanding.v1' as const },
+}
+assert.equal(
+  buildDirectorSampleVideoFromUI({
+    sampleUrl: '/uploads/new-sample.mp4', sampleName: 'new-sample.mp4', existing: parsedSample,
+  })?.sampleUnderstanding,
+  undefined,
+  'a different sample URL must not inherit analysis from the previous sample',
+)
+assert.equal(
+  buildDirectorSampleVideoFromUI({
+    sampleUrl: '/uploads/old-sample.mp4', sampleName: 'old-sample.mp4', existing: parsedSample,
+  })?.sampleUnderstanding,
+  parsedSample.sampleUnderstanding,
+  'the same sample keeps its persisted analysis',
+)
+
+useCreationStore.setState({
+  sampleUrl: '', sampleName: '', isSampleParsed: false,
+  attachments: [{
+    id: 'att_uploaded_sample', materialId: 'uploaded_sample', name: 'sample.mp4',
+    type: 'video', url: '/uploads/sample.mp4', source: 'upload',
+  }],
+  pendingAttachmentIds: ['att_uploaded_sample'],
+  materialsSnapshotAuthoritative: true,
+})
+useCreationStore.getState().acceptServerSample({
+  id: 'uploaded_sample', url: '/uploads/sample.mp4', name: 'sample.mp4', parsed: true,
+})
+const selectedSampleState = useCreationStore.getState()
+assert.equal(selectedSampleState.sampleUrl, '/uploads/sample.mp4')
+assert.equal(selectedSampleState.isSampleParsed, true)
+assert.deepEqual(selectedSampleState.attachments, [])
+assert.deepEqual(selectedSampleState.pendingAttachmentIds, [])
+assert.equal(selectedSampleState.materialsSnapshotAuthoritative, true)
+useCreationStore.setState({ materialsSnapshotAuthoritative: false })
+useCreationStore.getState().acceptServerSample({
+  id: 'restored_sample', url: '/uploads/restored.mp4', name: 'restored.mp4', parsed: true,
+})
+assert.equal(
+  useCreationStore.getState().materialsSnapshotAuthoritative,
+  false,
+  'restoring a server sample must not make an incomplete local material list authoritative',
+)
+useCreationStore.getState().acceptServerSample(undefined)
+assert.equal(useCreationStore.getState().sampleUrl, '')
+assert.equal(
+  useCreationStore.getState().sampleSnapshotAuthoritative,
+  false,
+  'restoring a workspace with no sample must clear stale UI state without becoming a user clear action',
+)
+useCreationStore.getState().clearSample()
+assert.equal(useCreationStore.getState().sampleSnapshotAuthoritative, true)
+
+useCreationStore.setState({
+  attachments: [],
+  pendingAttachmentIds: [],
+  materialsSnapshotAuthoritative: false,
+})
+useCreationStore.getState().acceptServerMaterials([{
+  id: 'restored_landscape',
+  name: 'landscape.png',
+  type: 'image',
+  url: '/uploads/landscape.png',
+  tags: ['landscape'],
+}])
+const restoredMaterialState = useCreationStore.getState()
+assert.deepEqual(restoredMaterialState.attachments, [{
+  id: 'att_restored_landscape',
+  materialId: 'restored_landscape',
+  name: 'landscape.png',
+  type: 'image',
+  url: '/uploads/landscape.png',
+  source: 'library',
+  tags: ['landscape'],
+}])
+assert.equal(
+  restoredMaterialState.materialsSnapshotAuthoritative,
+  false,
+  'restoring server materials must hydrate the UI without claiming a user-authored material snapshot',
+)
+
+useCreationStore.getState().addAttachment({
+  id: 'att_local_new', materialId: 'local_new', name: 'new.png',
+  type: 'image', url: '/uploads/new.png', source: 'upload',
+})
+useCreationStore.getState().acceptServerMaterials([{
+  id: 'restored_landscape', name: 'landscape.png', type: 'image', url: '/uploads/landscape.png',
+}])
+assert.deepEqual(
+  useCreationStore.getState().attachments.map((item) => item.materialId),
+  ['restored_landscape', 'local_new'],
+  'a delayed server snapshot must not overwrite locally edited materials',
+)
+assert.equal(useCreationStore.getState().materialsSnapshotAuthoritative, true)
+useCreationStore.getState().acceptServerMaterials([
+  { id: 'restored_landscape', name: 'landscape.png', type: 'image', url: '/uploads/landscape.png' },
+  { id: 'local_new', name: 'new.png', type: 'image', url: '/uploads/new.png' },
+], true)
+assert.equal(
+  useCreationStore.getState().materialsSnapshotAuthoritative,
+  false,
+  'an identical server snapshot acknowledges the local material edit',
+)
+
+useCreationStore.setState({
+  attachments: [{
+    id: 'att_same', materialId: 'same', name: 'same.png', type: 'image',
+    url: '/uploads/same.png', source: 'library',
+  }],
+  pendingAttachmentIds: ['att_same'],
+  materialsSnapshotAuthoritative: true,
+})
+useCreationStore.getState().acceptServerMaterials([
+  { id: 'same', name: 'same.png', type: 'image', url: '/uploads/same.png' },
+])
+assert.deepEqual(
+  useCreationStore.getState().pendingAttachmentIds,
+  ['att_same'],
+  'an unrelated delayed snapshot cannot acknowledge a same-value attachment selected for this turn',
+)
+useCreationStore.getState().acceptServerMaterials([
+  { id: 'same', name: 'same.png', type: 'image', url: '/uploads/same.png' },
+], true)
+assert.deepEqual(useCreationStore.getState().pendingAttachmentIds, [])
+
+useCreationStore.getState().setSampleUrl('/uploads/local-sample.mp4', 'local-sample.mp4')
+useCreationStore.getState().acceptServerSample({
+  id: 'old_sample', url: '/uploads/old-sample.mp4', name: 'old-sample.mp4', parsed: true,
+})
+assert.equal(useCreationStore.getState().sampleUrl, '/uploads/local-sample.mp4')
+assert.equal(useCreationStore.getState().sampleSnapshotAuthoritative, true)
+useCreationStore.getState().acceptServerSample({
+  id: 'local_sample', url: '/uploads/local-sample.mp4', name: 'local-sample.mp4', parsed: true,
+}, true)
+assert.equal(useCreationStore.getState().isSampleParsed, true)
+assert.equal(useCreationStore.getState().sampleSnapshotAuthoritative, false)
+useCreationStore.getState().setSampleUrl('/uploads/replacement-sample.mp4', 'replacement-sample.mp4')
+assert.equal(
+  useCreationStore.getState().isSampleParsed,
+  false,
+  'selecting a different sample requires fresh analysis',
+)
 
 const chatPanelSource = await readFile(
   new URL('../../fonted/src/components/sidebar/DirectorChatPanel.tsx', import.meta.url),

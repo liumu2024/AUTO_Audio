@@ -36,5 +36,7 @@ export interface DirectorWorkspaceState {
     responseContinuityDisabled?: boolean;
     /** Bounded idempotency ledger for server-authorized V2 tool calls. */
     recentToolCallIds?: string[];
+    /** Most recent image group explicitly attached by the user, reused for visual follow-ups. */
+    recentVisualMaterialIds?: string[];
 }
 //# sourceMappingURL=director-workspace-session.d.ts.map

@@ -42,6 +42,7 @@ export interface DirectorWorkspacePatch {
   responseId?: string | null
   responseContinuityDisabled?: boolean
   recentToolCallIds?: string[]
+  recentVisualMaterialIds?: string[]
 }
 
 function clone<T>(value: T): T {
@@ -79,6 +80,7 @@ function normalizedContext(input: DirectorContext): {
   delete legacyIntent.constraints
   delete legacyIntent.requestedStyle
   delete legacyIntent.rawText
+  delete (context.slots as unknown as Record<string, unknown>).subtitlePolicy
   return { context, legacyConstraints }
 }
 
@@ -241,6 +243,7 @@ export function applyDirectorWorkspacePatch(
     'recentFailure',
     'responseId',
     'recentToolCallIds',
+    'recentVisualMaterialIds',
   ] as const) {
     if (patch[key] === undefined) continue
     const value = patch[key]
@@ -302,6 +305,7 @@ export function compactDirectorWorkspaceContext(state: DirectorWorkspaceState) {
         name: item.name,
         tags: item.tags ?? [],
       })),
+      recentVisualMaterialIds: state.recentVisualMaterialIds ?? [],
       latestExecution: state.latestExecution,
       pendingQuestion: state.pendingQuestion,
       recentFailure: state.recentFailure,

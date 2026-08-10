@@ -20,10 +20,18 @@ try {
   const {
     authorRenderComponent,
     buildRenderComponentCodingPrompt,
+    ensureRenderComponentVisualEvidence,
     renderComponentPreviewSampleFrames,
     V2_TRANSITION_VISUAL_INTEGRITY_CRITERIA,
   } = await import('../src/modules/render-components/component-authoring-agent.js')
-  const { listRenderComponents, readRenderComponent } = await import(
+  const {
+    listRenderComponents,
+    promoteRenderComponent,
+    readRenderComponent,
+    registerRenderComponent,
+    renderComponentEvidenceForCanvas,
+    validateRenderComponentReferences,
+  } = await import(
     '../src/modules/render-components/component-registry.js'
   )
   assert.deepEqual(renderComponentPreviewSampleFrames('transition'), [6, 7, 8, 9, 10])
@@ -130,7 +138,94 @@ try {
   assert.equal(persisted?.manifest.displayName, '蓝色光圈')
   assert.equal(persisted?.manifest.effectBrief, '蓝色光圈从中心扩散')
   assert.deepEqual(persisted?.manifest.acceptanceCriteria, ['中心光圈随时间扩大', '背景保持深蓝色'])
-  assert.equal(persisted?.manifest.previewEvidence?.verdict, 'passed')
+  const persistedEvidence = renderComponentEvidenceForCanvas(
+    persisted?.manifest.previewEvidenceByAspect,
+    { width: 360, height: 640 },
+  )
+  assert.equal(persistedEvidence?.verdict, 'passed')
+  assert.equal(persistedEvidence?.policyVersion, 'render_component_visual.v2')
+  assert.deepEqual(persistedEvidence?.canvas, { width: 360, height: 640 })
+
+  await registerRenderComponent({
+    id: 'cmp_legacy_revalidation',
+    source: `${glowSource}\n// legacy revalidation fixture`,
+    displayName: 'legacy glow',
+    effectSummary: 'legacy glow',
+    effectBrief: 'a blue ring expands from the center',
+    acceptanceCriteria: ['the ring expands from the center'],
+    purpose: 'scene',
+  })
+  await promoteRenderComponent({
+    id: 'cmp_legacy_revalidation',
+    previewEvidence: {
+      verdict: 'passed', frameCount: 5, summary: 'legacy evidence',
+      criteria: [{ criterion: 'the ring expands from the center', passed: true, evidence: 'legacy preview' }],
+      reviewedAt: new Date().toISOString(),
+    },
+  })
+  let legacyPreviewCalls = 0
+  await ensureRenderComponentVisualEvidence({
+    componentId: 'cmp_legacy_revalidation',
+    canvas: { width: 720, height: 1280, fps: 24, durationSec: 2 },
+  }, {
+    renderPreview: async ({ componentId }) => {
+      legacyPreviewCalls += 1
+      return {
+        videoPath: path.join(dataDir, `${componentId}-revalidated.mp4`),
+        framePaths: [0, 1, 2, 3, 4].map((index) => path.join(dataDir, `${componentId}-revalidated-${index}.png`)),
+      }
+    },
+    reviewPreview: async ({ acceptanceCriteria }) => ({
+      passed: true,
+      criteria: acceptanceCriteria.map((criterion) => ({ criterion, passed: true, evidence: 'current canvas preview passed' })),
+      summary: 'current canvas preview passed',
+    }),
+    cleanupPreview: async () => undefined,
+  })
+  assert.equal(legacyPreviewCalls, 1)
+  assert.deepEqual(
+    renderComponentEvidenceForCanvas(
+      (await readRenderComponent('cmp_legacy_revalidation'))?.manifest.previewEvidenceByAspect,
+      { width: 720, height: 1280 },
+    )?.canvas,
+    { width: 720, height: 1280 },
+  )
+  assert.deepEqual(
+    await validateRenderComponentReferences(
+      [{ id: 'cmp_legacy_revalidation', purpose: 'scene' }],
+      new Set(),
+      { width: 720, height: 1280 },
+    ),
+    [],
+    'legacy evidence is upgraded through the same visual acceptance path before reuse',
+  )
+
+  let landscapeReviewCalls = 0
+  const reusedAtNewAspect = await authorRenderComponent({
+    purpose: 'scene',
+    displayName: persisted!.manifest.displayName,
+    effectBrief: persisted!.manifest.effectBrief,
+    acceptanceCriteria: persisted!.manifest.acceptanceCriteria,
+    canvas: { width: 640, height: 360, fps: 12, durationSec: 1 },
+    skillContent: '# V2 Render Delivery',
+  }, {
+    generateCode: async () => ({ source: glowSource, effectSummary: persisted!.manifest.effectSummary }),
+    renderPreview: async ({ componentId }) => ({
+      videoPath: path.join(dataDir, `${componentId}-landscape.mp4`),
+      framePaths: [0, 1, 2, 3, 4].map((index) => path.join(dataDir, `${componentId}-landscape-${index}.png`)),
+    }),
+    reviewPreview: async ({ acceptanceCriteria }) => {
+      landscapeReviewCalls += 1
+      return {
+        passed: true,
+        criteria: acceptanceCriteria.map((criterion) => ({ criterion, passed: true, evidence: 'landscape preview passed' })),
+        summary: 'landscape preview passed',
+      }
+    },
+    cleanupPreview: async () => undefined,
+  })
+  assert.equal(reusedAtNewAspect.ok, true)
+  assert.equal(landscapeReviewCalls, 1, 'a promoted source must be revalidated for a different aspect ratio')
 
   let newCriteriaReviewed = false
   const reusedWithNewCriteria = await authorRenderComponent({

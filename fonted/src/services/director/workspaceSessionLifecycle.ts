@@ -36,6 +36,15 @@ export function rememberActiveDirectorWorkspaceSessionId(
   storage.setItem(ACTIVE_DIRECTOR_WORKSPACE_SESSION_KEY, id)
 }
 
+export function replaceActiveDirectorWorkspaceSession(input: {
+  sessionStorage: WorkspaceSessionStorage
+  createId: () => string
+}): string {
+  const id = input.createId()
+  rememberActiveDirectorWorkspaceSessionId(input.sessionStorage, id)
+  return id
+}
+
 export function browserWorkspaceSessionId(): string {
   return resolveActiveDirectorWorkspaceSessionId({
     sessionStorage: window.sessionStorage,

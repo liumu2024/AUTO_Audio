@@ -23,6 +23,64 @@ assert.equal(validateRemotionTimelineSpec(sampleReplicate).ok, true)
 assert.ok(sampleReplicate.notes.includes('Creation mode: sample_replicate.'))
 assert.ok(sampleReplicate.scenes.some((scene) => scene.type === 'user_video'))
 
+const shotAwareSample = buildDeterministicRemotionTimelineSpec({
+  taskId: `v2_sample_shots_${Date.now()}`,
+  creationMode: 'sample_replicate',
+  prompt: '沿用样例的剪辑密度。',
+  referenceVideoPath: sampleVideo,
+  mainVideoPath: sampleVideo,
+  sampleUnderstanding: {
+    schema_version: 'v2_sample_understanding.v1',
+    task_id: 'sample_shots',
+    source: 'llm',
+    sample: { duration_sec: 12 },
+    summary_zh: '六个短镜头组成两个内容章节',
+    story_zh: '测试', atmosphere_zh: '测试', editing_zh: '快速硬切', rhythm_zh: '快节奏',
+    reusable_style_zh: '复用节奏', not_reusable_zh: '不复用画面',
+    segments: [{
+      id: 'chapter_1', title_zh: '完整章节', start_sec: 0, end_sec: 12,
+      visual_content_zh: '完整内容章节', characters_objects_zh: '主体', atmosphere_zh: '统一',
+      camera_zh: '多景别', motion_zh: '连续动作', editing_zh: '六个镜头', rhythm_zh: '快速',
+      reusable_style_zh: '复用节奏', material_hint_zh: '替换素材',
+    }],
+    shot_evidence: Array.from({ length: 6 }, (_, index) => ({
+      id: `shot_${index + 1}`, start_sec: index * 2, end_sec: (index + 1) * 2,
+      boundary: index === 5 ? 'end' as const : 'hard_cut' as const, confidence: 0.9,
+    })),
+    questions_for_user_zh: [], warnings_zh: [],
+  },
+})
+assert.equal(shotAwareSample.scenes.length, 6, 'semantic chapters must not cap the sample shot count')
+
+const uncertainSample = buildDeterministicRemotionTimelineSpec({
+  taskId: `v2_sample_uncertain_${Date.now()}`,
+  creationMode: 'sample_replicate',
+  prompt: 'reuse the reference pacing without inventing observed cut points',
+  durationSec: 15,
+  referenceVideoPath: sampleVideo,
+  mainVideoPath: sampleVideo,
+  sampleUnderstanding: {
+    schema_version: 'v2_sample_understanding.v1', task_id: 'sample_uncertain', source: 'llm_fallback',
+    sample: { duration_sec: 15 }, summary_zh: 'fallback summary', story_zh: '', atmosphere_zh: '',
+    editing_zh: '', rhythm_zh: '', reusable_style_zh: '', not_reusable_zh: '', segments: [], shot_evidence: [],
+    questions_for_user_zh: [], warnings_zh: ['shot boundaries unavailable'],
+  },
+})
+assert.equal(uncertainSample.scenes.length, 6, 'uncertain sample analysis must use neutral output pacing, not a fixed three-shot claim')
+
+const sampleWithoutFinalMaterials = buildDeterministicRemotionTimelineSpec({
+  taskId: `v2_sample_missing_materials_${Date.now()}`,
+  creationMode: 'sample_replicate',
+  prompt: '参考样例节奏规划 5 个镜头；样例只作为结构参考，不作为成片素材。',
+  durationSec: 15,
+  referenceVideoPath: sampleVideo,
+})
+assert.equal(sampleWithoutFinalMaterials.scenes.length, 5)
+assert.equal(sampleWithoutFinalMaterials.scenes.every((scene) => scene.type === 'ai_video'), true)
+assert.equal(sampleWithoutFinalMaterials.material_jobs.length, 5)
+assert.equal(sampleWithoutFinalMaterials.material_jobs.every((job) => job.type === 'generate_video'), true)
+assert.equal(sampleWithoutFinalMaterials.material_jobs.every((job) => job.fallback_kind === 'none'), true)
+
 const materialBrief = buildDeterministicRemotionTimelineSpec({
   taskId: `v2_material_brief_${Date.now()}`,
   creationMode: 'material_brief',
@@ -67,7 +125,7 @@ assert.equal(textToVideo.material_jobs.length, 2)
 assert.equal(textToVideo.material_jobs.length, textToVideo.scenes.length)
 assert.equal(textToVideo.material_jobs.every((job) => job.type === 'generate_video'), true)
 assert.equal(textToVideo.material_jobs.every((job) => job.status === 'planned'), true)
-assert.equal(textToVideo.material_jobs.every((job) => job.fallback_kind === 'blank_card'), true)
-assert.equal(textToVideo.scenes.every((scene) => scene.type === 'remotion_card'), true)
+assert.equal(textToVideo.material_jobs.every((job) => job.fallback_kind === 'none'), true)
+assert.equal(textToVideo.scenes.every((scene) => scene.type === 'ai_video'), true)
 
 console.info('[smoke-v2-remotion-timeline-creation-modes] OK')

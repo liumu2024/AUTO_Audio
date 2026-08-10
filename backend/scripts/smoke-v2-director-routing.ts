@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 
-import { createDefaultDirectorSlots, type DirectorConversationRuntime } from '../../shared/lib/director-understanding.js'
+import {
+  createDefaultDirectorSlots,
+  summarizeDirectorReference,
+  type DirectorConversationRuntime,
+} from '../../shared/lib/director-understanding.js'
 import type { DirectorContext } from '../../shared/types/director-context.js'
 import {
   buildDirectorContextFallback,
@@ -50,6 +54,35 @@ const withComponents = buildDirectorModelPrompt({
 assert.match(withComponents, /renderedComponents/)
 assert.match(withComponents, /cmp_blur_dissolve/)
 assert.match(withComponents, /render\.author 创作组件/)
+assert.match(withComponents, /image_motion.*不能生成原图中不存在的内容/i)
+assert.match(withComponents, /generate_video/i)
+
+const reference = summarizeDirectorReference({
+  schema_version: 'v2_sample_understanding.v1', task_id: 'sample_many_shots', source: 'llm',
+  sample: { duration_sec: 12 }, summary_zh: 'continuous action sample', story_zh: 'story arc',
+  atmosphere_zh: 'tense', editing_zh: 'rapid cuts', rhythm_zh: 'accelerating',
+  reusable_style_zh: 'match cuts', not_reusable_zh: '', segments: [{
+    id: 'chapter_1', title_zh: 'conflict', start_sec: 0, end_sec: 12,
+    visual_content_zh: 'chase', characters_objects_zh: 'people and vehicles', atmosphere_zh: 'tense',
+    camera_zh: 'varied shots', motion_zh: 'fast', editing_zh: 'continuous cuts', rhythm_zh: 'accelerating',
+    reusable_style_zh: 'match cuts', material_hint_zh: 'action material',
+  }],
+  shot_evidence: Array.from({ length: 6 }, (_, index) => ({
+    id: `shot_${index + 1}`, start_sec: index * 2, end_sec: (index + 1) * 2,
+    boundary: index === 5 ? 'end' as const : 'hard_cut' as const, confidence: 0.9,
+  })),
+  questions_for_user_zh: [], warnings_zh: [],
+})
+assert.equal(reference.segmentCount, 1)
+assert.equal(reference.shotCount, 6)
+const withReference = compactDirectorContextForPrompt({
+  prompt: 'follow the reference structure',
+  context: { ...context, sampleVideo: { id: 'sample_1', url: '/uploads/sample.mp4', reference } },
+  runtime: runtime({ sampleUrl: '/uploads/sample.mp4', isSampleParsed: true }),
+})
+assert.equal(withReference.sampleVideo?.reference?.segmentCount, 1)
+assert.equal(withReference.sampleVideo?.reference?.shotCount, 6)
+assert.equal(withReference.sampleVideo?.reference?.editing, 'rapid cuts')
 
 const chat = parseDirectorModelDecision(JSON.stringify({
   replyDraft: '这版可以继续沿用中性低饱和。',
@@ -66,7 +99,7 @@ assert.equal(chat.stateActions.length, 0)
 const requirementAndRevision = parseDirectorModelDecision(JSON.stringify({
   replyDraft: '我会更新要求并调整字幕。',
   intent: 'revise',
-  creativeConfigDelta: { subtitlePolicy: 'rewrite' },
+  creativeConfigDelta: {},
   stateActions: [{
     ref: 'requirements',
     kind: 'requirements.update',
@@ -80,7 +113,6 @@ const requirementAndRevision = parseDirectorModelDecision(JSON.stringify({
   missingInformation: [],
 }))
 assert.equal(requirementAndRevision.toolRequests[0]?.dependsOn[0], 'requirements')
-assert.equal(requirementAndRevision.creativeConfigDelta.subtitlePolicy, 'rewrite')
 
 const capabilityContext = compactDirectorContextForPrompt({
   prompt: '渲染当前版本',
@@ -90,6 +122,27 @@ const capabilityContext = compactDirectorContextForPrompt({
 const renderReadiness = capabilityContext.capabilitySnapshot.find((item) => item.toolId === 'timeline.render')
 assert.equal(renderReadiness?.status, 'blocked')
 assert.equal(renderReadiness?.missing[0]?.code, 'draft_missing')
+const savedResourceReadiness = compactDirectorContextForPrompt({
+  prompt: 'render the saved draft',
+  context: {
+    ...context,
+    currentTimeline: { kind: 'v2_timeline', status: 'saved', draftId: 'draft_resource_gap', currentRevision: 1 },
+  },
+  runtime: runtime({ hasV2Timeline: true }),
+  timelineSpec: {
+    schema_version: 'remotion_timeline_spec.v1', task_id: 'resource_gap',
+    canvas: { width: 1080, height: 1920, fps: 30, duration_sec: 3 }, assets: [],
+    scenes: [{ id: 'scene_1', type: 'remotion_card', start_sec: 0, duration_sec: 3 }],
+    transitions: [], overlays: [], audio: [], render_policy: { renderer: 'remotion_timeline' },
+    material_jobs: [{
+      id: 'need_material', scene_id: 'scene_1', type: 'request_user_material', status: 'planned',
+      prompt: 'supply source material',
+    }],
+  },
+})
+const savedRenderReadiness = savedResourceReadiness.capabilitySnapshot.find((item) => item.toolId === 'timeline.render')
+assert.equal(savedRenderReadiness?.status, 'blocked')
+assert.equal(savedRenderReadiness?.missing[0]?.code, 'user_material_required')
 
 const fallback = buildDirectorContextFallback({
   prompt: '字幕和转场怎么调整？',

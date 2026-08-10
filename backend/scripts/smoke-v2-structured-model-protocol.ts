@@ -102,10 +102,18 @@ try {
   )
 
   requestBodies.length = 0
-  globalThis.fetch = async (_url, init) => {
-    requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
-    return new Response(JSON.stringify({ id: 'planner_invalid', output_text: '{"schema_version":' }), { status: 200 })
+  const installPlannerProtocolFailure = () => {
+    let calls = 0
+    globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      calls += 1
+      if (calls > 2) throw new Error('deterministic fallback must not require another model call')
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      requestBodies.push(body)
+      return new Response(JSON.stringify({ id: 'planner_invalid', output_text: '{"schema_version":' }), { status: 200 })
+    }
+    return () => calls
   }
+  const textFallbackCalls = installPlannerProtocolFailure()
   const { previewV2RemotionTimeline } = await import('../src/pipeline-v2/remotion-timeline-service.js')
   const fallbackPreview = await previewV2RemotionTimeline({
     taskId: 'planner_protocol_second_failure', creationMode: 'text_to_video',
@@ -116,6 +124,91 @@ try {
     path.join(fallbackPreview.traceDir, '02-planning', 'llm-timeline-planner-protocol-diagnostic.json'), 'utf8',
   )) as { fallback_reason?: string }
   assert.equal(failureDiagnostic.fallback_reason, 'unrepairable_structured_output')
+  assert.equal(textFallbackCalls(), 2, 'initial fallback stops after the planner and its one repair attempt')
+  assert.equal(existsSync(path.join(
+    fallbackPreview.traceDir, '02-planning', 'timeline-fallback-outcome-review.json',
+  )), false)
+
+  installPlannerProtocolFailure()
+  await assert.rejects(
+    previewV2RemotionTimeline({
+      taskId: 'planner_material_protocol_second_failure',
+      creationMode: 'material_brief',
+      plannerMode: 'llm',
+      allowPlannerFallback: true,
+      prompt: 'Create a video that adds plausible motion and new elements based on this landscape image.',
+      durationSec: 6,
+      materials: [{
+        id: 'landscape', type: 'image', name: 'landscape.png', src: 'https://cdn.example.com/landscape.png',
+      }],
+    }),
+    /did not return|invalid|outcome review failed/i,
+    'a visual-material request must not silently degrade to an ungrounded image slideshow',
+  )
+
+  installPlannerProtocolFailure()
+  await assert.rejects(
+    previewV2RemotionTimeline({
+      taskId: 'planner_mislabeled_material_protocol_failure',
+      creationMode: 'text_to_video',
+      plannerMode: 'llm',
+      allowPlannerFallback: true,
+      prompt: 'Animate the supplied landscape image.',
+      durationSec: 6,
+      materials: [{
+        id: 'mislabeled_landscape', type: 'image', name: 'landscape.png', src: 'https://cdn.example.com/landscape.png',
+      }],
+    }),
+    /did not return|invalid/i,
+    'a creationMode label cannot authorize text fallback when real visual inputs are present',
+  )
+
+  installPlannerProtocolFailure()
+  await assert.rejects(
+    previewV2RemotionTimeline({
+      taskId: 'planner_unparsed_sample_protocol_second_failure',
+      creationMode: 'sample_replicate',
+      plannerMode: 'llm',
+      allowPlannerFallback: true,
+      prompt: 'Create a new video using the uploaded sample structure.',
+      durationSec: 6,
+      referenceVideoPath: 'https://cdn.example.com/sample.mp4',
+    }),
+    /did not return|invalid|outcome review failed/i,
+    'a sample request without persisted sample understanding must not use an ungrounded deterministic fallback',
+  )
+
+  installPlannerProtocolFailure()
+  const understoodSampleFallback = await previewV2RemotionTimeline({
+    taskId: 'planner_understood_sample_protocol_failure',
+    plannerMode: 'llm',
+    allowPlannerFallback: true,
+    prompt: 'Create a new video using the analyzed sample structure.',
+    durationSec: 6,
+    referenceVideoPath: 'https://cdn.example.com/sample.mp4',
+    sampleUnderstanding: sampleResult.understanding,
+  })
+  assert.equal(
+    understoodSampleFallback.plannerSource,
+    'llm_fallback_deterministic',
+    'persisted sample understanding is sufficient for grounded deterministic fallback even without a mode label',
+  )
+
+  installPlannerProtocolFailure()
+  await assert.rejects(
+    previewV2RemotionTimeline({
+      taskId: 'planner_revision_protocol_second_failure',
+      creationMode: 'text_to_video',
+      plannerMode: 'llm',
+      allowPlannerFallback: true,
+      prompt: '只调整当前字幕，不改变其他镜头。',
+      durationSec: 6,
+      revisionBaseSpec: validSpec,
+      revisionScope: 'subtitle',
+    }),
+    /did not return|invalid/i,
+    'a failed revision protocol must retain the saved base instead of replacing it with an initial-plan fallback',
+  )
 
   const { createDefaultDirectorSlots } = await import('../../shared/lib/director-understanding.js')
   const { parseDirectorModelDecision, routeDirectorIntentWithLlm } = await import('../src/modules/director-agent/llm-intent-router.js')

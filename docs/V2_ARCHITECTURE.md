@@ -49,13 +49,13 @@ fonted/src/components/shell/V2TimelineView.tsx
 ## API
 
 ```http
-POST /api/v2/timeline/preview
-POST /api/v2/timeline/run
+POST /api/v2/timeline-drafts/preview
+POST /api/v2/timeline-drafts/:draftId/runs
 ```
 
-`preview` 只生成 `RemotionTimelineSpecV1`、校验报告、中文审查摘要和 trace，不生成外部素材，也不渲染视频。
+`preview` 生成 `RemotionTimelineSpecV1`、校验报告、中文审查摘要和 trace，并保存一个可修订草稿版本；它不生成外部素材，也不渲染视频。
 
-`run` 接收相同输入，也可以接收用户修改后的 `timelineSpecOverride`。它会执行素材补全、视频标准化、Remotion 渲染和最终评估。
+`runs` 只接收已保存的草稿 revision。它会执行素材补全、视频标准化、Remotion 渲染和最终评估，并保存对应 RenderRun。
 
 ## Planner 模式
 

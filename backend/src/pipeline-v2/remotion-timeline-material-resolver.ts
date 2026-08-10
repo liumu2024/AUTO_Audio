@@ -187,6 +187,20 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
   const resolveJob = async (job: RemotionTimelineMaterialJob): Promise<JobOutcome> => {
     const startedAt = Date.now()
     await reportProgress(job, 'started')
+    if (job.status === 'fulfilled' && assetById(spec.assets, job.output_asset_id)) {
+      await reportProgress(job, 'fulfilled')
+      return {
+        fulfilledJob: job.id,
+        trace: {
+          id: job.id,
+          scene_id: job.scene_id,
+          type: job.type,
+          output_asset_id: job.output_asset_id,
+          status: 'fulfilled',
+          elapsed_ms: Date.now() - startedAt,
+        },
+      }
+    }
     if (job.type === 'reuse_asset') {
       if (!assetById(spec.assets, job.output_asset_id)) {
         const reason = 'reuse_asset job references an unavailable asset.'
@@ -204,24 +218,6 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
           },
         }
       }
-      await reportProgress(job, 'fulfilled')
-      return {
-        fulfilledJob: job.id,
-        trace: {
-          id: job.id,
-          scene_id: job.scene_id,
-          type: job.type,
-          output_asset_id: job.output_asset_id,
-          status: 'fulfilled',
-          elapsed_ms: Date.now() - startedAt,
-        },
-      }
-    }
-    if (
-      job.type === 'generate_video' &&
-      job.status === 'fulfilled' &&
-      assetById(spec.assets, job.output_asset_id)
-    ) {
       await reportProgress(job, 'fulfilled')
       return {
         fulfilledJob: job.id,
@@ -338,6 +334,7 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
     }
 
     if (job.fallback_kind === 'blank_card') {
+      const reason = generated.error ?? 'Generation failed; kept the existing Remotion fallback scene.'
       const trace: V2TimelineMaterialResolutionReport['generation_trace'][number] = {
         id: job.id,
         scene_id: job.scene_id,
@@ -349,10 +346,14 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
         provider_task_id: generated.providerTaskId,
         status: 'fallback',
         elapsed_ms: Date.now() - startedAt,
-        error: generated.error ?? 'Generation failed; kept the existing Remotion fallback scene.',
+        error: reason,
       }
       await reportProgress(job, 'fallback')
-      return { fulfilledJob: job.id, blankCardFallbackJob: job.id, trace }
+      return {
+        failedJob: { id: job.id, reason },
+        blankCardFallbackJob: job.id,
+        trace,
+      }
     }
 
     const reason = generated.error ?? 'Material generation failed.'
@@ -397,7 +398,6 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
   }
 
   const mergedAssets = mergeAssets({ existing: spec.assets, resolved: resolvedAssets })
-  const resolvedAssetIds = new Set(resolvedAssets.map((asset) => asset.id))
   const nextSpec: RemotionTimelineSpecV1 = {
     ...spec,
     assets: mergedAssets,
@@ -416,37 +416,40 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
             '本镜头的生成素材尚未完成。',
         }
       }
-      if (!job?.output_asset_id || !resolvedAssetIds.has(job.output_asset_id)) return scene
+      const outputAsset = job?.output_asset_id
+        ? assetById(mergedAssets, job.output_asset_id)
+        : undefined
+      if (!job || !fulfilledJobs.includes(job.id) || !outputAsset) return scene
       return {
         ...scene,
-        type: 'ai_video',
+        type: outputAsset.type === 'image'
+          ? 'image_motion'
+          : job.type === 'generate_video'
+            ? 'ai_video'
+            : 'user_video',
         asset_id: job.output_asset_id,
       }
     }),
-    material_jobs: spec.material_jobs.map((job) =>
-      fulfilledJobs.includes(job.id)
+    material_jobs: spec.material_jobs.map((job) => {
+      if (blankCardFallbackJobs.has(job.id)) {
+        return { ...job, status: 'failed' as const, output_asset_id: undefined }
+      }
+      return fulfilledJobs.includes(job.id)
         ? {
             ...job,
-            status: 'fulfilled',
-            output_asset_id: blankCardFallbackJobs.has(job.id)
-              ? undefined
-              : job.output_asset_id,
+            status: 'fulfilled' as const,
           }
-        : job,
-    ),
+        : job
+    }),
   }
   const plannedGeneratedSceneIds = [...new Set(
     spec.material_jobs
       .filter((job) => job.type === 'generate_video')
       .map((job) => job.scene_id),
   )]
-  const resolvedGeneratedSceneIds = new Set(
-    generationTrace
-      .filter((item) => item.status === 'fulfilled')
-      .map((item) => item.scene_id),
-  )
-  for (const job of spec.material_jobs.filter((item) => item.type === 'generate_video' && item.status === 'fulfilled')) {
-    if (job.output_asset_id && assetById(mergedAssets, job.output_asset_id)) {
+  const resolvedGeneratedSceneIds = new Set<string>()
+  for (const job of spec.material_jobs.filter((item) => item.type === 'generate_video')) {
+    if (fulfilledJobs.includes(job.id) && job.output_asset_id && assetById(mergedAssets, job.output_asset_id)) {
       resolvedGeneratedSceneIds.add(job.scene_id)
     }
   }

@@ -14,7 +14,10 @@ import {
   summarizeDirectorSessionState,
   syncDirectorSessionSnapshot,
 } from '@shared/lib/director-state-machine'
-import { buildDirectorContextFromUI } from '@/services/director/directorDecisionContext'
+import {
+  buildDirectorContextFromUI,
+  buildDirectorSampleVideoFromUI,
+} from '@/services/director/directorDecisionContext'
 import { activateV2DraftWorkspace } from '@/services/director/v2DirectorDraftWorkspace'
 import {
   browserWorkspaceSessionId,
@@ -31,6 +34,7 @@ import type {
   DirectorSessionState,
   DirectorTimelineSnapshot,
 } from '@shared/types/director-state'
+import type { DirectorContext } from '@shared/types/director-context'
 
 function attachmentTypeFromMime(mime: string): InputAttachment['type'] | null {
   if (mime.startsWith('video/')) return 'video'
@@ -49,17 +53,11 @@ function syncDirectorContext(input: {
   attachments: InputAttachment[]
 }) {
   const contextStore = useDirectorContextStore.getState()
-  contextStore.setSampleVideo(
-    input.sampleUrl
-      ? {
-          id: 'sample_video',
-          url: input.sampleUrl,
-          name: input.sampleName,
-          styleRecipe: contextStore.context.sampleVideo?.styleRecipe,
-          reference: contextStore.context.sampleVideo?.reference,
-        }
-      : undefined,
-  )
+  contextStore.setSampleVideo(buildDirectorSampleVideoFromUI({
+    sampleUrl: input.sampleUrl,
+    sampleName: input.sampleName,
+    existing: contextStore.context.sampleVideo,
+  }))
   contextStore.setMaterials(
     input.attachments.map((att) => ({
       id: attachmentMaterialId(att),
@@ -69,6 +67,20 @@ function syncDirectorContext(input: {
       tags: att.tags ?? [],
     })),
   )
+}
+
+function applyDirectorWorkspaceContext(context: DirectorContext, acknowledgeLocalChanges = false) {
+  useDirectorContextStore.getState().replaceContext(context)
+  useCreationStore.getState().acceptServerMaterials(context.materials, acknowledgeLocalChanges)
+  const sample = context.sampleVideo
+  useCreationStore.getState().acceptServerSample(sample?.url
+    ? {
+      id: sample.id,
+      url: sample.url,
+      name: sample.name,
+      parsed: Boolean(sample.reference || sample.sampleUnderstanding),
+    }
+    : undefined, acknowledgeLocalChanges)
 }
 
 function shouldShowThoughtSurface(event: DirectorAgentStreamEvent) {
@@ -232,7 +244,7 @@ export function DirectorChatPanel() {
       .then(async (session) => {
         if (!session) return
         if (browserWorkspaceSessionId() !== workspaceSessionId) return
-        useDirectorContextStore.getState().replaceContext(session.state.context)
+        applyDirectorWorkspaceContext(session.state.context)
         await restoreWorkspaceDraft({
           workspace: session.state,
           loadDraft: async (draftId) => (await getV2TimelineDraft(draftId)).draft,
@@ -300,6 +312,8 @@ export function DirectorChatPanel() {
     const creationSnapshot = useCreationStore.getState()
     const prompt = text.trim()
     const pendingAttachmentIdsSnapshot = [...creationSnapshot.pendingAttachmentIds]
+    const contextMaterialsAuthoritative = creationSnapshot.materialsSnapshotAuthoritative
+    const contextSampleAuthoritative = creationSnapshot.sampleSnapshotAuthoritative
     const showSampleInInputTraySnapshot = creationSnapshot.showSampleInInputTray
     clearInputTray()
     const effectiveSampleUrl = creationSnapshot.sampleUrl
@@ -407,6 +421,8 @@ export function DirectorChatPanel() {
                 ),
               }
             : {}),
+          contextMaterialsAuthoritative,
+          contextSampleAuthoritative,
           turnRequestId: crypto.randomUUID(),
           workspaceSessionId: requestWorkspaceSessionId,
           context: directorContext,
@@ -493,7 +509,7 @@ export function DirectorChatPanel() {
           }
           if (event.type === 'assistant_reply') directMessage = event.message
           if (event.type === 'workspace_snapshot') {
-            useDirectorContextStore.getState().replaceContext(event.state.context)
+            applyDirectorWorkspaceContext(event.state.context, true)
           }
           if (event.type === 'state_update') {
             useDirectorContextStore.getState().setDirectorState(event.state)
@@ -503,7 +519,7 @@ export function DirectorChatPanel() {
               window.sessionStorage,
               event.workspaceSessionId,
             )
-            useDirectorContextStore.getState().replaceContext(event.state.context)
+            applyDirectorWorkspaceContext(event.state.context, true)
             debugThoughts.push(
               `V2 会话已同步；本轮${event.modelCalled ? '已调用导演模型' : '使用上下文降级'}。`,
             )

@@ -23,7 +23,6 @@ import {
 import {
   postV2SampleAnalyze,
   postV2TimelinePreview,
-  postV2TimelineRun,
 } from './pipeline-v2/controller.js'
 import {
   deleteV2TimelineDraft,
@@ -68,7 +67,6 @@ app.put('/api/v2/timeline-drafts/:draftId', putV2TimelineDraft)
 app.post('/api/v2/timeline-drafts/:draftId/runs', postV2TimelineDraftRun)
 app.delete('/api/v2/timeline-drafts/:draftId', deleteV2TimelineDraft)
 app.post('/api/v2/timeline/preview', postV2TimelinePreview)
-app.post('/api/v2/timeline/run', postV2TimelineRun)
 
 app.use(
   (

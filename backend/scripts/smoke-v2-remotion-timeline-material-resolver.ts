@@ -143,17 +143,105 @@ const fallbackResolved = await resolveRemotionTimelineMaterialJobs({
   adapter: createNoopMaterialGenerationAdapter(),
 })
 
-assert.equal(fallbackResolved.report.ok, true)
-assertV2MaterialResolutionContract({
-  spec: fallbackResolved.spec,
-  report: fallbackResolved.report,
-  expectedGeneratedJobCount: 1,
-})
+assert.equal(fallbackResolved.report.ok, false)
+assert.deepEqual(fallbackResolved.report.fulfilled_jobs, [])
+assert.equal(fallbackResolved.report.failed_jobs[0]?.id, 'job_generate_scene_001')
 assert.equal(fallbackResolved.spec.scenes[0]?.title, 'Fallback title')
 assert.equal(fallbackResolved.spec.scenes[0]?.body, 'Fallback explanation for a missing generated visual.')
 assert.equal(fallbackResolved.report.delivery_readiness.ready, false)
 assert.deepEqual(fallbackResolved.report.delivery_readiness.missing_generated_scene_ids, ['scene_001'])
+assert.equal(fallbackResolved.spec.material_jobs[0]?.status, 'failed')
 assert.equal(validateRemotionTimelineSpec(fallbackResolved.spec).ok, true)
+
+const suppliedAssetId = 'user_supplied_scene_001'
+const fulfilledUserMaterialResolved = await resolveRemotionTimelineMaterialJobs({
+  spec: {
+    ...spec,
+    task_id: `v2_timeline_fulfilled_user_material_${Date.now()}`,
+    assets: [...spec.assets, {
+      id: suppliedAssetId,
+      type: 'video' as const,
+      src: sampleVideo,
+      source: 'user_asset' as const,
+    }],
+    scenes: spec.scenes.map((scene) => scene.id === 'scene_001'
+      ? { ...scene, type: 'user_video' as const, asset_id: suppliedAssetId }
+      : scene),
+    material_jobs: [{
+      id: 'job_user_material_scene_001',
+      scene_id: 'scene_001',
+      type: 'request_user_material' as const,
+      status: 'fulfilled' as const,
+      output_asset_id: suppliedAssetId,
+      fallback_kind: 'none' as const,
+      provider: 'manual' as const,
+    }],
+  },
+  adapter: createNoopMaterialGenerationAdapter(),
+})
+assert.deepEqual(fulfilledUserMaterialResolved.report.failed_jobs, [])
+assert.deepEqual(fulfilledUserMaterialResolved.report.fulfilled_jobs, ['job_user_material_scene_001'])
+assert.equal(fulfilledUserMaterialResolved.report.delivery_readiness.ready, true)
+assert.equal(fulfilledUserMaterialResolved.spec.scenes[0]?.type, 'user_video')
+
+const existingGeneratedAssetId = 'already_generated_scene_001'
+const staleSceneAssetId = 'stale_scene_001'
+const fulfilledExistingOutput = await resolveRemotionTimelineMaterialJobs({
+  spec: {
+    ...spec,
+    task_id: `v2_timeline_existing_output_${Date.now()}`,
+    assets: [
+      ...spec.assets,
+      { id: staleSceneAssetId, type: 'video' as const, src: sampleVideo, source: 'user_asset' as const },
+      {
+        id: existingGeneratedAssetId,
+        type: 'video' as const,
+        src: sampleVideo,
+        source: 'generated_asset' as const,
+      },
+    ],
+    scenes: spec.scenes.map((scene) => scene.id === 'scene_001'
+      ? { ...scene, asset_id: staleSceneAssetId }
+      : scene),
+    material_jobs: spec.material_jobs.map((job) => ({
+      ...job,
+      status: 'fulfilled' as const,
+      output_asset_id: existingGeneratedAssetId,
+    })),
+  },
+  adapter: createNoopMaterialGenerationAdapter(),
+})
+assert.equal(fulfilledExistingOutput.spec.scenes[0]?.asset_id, existingGeneratedAssetId)
+assert.equal(fulfilledExistingOutput.report.delivery_readiness.ready, true)
+
+const fallbackImageAssetId = 'fallback_landscape_image'
+const fallbackOutputAssetId = 'resolved_fallback_scene_001'
+const imageFallbackResolved = await resolveRemotionTimelineMaterialJobs({
+  spec: {
+    ...spec,
+    task_id: `v2_timeline_image_fallback_${Date.now()}`,
+    assets: [...spec.assets, {
+      id: fallbackImageAssetId,
+      type: 'image' as const,
+      src: sampleImage,
+      source: 'user_asset' as const,
+    }],
+    scenes: spec.scenes.map((scene) => scene.id === 'scene_001'
+      ? { ...scene, asset_id: fallbackOutputAssetId }
+      : scene),
+    material_jobs: spec.material_jobs.map((job) => ({
+      ...job,
+      output_asset_id: fallbackOutputAssetId,
+      fallback_asset_id: fallbackImageAssetId,
+      fallback_kind: 'static_image' as const,
+    })),
+  },
+  adapter: createNoopMaterialGenerationAdapter(),
+})
+assert.equal(imageFallbackResolved.report.ok, true)
+assert.equal(imageFallbackResolved.report.delivery_readiness.ready, true)
+assert.equal(imageFallbackResolved.spec.scenes[0]?.type, 'image_motion')
+assert.equal(imageFallbackResolved.spec.scenes[0]?.asset_id, fallbackOutputAssetId)
 
 const delayedAdapter: V2MaterialGenerationAdapter = {
   async generate(input) {

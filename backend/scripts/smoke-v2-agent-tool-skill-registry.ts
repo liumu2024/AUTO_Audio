@@ -36,7 +36,9 @@ assert.equal(findV2AgentTool('timeline.render')?.requiresExplicitAuthorization, 
 assert.equal(listV2AgentToolCards().find((tool) => tool.id === 'timeline.patch')?.effectiveMode, 'preview')
 assert.equal(listV2AgentToolCards().find((tool) => tool.id === 'timeline.render')?.effectiveMode, 'execute')
 assert.deepEqual(REMOTION_TIMELINE_TRANSITION_TYPES, ['cut', 'fade', 'slide', 'wipe', 'light_flash', 'blur'])
-assert.match(listV2AgentToolCards().find((tool) => tool.id === 'timeline.patch')?.summary ?? '', /blur/)
+const timelinePatchSummary = listV2AgentToolCards().find((tool) => tool.id === 'timeline.patch')?.summary ?? ''
+assert.match(timelinePatchSummary, /structure/)
+assert.match(timelinePatchSummary, /blur/)
 assert.ok(listV2AgentSkillCards().some((skill) => skill.id === 'subtitle-track-authoring'))
 for (const tool of listV2AgentToolCards()) {
   for (const skillId of tool.skills) {
@@ -116,6 +118,8 @@ assert.equal(validateV2AgentToolRequest({ callId: 'patch_vs_002', toolId: 'timel
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_bad_003', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'global', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_transition_001', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring', arguments: { scope: 'transition', transitionIds: ['transition_random_a', 'transition_random_b'], instruction: '只修改这两个转场' }, requestedMode: 'preview' }).ok, true)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_transition_002', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring', arguments: { scope: 'transition', transitionIds: [] }, requestedMode: 'preview' }).ok, false)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_structure_001', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring', arguments: { scope: 'structure', sceneIds: ['scene_random_a', 'scene_random_b'], instruction: '把这段连续镜头拆得更细' }, requestedMode: 'preview' }).ok, true)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_structure_002', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring', arguments: { scope: 'structure', sceneIds: ['scene_random_a', 'scene_random_a'] }, requestedMode: 'preview' }).ok, false)
 assert.ok(listV2AgentToolCards().find((tool) => tool.id === 'timeline.patch')?.inputSchema)
 
 const callIdContext = {
@@ -263,6 +267,35 @@ assert.equal(evaluateV2AgentToolReadiness({
   toolId: 'timeline.render', context: duplicateContext,
   runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: false, materialCount: 0 },
 }).status, 'blocked')
+const uniqueSampleCandidateReadiness = evaluateV2AgentToolReadiness({
+  toolId: 'sample.analyze',
+  context: {
+    ...duplicateContext,
+    materials: [{
+      id: 'material_sample_candidate', type: 'video' as const,
+      url: 'https://cdn.example.com/sample.mp4', name: 'sample.mp4',
+    }],
+  },
+  runtime: {
+    backendEnabled: true, sampleUrl: '', isSampleParsed: false,
+    hasVisualMaterial: true, materialCount: 1,
+    sampleCandidates: [{ id: 'material_sample_candidate', url: 'https://cdn.example.com/sample.mp4', name: 'sample.mp4' }],
+  },
+})
+assert.equal(
+  uniqueSampleCandidateReadiness.status,
+  'ready',
+  'the model may choose sample.analyze when the server can bind one unambiguous video candidate',
+)
+const activeDraftPlanReadiness = evaluateV2AgentToolReadiness({
+  toolId: 'timeline.plan',
+  context: duplicateContext,
+  runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: false, materialCount: 0 },
+  workspace: { draftId: 'draft_registry_active', baseRevision: 2 },
+})
+assert.equal(activeDraftPlanReadiness.status, 'blocked')
+assert.equal(activeDraftPlanReadiness.missing[0]?.code, 'draft_already_exists')
+assert.deepEqual(activeDraftPlanReadiness.alternatives, ['timeline.patch'])
 assert.deepEqual(bindV2AgentToolArguments({
   modelArguments: {}, context: duplicateContext,
   workspace: { ...createDirectorWorkspaceState({ context: duplicateContext }), draftId: 'draft_server', baseRevision: 3 },
@@ -289,6 +322,9 @@ assert.match(plannerPrompt, /Audience-facing captions/)
 assert.match(plannerPrompt, /official\.remotion-captions/)
 assert.match(plannerPrompt, new RegExp(executionPlan.stages[0]!.toolRequest.callId))
 assert.match(plannerPrompt, /Allowed transition types: cut, fade, slide, wipe, light_flash, blur\./)
+assert.match(plannerPrompt, /image_motion cannot invent new visual elements/i)
+assert.match(plannerPrompt, /remotion_card is an intentional typography or motion-graphics scene/i)
+assert.match(plannerPrompt, /ai_video.*generate_video/i)
 
 const base: RemotionTimelineSpecV1 = {
   schema_version: 'remotion_timeline_spec.v1', task_id: 'subtitle_track_smoke',
@@ -303,6 +339,64 @@ const base: RemotionTimelineSpecV1 = {
   audio: [], material_jobs: [], render_policy: { renderer: 'remotion_timeline' },
 }
 assert.equal(validateRemotionTimelineSpec(base).ok, true)
+const localImageGenerationSpec: RemotionTimelineSpecV1 = {
+  ...base,
+  assets: [{ id: 'local_input', type: 'image', source: 'user_asset', src: 'http://localhost:3001/uploads/local.png' }],
+  scenes: [{ ...base.scenes[0]!, type: 'ai_video', asset_id: 'generated_scene_1' }],
+  material_jobs: [{
+    id: 'generate_scene_1', scene_id: 'scene_1', type: 'generate_video', status: 'planned',
+    prompt: 'add natural motion', input_asset_id: 'local_input', output_asset_id: 'generated_scene_1',
+  }],
+}
+const localImageReadiness = evaluateV2AgentToolReadiness({
+  toolId: 'timeline.render',
+  context: duplicateContext,
+  runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: true, materialCount: 1 },
+  workspace: { draftId: 'draft_local_image', baseRevision: 1 },
+  authorizationGranted: true,
+  timelineSpec: localImageGenerationSpec,
+})
+assert.equal(localImageReadiness.status, 'blocked')
+assert.ok(localImageReadiness.missing.some((item) => item.code === 'generation_input_unreachable'))
+const staleFulfilledSpec: RemotionTimelineSpecV1 = {
+  ...base,
+  scenes: [{ ...base.scenes[0]!, type: 'ai_video', asset_id: 'missing_generated_asset' }],
+  material_jobs: [{
+    id: 'stale_fulfilled_job', scene_id: 'scene_1', type: 'request_user_material', status: 'fulfilled',
+    prompt: 'request missing footage', output_asset_id: 'missing_generated_asset',
+  }],
+}
+const staleFulfilledReadiness = evaluateV2AgentToolReadiness({
+  toolId: 'timeline.render',
+  context: duplicateContext,
+  runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: false, materialCount: 0 },
+  workspace: { draftId: 'draft_stale_fulfilled', baseRevision: 1 },
+  authorizationGranted: true,
+  timelineSpec: staleFulfilledSpec,
+})
+assert.equal(staleFulfilledReadiness.status, 'blocked')
+assert.ok(staleFulfilledReadiness.missing.some((item) => item.code === 'material_output_missing'))
+const incompleteReuseSpec: RemotionTimelineSpecV1 = {
+  ...base,
+  material_jobs: [{
+    id: 'reuse_without_output', scene_id: 'scene_1', type: 'reuse_asset', status: 'planned',
+  }],
+}
+assert.equal(
+  validateRemotionTimelineSpec(incompleteReuseSpec).ok,
+  false,
+  'reuse_asset is never executable without a real output asset',
+)
+const incompleteReuseReadiness = evaluateV2AgentToolReadiness({
+  toolId: 'timeline.render',
+  context: duplicateContext,
+  runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: false, materialCount: 0 },
+  workspace: { draftId: 'draft_incomplete_reuse', baseRevision: 1 },
+  authorizationGranted: true,
+  timelineSpec: incompleteReuseSpec,
+})
+assert.equal(incompleteReuseReadiness.status, 'blocked')
+assert.ok(incompleteReuseReadiness.missing.some((item) => item.code === 'material_output_missing'))
 const invalid = structuredClone(base)
 invalid.overlays[1].start_sec = 1
 assert.equal(validateRemotionTimelineSpec(invalid).ok, false)

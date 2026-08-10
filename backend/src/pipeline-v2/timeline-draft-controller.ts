@@ -7,6 +7,7 @@ import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-time
 import { v2PlannerInputFromRequest } from './controller.js'
 import { previewV2RemotionTimeline } from './remotion-timeline-service.js'
 import { executeV2TimelineDraftRun } from './timeline-draft-runner.js'
+import { ensureTimelineRenderComponentVisualEvidence } from '../modules/render-components/component-authoring-agent.js'
 import { buildV2TimelineRevisionContext } from './timeline-revision-context.js'
 import {
   createV2TimelineDraftRepository,
@@ -189,6 +190,7 @@ export async function postV2TimelineDraftPreview(req: Request, res: Response): P
   }
 
   try {
+    await ensureTimelineRenderComponentVisualEvidence(preview.spec)
     const draft = draftId
       ? await repository.saveDraft({
           draftId,
@@ -261,6 +263,7 @@ export async function putV2TimelineDraft(req: Request, res: Response): Promise<v
     return
   }
   try {
+    await ensureTimelineRenderComponentVisualEvidence(spec)
     const draft = await repository.saveDraft({
       draftId,
       userId: userIdFrom(req),

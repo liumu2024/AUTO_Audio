@@ -173,6 +173,7 @@ async function resolveTimelineSpec(input: {
               candidateSpec: llmPlanner.spec,
               scope: input.plannerInput.revisionScope,
               sceneId: input.plannerInput.revisionSceneId,
+              sceneIds: input.plannerInput.revisionSceneIds,
               transitionIds: input.plannerInput.revisionTransitionIds,
             }),
           }
@@ -190,6 +191,7 @@ async function resolveTimelineSpec(input: {
           confirmedContext: input.plannerInput.conversationSummary,
           revisionScope: input.plannerInput.revisionScope,
           revisionSceneId: input.plannerInput.revisionSceneId,
+          revisionSceneIds: input.plannerInput.revisionSceneIds,
           revisionTransitionIds: input.plannerInput.revisionTransitionIds,
         })
         await input.trace.writeJson('02-planning', 'timeline-outcome-review.json', outcomeReview)
@@ -220,6 +222,7 @@ async function resolveTimelineSpec(input: {
                 candidateSpec: llmPlanner.spec,
                 scope: input.plannerInput.revisionScope,
                 sceneId: input.plannerInput.revisionSceneId,
+                sceneIds: input.plannerInput.revisionSceneIds,
                 transitionIds: input.plannerInput.revisionTransitionIds,
               }),
             }
@@ -237,6 +240,7 @@ async function resolveTimelineSpec(input: {
             confirmedContext: input.plannerInput.conversationSummary,
             revisionScope: input.plannerInput.revisionScope,
             revisionSceneId: input.plannerInput.revisionSceneId,
+            revisionSceneIds: input.plannerInput.revisionSceneIds,
             revisionTransitionIds: input.plannerInput.revisionTransitionIds,
           })
           await input.trace.writeJson('02-planning', 'timeline-outcome-correction-review.json', outcomeReview)
@@ -273,8 +277,22 @@ async function resolveTimelineSpec(input: {
             repair.responseAudit ?? { error: repair.error ?? null })
         }
       }
-      if (!input.plannerInput.allowPlannerFallback) throw error
-      const spec = await buildTimelineSpec(input.plannerInput)
+      // A deterministic initial plan is not a valid substitute for an edit:
+      // it has no scoped relation to the saved base and could replace it.
+      if (input.plannerInput.revisionBaseSpec || !input.plannerInput.allowPlannerFallback) throw error
+      const hasParsedSampleFacts = Boolean(input.plannerInput.sampleUnderstanding)
+      const hasUnparsedSample = Boolean(input.plannerInput.referenceVideoPath) && !hasParsedSampleFacts
+      const hasVisualMaterial = Boolean(
+        input.plannerInput.imageSrc
+        || input.plannerInput.inputImageUrl
+        || input.plannerInput.materials?.some((material) => material.type === 'image' || material.type === 'video'),
+      )
+      const requestsUnavailableVisualFallback = input.plannerInput.creationMode === 'material_brief'
+        || input.plannerInput.creationMode === 'sample_replicate'
+      const canFallbackDeterministically = hasParsedSampleFacts
+        || (!hasUnparsedSample && !hasVisualMaterial && !requestsUnavailableVisualFallback)
+      if (!canFallbackDeterministically) throw error
+      const spec = await bindComponentNames(await buildTimelineSpec(input.plannerInput))
       await input.trace.writeJson('02-planning', 'timeline-fallback-spec.json', spec)
       return {
         spec,

@@ -63,6 +63,8 @@ export interface V2PlannerInput {
   revisionScope?: V2TimelineRevisionScope
   /** Tool-authorized target scene for the scene revision scope. */
   revisionSceneId?: string
+  /** Tool-authorized contiguous scene range for structural revisions. */
+  revisionSceneIds?: string[]
   /** Tool-authorized target transitions for the transition revision scope. */
   revisionTransitionIds?: string[]
   /** Server-resolved instructions and normalized arguments for this Agent stage. */

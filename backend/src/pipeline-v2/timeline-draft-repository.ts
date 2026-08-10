@@ -101,6 +101,7 @@ async function assertTimelineComponentReferences(
   const issues = await validateRenderComponentReferences(
     timelineRenderComponentReferences(spec),
     allowedDraftIds,
+    spec.canvas,
   )
   if (issues.length) throw new V2TimelineComponentReferenceError(issues)
 }

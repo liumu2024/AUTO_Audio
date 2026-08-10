@@ -59,6 +59,20 @@ function missingTosConfig(): string[] {
   return missing
 }
 
+export function evaluateExternalPublicationReadiness(url: string): { ready: boolean; reason?: string } {
+  const direct = classifyExternalUrlAccess(url)
+  if (direct.ok) return { ready: true }
+  if (env.assetPublisherProvider === 'tos') {
+    const missing = missingTosConfig()
+    return missing.length === 0
+      ? { ready: true }
+      : { ready: false, reason: `素材发布缺少配置：${missing.join(', ')}。` }
+  }
+  return classifyExternalUrlAccess(env.publicAssetBaseUrl).ok
+    ? { ready: true }
+    : { ready: false, reason: '图片生成输入不是外部可达 URL，且当前素材发布地址仅限本机访问。' }
+}
+
 function createTosClient(): InstanceType<typeof TosClient> {
   return new TosClient({
     accessKeyId: env.tosAccessKeyId!,

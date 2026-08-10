@@ -1,6 +1,7 @@
 import {
   REMOTION_TIMELINE_SPEC_SCHEMA_VERSION,
   REMOTION_TIMELINE_TRANSITION_TYPES,
+  type RemotionTimelineMaterialJob,
   type RemotionTimelineSpecV1,
 } from '../types/remotion-timeline-spec.v1.js'
 
@@ -29,6 +30,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function finiteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
+}
+
+export function materialJobMissingRequiredOutput(
+  job: RemotionTimelineMaterialJob,
+  assetIds: ReadonlySet<string>,
+): boolean {
+  return (job.type === 'reuse_asset' || job.status === 'fulfilled')
+    && (!job.output_asset_id || !assetIds.has(job.output_asset_id))
 }
 
 function validateCustomRenderRef(
@@ -466,13 +475,34 @@ export function validateRemotionTimelineSpec(value: unknown): RemotionTimelineVa
     if (job.input_asset_id && job.input_image_url) {
       addIssue(issues, 'error', path, 'use input_asset_id or legacy input_image_url, not both.')
     }
-    if (job.output_asset_id && !assetIds.has(job.output_asset_id)) {
+    if (materialJobMissingRequiredOutput(job, assetIds)) {
+      addIssue(
+        issues,
+        'error',
+        `${path}.output_asset_id`,
+        `${job.type} ${job.status} jobs require an available output asset.`,
+      )
+    } else if (job.output_asset_id && !assetIds.has(job.output_asset_id)) {
       addIssue(
         issues,
         job.status === 'fulfilled' ? 'error' : 'warning',
         `${path}.output_asset_id`,
         'output_asset_id should reference an asset after resolution.',
       )
+    }
+    const outputAsset = job.output_asset_id
+      ? assets.find((asset) => asset.id === job.output_asset_id)
+      : undefined
+    if (outputAsset && outputAsset.type !== 'video' && outputAsset.type !== 'image') {
+      addIssue(issues, 'error', `${path}.output_asset_id`, 'material job output must be a video or image asset.')
+    }
+    const fallbackAsset = job.fallback_asset_id
+      ? assets.find((asset) => asset.id === job.fallback_asset_id)
+      : undefined
+    if (job.fallback_asset_id && !fallbackAsset) {
+      addIssue(issues, 'error', `${path}.fallback_asset_id`, 'fallback_asset_id must reference an existing asset.')
+    } else if (fallbackAsset && fallbackAsset.type !== 'video' && fallbackAsset.type !== 'image') {
+      addIssue(issues, 'error', `${path}.fallback_asset_id`, 'fallback asset must be a video or image.')
     }
   })
 

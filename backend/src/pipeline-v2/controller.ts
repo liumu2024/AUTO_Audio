@@ -1,8 +1,7 @@
 import type { Request, Response } from 'express'
-import path from 'node:path'
 
 import { analyzeV2Sample } from './sample-understanding-service.js'
-import { previewV2RemotionTimeline, runV2RemotionTimeline } from './remotion-timeline-service.js'
+import { previewV2RemotionTimeline } from './remotion-timeline-service.js'
 import type { V2PlannerInput, V2PlannerMaterialInput } from './v2-input.js'
 
 function stringValue(value: unknown, fallback = ''): string {
@@ -135,27 +134,4 @@ export async function postV2TimelinePreview(req: Request, res: Response): Promis
   const result = await previewV2RemotionTimeline(v2PlannerInputFromRequest(req, taskId))
 
   res.json(result)
-}
-
-export async function postV2TimelineRun(req: Request, res: Response): Promise<void> {
-  const taskId = stringValue(req.body?.taskId, `v2_timeline_run_${Date.now()}`)
-  const result = await runV2RemotionTimeline({
-    ...v2PlannerInputFromRequest(req, taskId),
-    timelineSpecOverride: req.body?.timelineSpecOverride,
-  })
-
-  res.json({
-    ok: result.ok,
-    taskId: result.taskId,
-    plannerSource: result.plannerSource,
-    spec: result.spec,
-    outputPath: result.outputPath,
-    outputUrl: `/v2-renders/${encodeURIComponent(result.taskId)}/${encodeURIComponent(path.basename(result.outputPath))}`,
-    traceDir: result.traceDir,
-    review: result.review,
-    validation: result.validation,
-    materialResolution: result.materialResolution,
-    standardizedAssets: result.standardizedAssets,
-    evaluation: result.evaluation,
-  })
 }

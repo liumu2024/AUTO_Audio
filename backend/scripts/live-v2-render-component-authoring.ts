@@ -129,12 +129,13 @@ for (let run = 1; run <= reuseRuns; run += 1) {
 const registeredComponents = await listRenderComponents()
 const promotedComponents = await listPromotedComponents()
 const illegalPromotionCount = registeredComponents.filter((component) => {
-  const evidence = component.previewEvidence
+  const evidence = Object.values(component.previewEvidenceByAspect ?? {})
   return component.status === 'promoted' && (
-    evidence?.verdict !== 'passed'
-    || evidence.frameCount !== 5
-    || evidence.criteria.length === 0
-    || evidence.criteria.some((criterion) => !criterion.passed)
+    evidence.length === 0
+    || evidence.some((item) => item.verdict !== 'passed'
+      || item.frameCount !== 5
+      || item.criteria.length === 0
+      || item.criteria.some((criterion) => !criterion.passed))
   )
 }).length
 const report = {

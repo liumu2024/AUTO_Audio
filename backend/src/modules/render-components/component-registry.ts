@@ -1,11 +1,23 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { build } from 'esbuild'
 
 import type { RemotionTimelineSpecV1 } from '../../../../shared/types/remotion-timeline-spec.v1.js'
 import { auditRenderComponentSource, componentIdValid } from './component-sandbox.js'
+
+export const RENDER_COMPONENT_VISUAL_POLICY_VERSION = 'render_component_visual.v2'
+
+export interface RenderComponentPreviewEvidence {
+  verdict: 'passed'
+  policyVersion?: string
+  canvas?: { width: number; height: number }
+  frameCount: number
+  summary: string
+  criteria: Array<{ criterion: string; passed: boolean; evidence: string }>
+  reviewedAt: string
+}
 
 export interface RenderComponentManifest {
   schema_version: 'render_component.v1'
@@ -24,13 +36,7 @@ export interface RenderComponentManifest {
   renderedTimes: number
   failedRenders: number
   sourceWorkspaceSessionId?: string
-  previewEvidence?: {
-    verdict: 'passed'
-    frameCount: number
-    summary: string
-    criteria: Array<{ criterion: string; passed: boolean; evidence: string }>
-    reviewedAt: string
-  }
+  previewEvidenceByAspect?: Record<string, RenderComponentPreviewEvidence>
   promotedAt?: string
   version: number
 }
@@ -50,6 +56,69 @@ export interface RegisteredRenderComponent {
 }
 
 const EXTERNAL_PACKAGES = ['react', 'remotion', '@remotion/transitions', '@remotion/media']
+const manifestUpdateQueues = new Map<string, Promise<void>>()
+
+function aspectRatioKey(canvas: { width: number; height: number }): string {
+  return (canvas.width / canvas.height).toFixed(6)
+}
+
+function previewEvidenceStorageKey(evidence: RenderComponentPreviewEvidence): string {
+  return evidence.canvas ? aspectRatioKey(evidence.canvas) : 'unverified'
+}
+
+function normalizeManifest(raw: RenderComponentManifest & {
+  previewEvidence?: RenderComponentPreviewEvidence
+}): RenderComponentManifest {
+  const normalized = { ...raw }
+  delete normalized.previewEvidence
+  if (!normalized.previewEvidenceByAspect && raw.previewEvidence) {
+    normalized.previewEvidenceByAspect = {
+      [previewEvidenceStorageKey(raw.previewEvidence)]: raw.previewEvidence,
+    }
+  }
+  return normalized
+}
+
+async function readManifestFile(manifestPath: string): Promise<RenderComponentManifest> {
+  return normalizeManifest(JSON.parse(await readFile(manifestPath, 'utf8')) as RenderComponentManifest & {
+    previewEvidence?: RenderComponentPreviewEvidence
+  })
+}
+
+async function writeManifestFile(manifestPath: string, manifest: RenderComponentManifest): Promise<void> {
+  const temporaryPath = `${manifestPath}.${randomUUID()}.tmp`
+  await writeFile(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+  try {
+    await rename(temporaryPath, manifestPath)
+  } catch (error) {
+    await rm(temporaryPath, { force: true })
+    throw error
+  }
+}
+
+async function updateRenderComponentManifest(
+  id: string,
+  update: (manifest: RenderComponentManifest) => RenderComponentManifest | null,
+): Promise<RenderComponentManifest | null> {
+  if (!componentIdValid(id)) return null
+  const manifestPath = path.join(renderComponentsRoot(), id, 'manifest.json')
+  const previous = manifestUpdateQueues.get(id) ?? Promise.resolve()
+  let result: RenderComponentManifest | null = null
+  const operation = previous.catch(() => undefined).then(async () => {
+    try {
+      const next = update(await readManifestFile(manifestPath))
+      if (!next) return
+      await writeManifestFile(manifestPath, next)
+      result = next
+    } catch {
+      result = null
+    }
+  })
+  manifestUpdateQueues.set(id, operation)
+  await operation
+  if (manifestUpdateQueues.get(id) === operation) manifestUpdateQueues.delete(id)
+  return result
+}
 
 export function renderComponentsRoot(cwd = process.cwd()): string {
   const configured = process.env.RENDER_COMPONENTS_DIR?.trim()
@@ -138,7 +207,9 @@ export async function readRenderComponent(id: string): Promise<RegisteredRenderC
       readFile(path.join(dir, 'bundle.js'), 'utf8'),
       readFile(path.join(dir, 'manifest.json'), 'utf8'),
     ])
-    const manifest = JSON.parse(manifestRaw) as RenderComponentManifest
+    const manifest = normalizeManifest(JSON.parse(manifestRaw) as RenderComponentManifest & {
+      previewEvidence?: RenderComponentPreviewEvidence
+    })
     if (manifest.status === 'disabled') return null
     return { id, source, bundle, manifest }
   } catch {
@@ -152,9 +223,7 @@ export async function listRenderComponents(): Promise<RenderComponentManifest[]>
   const manifests: RenderComponentManifest[] = []
   for (const entry of entries) {
     try {
-      const manifest = JSON.parse(
-        await readFile(path.join(root, entry, 'manifest.json'), 'utf8'),
-      ) as RenderComponentManifest
+      const manifest = await readManifestFile(path.join(root, entry, 'manifest.json'))
       if (manifest.schema_version === 'render_component.v1') manifests.push(manifest)
     } catch {
       // ignore non-component directories
@@ -168,65 +237,47 @@ export async function listRenderComponents(): Promise<RenderComponentManifest[]>
  * authoring service may promote a draft after visual acceptance.
  */
 export async function markRenderSucceeded(id: string): Promise<RenderComponentManifest | null> {
-  if (!componentIdValid(id)) return null
-  const manifestPath = path.join(renderComponentsRoot(), id, 'manifest.json')
-  try {
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as RenderComponentManifest
+  return updateRenderComponentManifest(id, (manifest) => {
     if (manifest.status === 'disabled') return manifest
     const renderedTimes = (manifest.renderedTimes ?? 0) + 1
-    const next: RenderComponentManifest = {
+    return {
       ...manifest,
       renderedTimes,
       status: manifest.status,
       promotedAt: manifest.promotedAt,
     }
-    await writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
-    return next
-  } catch {
-    return null
-  }
+  })
 }
 
 export async function setRenderComponentDisplayName(
   id: string,
   displayName: string,
 ): Promise<RenderComponentManifest | null> {
-  if (!componentIdValid(id)) return null
   const name = displayName.trim()
   if (!name) throw new Error('Component display name is required.')
-  const manifestPath = path.join(renderComponentsRoot(), id, 'manifest.json')
-  try {
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as RenderComponentManifest
+  return updateRenderComponentManifest(id, (manifest) => {
     if (manifest.status === 'disabled') return null
-    const next = { ...manifest, displayName: name.slice(0, 80) }
-    await writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
-    return next
-  } catch {
-    return null
-  }
+    return { ...manifest, displayName: name.slice(0, 80) }
+  })
 }
 
 export async function promoteRenderComponent(input: {
   id: string
-  previewEvidence: NonNullable<RenderComponentManifest['previewEvidence']>
+  previewEvidence: RenderComponentPreviewEvidence
 }): Promise<RenderComponentManifest | null> {
-  if (!componentIdValid(input.id)) return null
-  const manifestPath = path.join(renderComponentsRoot(), input.id, 'manifest.json')
-  try {
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as RenderComponentManifest
-    if (manifest.status !== 'draft') return manifest.status === 'promoted' ? manifest : null
-    const next: RenderComponentManifest = {
+  return updateRenderComponentManifest(input.id, (manifest) => {
+    if (manifest.status === 'disabled') return null
+    return {
       ...manifest,
       status: 'promoted',
       renderedTimes: (manifest.renderedTimes ?? 0) + 1,
-      previewEvidence: input.previewEvidence,
-      promotedAt: new Date().toISOString(),
+      previewEvidenceByAspect: {
+        ...manifest.previewEvidenceByAspect,
+        [previewEvidenceStorageKey(input.previewEvidence)]: input.previewEvidence,
+      },
+      promotedAt: manifest.promotedAt ?? new Date().toISOString(),
     }
-    await writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
-    return next
-  } catch {
-    return null
-  }
+  })
 }
 
 export async function removeDraftRenderComponent(id: string): Promise<boolean> {
@@ -249,32 +300,49 @@ export async function findPromotedRenderComponentBySource(input: {
 
 /** Negative feedback: a failed render demotes the component's rank. */
 export async function markRenderFailed(id: string): Promise<RenderComponentManifest | null> {
-  if (!componentIdValid(id)) return null
-  const manifestPath = path.join(renderComponentsRoot(), id, 'manifest.json')
-  try {
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as RenderComponentManifest
-    const next: RenderComponentManifest = {
-      ...manifest,
-      failedRenders: (manifest.failedRenders ?? 0) + 1,
-    }
-    await writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
-    return next
-  } catch {
-    return null
-  }
+  return updateRenderComponentManifest(id, (manifest) => ({
+    ...manifest,
+    failedRenders: (manifest.failedRenders ?? 0) + 1,
+  }))
 }
 
 function componentBehaviorScore(manifest: RenderComponentManifest): number {
   return (manifest.renderedTimes ?? 0) - (manifest.failedRenders ?? 0) * 3
 }
 
-export async function listPromotedComponents(): Promise<
+export function renderComponentEvidenceMatchesCanvas(
+  evidenceByAspect: RenderComponentManifest['previewEvidenceByAspect'],
+  canvas: { width: number; height: number },
+): boolean {
+  return Boolean(renderComponentEvidenceForCanvas(evidenceByAspect, canvas))
+}
+
+export function renderComponentEvidenceForCanvas(
+  evidenceByAspect: RenderComponentManifest['previewEvidenceByAspect'],
+  canvas: { width: number; height: number },
+): RenderComponentPreviewEvidence | undefined {
+  const evidence = evidenceByAspect?.[aspectRatioKey(canvas)]
+  if (evidence?.policyVersion !== RENDER_COMPONENT_VISUAL_POLICY_VERSION || !evidence.canvas) return undefined
+  return Math.abs(
+    evidence.canvas.width / evidence.canvas.height - canvas.width / canvas.height,
+  ) < 0.001 ? evidence : undefined
+}
+
+export async function listPromotedComponents(canvas?: { width: number; height: number }): Promise<
   RenderComponentSummary[]
 > {
   const manifests = await listRenderComponents()
   return manifests
-    .filter((item) => item.status === 'promoted' && (item.purpose === 'scene' || item.purpose === 'transition'))
-    .sort((a, b) => componentBehaviorScore(b) - componentBehaviorScore(a))
+    .filter((item) =>
+      item.status === 'promoted'
+      && (item.purpose === 'scene' || item.purpose === 'transition'))
+    .sort((a, b) => {
+      const evidenceOrder = canvas
+        ? Number(renderComponentEvidenceMatchesCanvas(b.previewEvidenceByAspect, canvas))
+          - Number(renderComponentEvidenceMatchesCanvas(a.previewEvidenceByAspect, canvas))
+        : 0
+      return evidenceOrder || componentBehaviorScore(b) - componentBehaviorScore(a)
+    })
     .slice(0, 20)
     .map((item) => ({
       id: item.id,
@@ -342,6 +410,8 @@ export function timelineRenderComponentReferences(
 export async function validateRenderComponentReferences(
   references: Array<{ id: string; purpose: 'scene' | 'transition' }>,
   allowedDraftIds: ReadonlySet<string> = new Set(),
+  canvas?: { width: number; height: number },
+  allowedUnverifiedPromotedIds: ReadonlySet<string> = new Set(),
 ): Promise<string[]> {
   const issues: string[] = []
   for (const reference of references) {
@@ -352,6 +422,13 @@ export async function validateRenderComponentReferences(
       issues.push(`${reference.id}: component purpose is ${String(component.manifest.purpose)}, expected ${reference.purpose}`)
     } else if (component.manifest.status === 'draft' && !allowedDraftIds.has(reference.id)) {
       issues.push(`${reference.id}: draft component is not authorized for this action`)
+    } else if (
+      canvas
+      && component.manifest.status === 'promoted'
+      && !allowedUnverifiedPromotedIds.has(reference.id)
+      && !renderComponentEvidenceMatchesCanvas(component.manifest.previewEvidenceByAspect, canvas)
+    ) {
+      issues.push(`${reference.id}: component requires current visual evidence for this canvas aspect ratio`)
     }
   }
   return issues

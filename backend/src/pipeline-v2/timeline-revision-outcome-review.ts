@@ -1,7 +1,8 @@
 import { env } from '../config/env.js'
 import { extractTextCandidate } from '../modules/agent-tools/structured-json-tool.js'
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
-import { VISUAL_STRATEGY_SCENE_FIELDS } from './timeline-revision-scope.js'
+import type { DirectorTimelineFacts } from '../../../shared/types/director-context.js'
+import { VISUAL_STRATEGY_SCENE_FIELDS, type V2TimelineRevisionScope } from './timeline-revision-scope.js'
 import type { V2PlannerInput } from './v2-input.js'
 
 type V2TimelineAvailableComponents = NonNullable<V2PlannerInput['availableComponents']>
@@ -27,6 +28,19 @@ export interface V2TimelineFactDigest {
     description?: string
     visual_role?: string
     duration_sec: number
+    type: RemotionTimelineSpecV1['scenes'][number]['type']
+    asset_id?: string
+    motion?: RemotionTimelineSpecV1['scenes'][number]['motion']
+    custom_render_component_id?: string
+    caption_count: number
+    material_jobs: Array<{
+      id: string
+      type: RemotionTimelineSpecV1['material_jobs'][number]['type']
+      status: RemotionTimelineSpecV1['material_jobs'][number]['status']
+      input_asset_id?: string
+      output_asset_id?: string
+      fallback_kind?: RemotionTimelineSpecV1['material_jobs'][number]['fallback_kind']
+    }>
   }>
   visible_text: Array<{
     id: string
@@ -65,7 +79,7 @@ export interface V2TimelineRevisionOutcomeReview {
 
 export interface V2TimelineRevisionCommitDecision {
   ok: boolean
-  scope: 'global' | 'subtitle' | 'scene' | 'visual_strategy' | 'transition'
+  scope: V2TimelineRevisionScope
   violation?: { kind: 'missing_requested_change'; message: string }
 }
 
@@ -184,6 +198,20 @@ export function buildV2TimelineFactDigest(spec: RemotionTimelineSpecV1): V2Timel
       description: nonBlank(scene.creative_intent?.description) ?? nonBlank(scene.body),
       visual_role: scene.visual_role,
       duration_sec: scene.duration_sec,
+      type: scene.type,
+      asset_id: scene.asset_id,
+      motion: scene.motion,
+      custom_render_component_id: scene.custom_render?.component_id,
+      caption_count: spec.overlays.filter((overlay) =>
+        overlay.type === 'caption' && overlay.scene_id === scene.id && Boolean(overlay.text?.trim())).length,
+      material_jobs: spec.material_jobs.filter((job) => job.scene_id === scene.id).map((job) => ({
+        id: job.id,
+        type: job.type,
+        status: job.status,
+        input_asset_id: job.input_asset_id,
+        output_asset_id: job.output_asset_id,
+        fallback_kind: job.fallback_kind,
+      })),
     })),
     visible_text: spec.overlays
       .filter((overlay) => ['caption', 'title', 'label'].includes(overlay.type) && Boolean(overlay.text?.trim()))
@@ -215,6 +243,56 @@ export function buildV2TimelineFactDigest(spec: RemotionTimelineSpecV1): V2Timel
       volume: clip.volume,
     })),
     notes: (spec.notes ?? []).slice(-12),
+  }
+}
+
+export function buildDirectorTimelineFacts(
+  revision: number,
+  spec: RemotionTimelineSpecV1,
+): DirectorTimelineFacts {
+  const digest = buildV2TimelineFactDigest(spec)
+  return {
+    revision,
+    scenes: digest.scenes.map((scene) => ({
+      id: scene.id,
+      title: scene.title,
+      description: scene.description,
+      visualRole: scene.visual_role,
+      durationSec: scene.duration_sec,
+      type: scene.type,
+      assetId: scene.asset_id,
+      motion: scene.motion,
+      customRenderComponentId: scene.custom_render_component_id,
+      captionCount: scene.caption_count,
+      materialJobs: scene.material_jobs.map((job) => ({
+        id: job.id,
+        type: job.type,
+        status: job.status,
+        inputAssetId: job.input_asset_id,
+        outputAssetId: job.output_asset_id,
+        fallbackKind: job.fallback_kind,
+      })),
+    })),
+    visibleText: digest.visible_text.map((item) => ({
+      id: item.id,
+      sceneId: item.scene_id,
+      type: item.type,
+      text: item.text,
+      yPct: item.position.y_pct,
+      maxLines: item.position.max_lines,
+      animation: item.animation,
+    })),
+    transitions: digest.transitions.map((transition) => ({
+      id: transition.id,
+      fromSceneId: transition.from_scene_id,
+      toSceneId: transition.to_scene_id,
+      fromSceneIndex: digest.scenes.findIndex((scene) => scene.id === transition.from_scene_id) + 1,
+      toSceneIndex: digest.scenes.findIndex((scene) => scene.id === transition.to_scene_id) + 1,
+      type: transition.type,
+      durationSec: transition.duration_sec,
+    })),
+    audioClipCount: digest.audio.length,
+    notes: digest.notes,
   }
 }
 
@@ -260,8 +338,9 @@ function emptyTimelineFactDigest(): V2TimelineFactDigest {
 export function evaluateV2TimelineRevisionCommit(input: {
   baseSpec: RemotionTimelineSpecV1
   candidateSpec: RemotionTimelineSpecV1
-  scope: 'global' | 'subtitle' | 'scene' | 'visual_strategy' | 'transition'
+  scope: V2TimelineRevisionScope
   sceneId?: string
+  sceneIds?: string[]
   transitionIds?: string[]
 }): V2TimelineRevisionCommitDecision {
   const comparable = (spec: RemotionTimelineSpecV1) => input.scope === 'subtitle'
@@ -287,6 +366,13 @@ export function evaluateV2TimelineRevisionCommit(input: {
               transition.from_scene_id === sceneId || transition.to_scene_id === sceneId),
           }
         })()
+      : input.scope === 'structure'
+        ? {
+            scenes: spec.scenes,
+            transitions: spec.transitions,
+            overlays: spec.overlays,
+            material_jobs: spec.material_jobs,
+          }
       : input.scope === 'visual_strategy'
         ? (() => {
             const sceneId = input.sceneId
@@ -378,8 +464,9 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
   specDiff?: V2TimelineSpecDiffSummary
   confirmedContext?: string
   hasBase: boolean
-  revisionScope?: string
+  revisionScope?: V2TimelineRevisionScope
   revisionSceneId?: string
+  revisionSceneIds?: string[]
   revisionTransitionIds?: string[]
 }) {
   const componentsById = new Map((input.availableComponents ?? []).map((item) => [item.id, item]))
@@ -409,6 +496,8 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
     'Visible text must be audience copy. Do not accept technical notes, filenames, internal planning instructions, or display constraints as captions unless the user explicitly asked to show those exact words.',
     'When the request is a presentation constraint (placement, line limit, non-repetition), evaluate the candidate\'s displayed text and geometry rather than treating the constraint itself as copy.',
     'When a sample is used for inspiration, reject copied sample-specific subject matter or copy; reusable rhythm and structure are allowed.',
+    'Treat scene realization fields as authoritative: image_motion can only pan, zoom, or crop existing pixels and cannot create a new person, animal, vehicle, or environmental event. A newly invented visual element requires an ai_video scene backed by a generate_video material job (or an equivalent custom scene component whose registered effect explicitly implements it).',
+    'A remotion_card can fulfill only an intentional typography or motion-graphics scene. It cannot count as completed photographic or cinematic footage merely because its text describes the requested shot.',
     'When custom_render_component_id is present, that custom component defines the effective transition. The preset type and direction are fallback presentation settings only; do not require the custom effect name to appear in the preset type.',
     'Return JSON only. Do not reveal reasoning.',
     `User request: ${input.prompt}`,
@@ -430,7 +519,7 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
         ]
       : []),
     ...(input.revisionScope
-      ? [`Tool-authorized revision boundary: scope=${input.revisionScope}${input.revisionSceneId ? `, scene_id=${input.revisionSceneId}` : ''}${input.revisionTransitionIds?.length ? `, transition_ids=${input.revisionTransitionIds.join(',')}` : ''}. Any change outside this boundary is an unrelated change.`]
+      ? [`Tool-authorized revision boundary: scope=${input.revisionScope}${input.revisionSceneId ? `, scene_id=${input.revisionSceneId}` : ''}${input.revisionSceneIds?.length ? `, scene_ids=${input.revisionSceneIds.join(',')}` : ''}${input.revisionTransitionIds?.length ? `, transition_ids=${input.revisionTransitionIds.join(',')}` : ''}. Any change outside this boundary is an unrelated change.`]
       : []),
   ].join('\n')
 }
@@ -497,8 +586,9 @@ export async function reviewV2TimelineRevisionOutcome(input: {
   candidateSpec: RemotionTimelineSpecV1
   availableComponents?: V2TimelineAvailableComponents
   confirmedContext?: string
-  revisionScope?: string
+  revisionScope?: V2TimelineRevisionScope
   revisionSceneId?: string
+  revisionSceneIds?: string[]
   revisionTransitionIds?: string[]
   assess?: (input: {
     prompt: string
@@ -541,6 +631,7 @@ export async function reviewV2TimelineRevisionOutcome(input: {
     hasBase: Boolean(input.baseSpec),
     revisionScope: input.revisionScope,
     revisionSceneId: input.revisionSceneId,
+    revisionSceneIds: input.revisionSceneIds,
     revisionTransitionIds: input.revisionTransitionIds,
   })
   const requested = env.directorAgentStructuredOutputMode === 'auto'

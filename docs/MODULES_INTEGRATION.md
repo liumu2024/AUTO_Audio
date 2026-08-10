@@ -34,8 +34,9 @@ V2_VIDEO_GENERATION_MODEL=doubao-seedance-1-5-pro-251215
 
 ## V2 Timeline Module
 
-Trigger: the director executor or V2 page calls `/api/v2/timeline/preview` and
-then `/api/v2/timeline/run`.
+Trigger: the director executor or V2 page saves a draft through
+`/api/v2/timeline-drafts/preview`, then renders a revision through
+`/api/v2/timeline-drafts/:draftId/runs`.
 
 Flow:
 
@@ -68,4 +69,4 @@ Main files:
 | Planning | Invalid planner JSON | Fallback deterministic timeline is used when allowed |
 | Material generation | Missing provider key or provider failure | Use planned fallback/static Remotion scene when available |
 | Material generation | Local image is not public | Upload fails before provider call when public URL is required |
-| Rendering | Remotion render error | `/api/v2/timeline/run` returns an explicit failure |
+| Rendering | Remotion render error | The draft RenderRun records and returns an explicit failure |

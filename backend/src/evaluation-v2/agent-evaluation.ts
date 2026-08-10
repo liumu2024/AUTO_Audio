@@ -17,6 +17,8 @@ import {
 } from '../pipeline-v2/agent-tools/dispatcher.js'
 import { evaluateV2AgentToolReadiness } from '../pipeline-v2/agent-tools/registry.js'
 import { createV2TimelineDraftRepository } from '../pipeline-v2/timeline-draft-repository.js'
+import { buildDirectorTimelineFacts } from '../pipeline-v2/timeline-revision-outcome-review.js'
+import type { V2TimelineRevisionScope } from '../pipeline-v2/timeline-revision-scope.js'
 import { evaluateDirectorReplyQuality } from '../../scripts/v2-director-reply-quality-gate.js'
 
 type Fixture = 'empty' | 'draft' | 'material' | 'sample' | 'scifi_draft'
@@ -54,7 +56,7 @@ interface ExpectedTurn {
   effectiveAspectRatio?: string
   effectiveDurationSec?: number
   subtitleOnly?: boolean
-  revisionScope?: 'subtitle' | 'scene' | 'visual_strategy' | 'transition' | 'global'
+  revisionScope?: V2TimelineRevisionScope
   revisionSceneId?: string
   revisionTargetCount?: number
   toolSuccess?: boolean
@@ -495,41 +497,6 @@ function fixtureScifiSpec(taskId: string): RemotionTimelineSpecV1 {
   }
 }
 
-function timelineFacts(spec: RemotionTimelineSpecV1, revision: number) {
-  return {
-    revision,
-    scenes: spec.scenes.map((scene) => ({
-      id: scene.id,
-      title: scene.title,
-      description: scene.creative_intent?.description ?? scene.body,
-      visualRole: scene.visual_role,
-      durationSec: scene.duration_sec,
-    })),
-    visibleText: spec.overlays
-      .filter((overlay) => Boolean(overlay.text))
-      .map((overlay) => ({
-        id: overlay.id,
-        sceneId: overlay.scene_id,
-        type: overlay.type,
-        text: overlay.text ?? '',
-        yPct: overlay.y_pct,
-        maxLines: overlay.max_lines,
-        animation: overlay.animation,
-      })),
-    transitions: spec.transitions.map((transition) => ({
-      id: transition.id,
-      fromSceneId: transition.from_scene_id,
-      toSceneId: transition.to_scene_id,
-      fromSceneIndex: spec.scenes.findIndex((scene) => scene.id === transition.from_scene_id) + 1,
-      toSceneIndex: spec.scenes.findIndex((scene) => scene.id === transition.to_scene_id) + 1,
-      type: transition.type,
-      durationSec: transition.duration_sec,
-    })),
-    audioClipCount: spec.audio?.length ?? 0,
-    notes: spec.notes ?? [],
-  }
-}
-
 async function createFixture(
   evaluationCase: EvaluationCase,
   userId: number,
@@ -573,6 +540,7 @@ async function createFixture(
         rhythm: fixtureSample.rhythm_zh,
         reusableStyle: fixtureSample.reusable_style_zh,
         segmentCount: fixtureSample.segments.length,
+        shotCount: (fixtureSample.shot_evidence ?? []).filter((shot) => shot.confidence >= 0.6).length,
       },
     }
   }
@@ -617,7 +585,7 @@ async function createFixture(
     savedRevision: draft.revision,
     sceneCount: spec.scenes.length,
   }
-  context.timelineFacts = timelineFacts(spec, draft.revision)
+  context.timelineFacts = buildDirectorTimelineFacts(draft.revision, spec)
   return { context, currentSpec: spec }
 }
 
