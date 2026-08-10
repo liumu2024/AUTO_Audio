@@ -321,8 +321,11 @@ export function buildDirectorModelPrompt(input: {
 - missingInformation 只列出真正阻塞当前目标的事实；可选补充不算阻塞。
 - Tool arguments 必须严格符合 Tool 卡片中的 inputSchema，不得增加字段。
 - 用户在本轮明确请求修改草稿（改字幕、换转场、换视觉策略、重排镜头）即为本轮执行授权；draft 修订不需要再次确认，直接选择 timeline.patch 执行。
-- 用户表达的效果需求（滤镜、合成、动画、转场）超出预置集时：先查 Current context 中 renderedComponents 清单，有则用 custom_render 引用；没有则通过 render.author 创作组件（用户无需明确要求写代码）。
+- 对滤镜、合成、动画和转场需求，先确定用户想要的效果语义，再在内置实现与 Current context 的 renderedComponents 中选择语义匹配的实现；两者都不能满足时才通过 render.author 创作组件（用户无需明确要求写代码）。
 - render.author 提交 purpose、用户原话中的简短 displayName、effectBrief 和逐项 acceptanceCriteria，不得生成 React 源码或组件 ID。displayName 优先沿用用户给出的中文效果名，不得使用“自定义转场”等含糊名称。服务端编码 Agent 负责生成、试渲染和验收；同轮需要立即应用时，让 timeline.plan/timeline.patch 显式 dependsOn 该 author 动作。
+- Treat presets and renderedComponents as implementation candidates, not recommendations. Decide the intended effect semantics before choosing its implementation; source and list order do not imply priority.
+- Reuse a matching preset or registered component when it satisfies the intended effect. Use render.author only when neither can satisfy it; do not prefer or avoid either implementation source merely because it is listed.
+- On retry, preserve the current user goal. A previous model suggestion or failed component name is not a user requirement unless the user explicitly adopts it.
 - timeline.patch 的 sceneId 必须使用当前草稿 timelineFacts 中真实存在的场景 id；不确定时省略 sceneId，服务端会按当前选中镜头解析。subtitle 范围可全量修订字幕，也可带目标 sceneId 只改该场景字幕。
 - 已有草稿后不得再次使用 timeline.plan。拆分、合并、插入或删除镜头使用 timeline.patch 的 structure 范围，并从 timelineFacts.scenes 选择一个连续的 sceneIds 范围；只有用户明确要求整体推翻重做时才使用 global。
 - 修改一个或多个具体转场时使用 transition 范围，并从 timelineFacts.transitions 选择全部真实 transitionIds；用户用镜头顺序描述时，根据 fromSceneIndex/toSceneIndex 选择对应转场，不要把转场修改伪装成 scene 或 global 修订。
@@ -335,6 +338,10 @@ export function buildDirectorModelPrompt(input: {
 - retrievedCreativeMemories 是召回候选，不是 confirmedRequirements。不得仅因为召回到 active 记忆就把它复制进 stateActions；需要规划时它会由服务端作为临时 Planner 上下文传入。
 - 用户长期稳定偏好使用 user scope；只适用于当前持久草稿的知识使用 draft scope。不要输出草稿 ID，服务端会绑定当前草稿。
 - 推断或不确定的知识只能标记 candidate，candidate 不直接控制创作。
+- A specific recurring subject interest may be reusable user knowledge when the user expresses it as an enduring interest; a one-off current subject is only task context.
+- A current task object, requested operation, target school/product, scene edit, aspect ratio, or one-off implementation choice must not become long-term memory merely because it appears in a creation request.
+- Keep the reusable creative preference or enduring interest in statement; keep task-specific evidence only in sourceExcerpt. Use candidate when durability or scope is uncertain.
+- A request to regenerate or continue does not create a new memory unless the current input adds new reusable evidence.
 - replace/revoke 只能引用 retrievedCreativeMemories 中的 memory id。每项必须引用本轮 currentTurnId；记忆失败不会阻断其他动作。
 输出字段：replyDraft、intent、creativeConfigDelta、stateActions、memoryActions、skillRequests、toolRequests、missingInformation。只输出 JSON。
 1

@@ -370,6 +370,7 @@ function visualReviewPrompt(input: {
 }
 
 class VisualReviewProtocolError extends Error {}
+class VisualAcceptanceError extends Error {}
 
 async function requireVisualAcceptance(input: {
   authoring: RenderComponentAuthoringInput
@@ -392,7 +393,7 @@ async function requireVisualAcceptance(input: {
   const allCriteriaPass = input.authoring.acceptanceCriteria.every((criterion) =>
     verdict.criteria.some((item) => item.criterion === criterion && item.passed))
   if (!verdict.passed || !allCriteriaPass) {
-    throw new Error(`Visual acceptance failed: ${verdict.summary}; criteria=${JSON.stringify(verdict.criteria)}`)
+    throw new VisualAcceptanceError(`Visual acceptance failed: ${verdict.summary}; criteria=${JSON.stringify(verdict.criteria)}`)
   }
   return verdict
 }
@@ -520,6 +521,82 @@ export async function ensureTimelineRenderComponentVisualEvidence(
   }
 }
 
+export interface TimelineRenderComponentDegradation {
+  componentId: string
+  displayName: string
+  purpose: 'scene' | 'transition'
+  targetIds: string[]
+  reason: string
+}
+
+/**
+ * Settles optional custom rendering before persistence. Invalid references and
+ * purpose mismatches remain hard failures; only a promoted component's visual
+ * capability failure falls back to the object's existing built-in rendering.
+ */
+export async function settleTimelineRenderComponentVisualEvidence(
+  spec: RemotionTimelineSpecV1,
+  dependencies: Pick<
+    RenderComponentAuthoringDependencies,
+    'renderPreview' | 'reviewPreview' | 'cleanupPreview'
+  > = {},
+): Promise<{ spec: RemotionTimelineSpecV1; degradations: TimelineRenderComponentDegradation[] }> {
+  const references = timelineRenderComponentReferences(spec)
+  const purposesByComponentId = new Map<string, Set<'scene' | 'transition'>>()
+  for (const reference of references) {
+    const purposes = purposesByComponentId.get(reference.id) ?? new Set<'scene' | 'transition'>()
+    purposes.add(reference.purpose)
+    purposesByComponentId.set(reference.id, purposes)
+  }
+  const failed = new Map<string, { displayName: string; purpose: 'scene' | 'transition'; reason: string }>()
+  for (const [componentId, purposes] of purposesByComponentId) {
+    const component = await readRenderComponent(componentId)
+    // The repository remains the authoritative reference/security boundary.
+    // Do not turn an invalid reference into a silent visual fallback here.
+    if (!component || [...purposes].some((purpose) => purpose !== component.manifest.purpose)) continue
+    if (component.manifest.status !== 'promoted') continue
+    try {
+      await ensureRenderComponentVisualEvidence({
+        componentId,
+        canvas: {
+          width: spec.canvas.width,
+          height: spec.canvas.height,
+          fps: spec.canvas.fps,
+          durationSec: spec.canvas.duration_sec,
+        },
+      }, dependencies)
+    } catch (error) {
+      if (!(error instanceof VisualAcceptanceError)) throw error
+      failed.set(componentId, {
+        displayName: component.manifest.displayName,
+        purpose: component.manifest.purpose,
+        reason: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+  if (failed.size === 0) return { spec, degradations: [] }
+
+  const settledSpec: RemotionTimelineSpecV1 = {
+    ...spec,
+    scenes: spec.scenes.map((scene) => scene.custom_render && failed.has(scene.custom_render.component_id)
+      ? { ...scene, custom_render: undefined }
+      : scene),
+    transitions: spec.transitions.map((transition) => transition.custom_render && failed.has(transition.custom_render.component_id)
+      ? { ...transition, custom_render: undefined }
+      : transition),
+  }
+  const degradations = [...failed].map(([componentId, failure]) => ({
+    componentId,
+    displayName: failure.displayName,
+    purpose: failure.purpose,
+    targetIds: failure.purpose === 'scene'
+      ? spec.scenes.filter((scene) => scene.custom_render?.component_id === componentId).map((scene) => scene.id)
+      : spec.transitions.filter((transition) => transition.custom_render?.component_id === componentId).map((transition) => transition.id),
+    reason: failure.reason,
+  }))
+  return { spec: settledSpec, degradations }
+}
+
 function failureStage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   if (/audit|compil|esbuild|import|default export/i.test(message)) return 'audit_compile'
@@ -542,8 +619,12 @@ export async function authorRenderComponent(
   const cleanupPreview = dependencies.cleanupPreview ?? defaultCleanupPreview
   let repairFeedback: string | undefined
   let previousSource: string | undefined
+  let codingCalls = 0
+  let codeRepairUsed = false
+  let visualRepairUsed = false
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  while (codingCalls < 3) {
+    codingCalls += 1
     let componentId: string | undefined
     let preview: PreviewEvidence | undefined
     let generated: GeneratedComponent | undefined
@@ -586,8 +667,8 @@ export async function authorRenderComponent(
             displayName: manifest.displayName,
             effectSummary: manifest.effectSummary,
             status: 'promoted',
-            repaired: attempt > 0,
-            codingCalls: attempt + 1,
+            repaired: codingCalls > 1,
+            codingCalls,
             reused: true,
             visualVerdict: VisualVerdictSchema.parse({
               passed: true,
@@ -611,8 +692,8 @@ export async function authorRenderComponent(
           displayName: manifest.displayName,
           effectSummary: manifest.effectSummary,
           status: 'promoted',
-          repaired: attempt > 0,
-          codingCalls: attempt + 1,
+          repaired: codingCalls > 1,
+          codingCalls,
           reused: true,
           visualVerdict: verdict,
         }
@@ -643,8 +724,8 @@ export async function authorRenderComponent(
         displayName: promoted.displayName,
         effectSummary: promoted.effectSummary,
         status: 'promoted',
-        repaired: attempt > 0,
-        codingCalls: attempt + 1,
+        repaired: codingCalls > 1,
+        codingCalls,
         reused: false,
         visualVerdict: verdict,
       }
@@ -655,23 +736,28 @@ export async function authorRenderComponent(
         ok: false,
         stage: 'visual_review',
         reason,
-        repaired: attempt > 0,
-        codingCalls: attempt + 1,
+        repaired: codingCalls > 1,
+        codingCalls,
         failedSource: generated?.source ?? previousSource,
       }
-      if (attempt === 1) return {
+      const stage = failureStage(error)
+      const visualFailure = stage === 'visual_review'
+      const repairAlreadyUsed = visualFailure ? visualRepairUsed : codeRepairUsed
+      if (repairAlreadyUsed || codingCalls >= 3) return {
         ok: false,
-        stage: failureStage(error),
+        stage,
         reason,
-        repaired: true,
-        codingCalls: 2,
+        repaired: codingCalls > 1,
+        codingCalls,
         failedSource: generated?.source ?? previousSource,
       }
+      if (visualFailure) visualRepairUsed = true
+      else codeRepairUsed = true
       repairFeedback = reason
       previousSource = generated?.source ?? previousSource
     } finally {
       if (preview) await cleanupPreview(preview).catch(() => undefined)
     }
   }
-  return { ok: false, stage: 'generation', reason: 'Component authoring exhausted its retry budget.', repaired: true, codingCalls: 2 }
+  return { ok: false, stage: 'generation', reason: 'Component authoring exhausted its retry budget.', repaired: true, codingCalls }
 }

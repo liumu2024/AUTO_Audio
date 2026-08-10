@@ -58,7 +58,10 @@ const availableComponentPrompt = buildV2TimelinePlannerPrompt({
   availableComponents: [{ id: 'cmp_blur_dissolve', purpose: 'transition', displayName: '模糊溶解', effectSummary: '模糊溶解过渡：前一镜头模糊消失' }],
 })
 assert.match(availableComponentPrompt, /cmp_blur_dissolve/)
-assert.match(availableComponentPrompt, /Available server-confirmed render components/)
+assert.match(availableComponentPrompt, /Available registered render capabilities/)
+assert.match(availableComponentPrompt, /implementation candidates, not recommendations/i)
+assert.match(availableComponentPrompt, /Decide the intended effect before choosing/i)
+assert.match(availableComponentPrompt, /source, list order, and preset-versus-component origin do not imply priority/i)
 assert.match(availableComponentPrompt, /custom_render/)
 
 const validation = validateRemotionTimelineSpec(spec)

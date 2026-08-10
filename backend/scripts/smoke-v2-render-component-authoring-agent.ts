@@ -20,6 +20,7 @@ try {
   const {
     authorRenderComponent,
     buildRenderComponentCodingPrompt,
+    settleTimelineRenderComponentVisualEvidence,
     ensureRenderComponentVisualEvidence,
     renderComponentPreviewSampleFrames,
     V2_TRANSITION_VISUAL_INTEGRITY_CRITERIA,
@@ -200,6 +201,120 @@ try {
     'legacy evidence is upgraded through the same visual acceptance path before reuse',
   )
 
+  for (const fixture of [
+    { id: 'cmp_optional_scene_bad', purpose: 'scene' as const },
+    { id: 'cmp_optional_transition_bad', purpose: 'transition' as const },
+    { id: 'cmp_optional_transition_good', purpose: 'transition' as const },
+    { id: 'cmp_infrastructure_error', purpose: 'transition' as const },
+  ]) {
+    await registerRenderComponent({
+      id: fixture.id,
+      source: `${glowSource}\n// ${fixture.id}`,
+      displayName: fixture.id,
+      effectSummary: fixture.id,
+      effectBrief: fixture.id,
+      acceptanceCriteria: [`criterion:${fixture.id}`],
+      purpose: fixture.purpose,
+    })
+    await promoteRenderComponent({
+      id: fixture.id,
+      previewEvidence: {
+        verdict: 'passed', frameCount: 5, summary: 'legacy evidence',
+        criteria: [{ criterion: `criterion:${fixture.id}`, passed: true, evidence: 'legacy preview' }],
+        reviewedAt: new Date().toISOString(),
+      },
+    })
+  }
+  const optionalComponentSpec = {
+    schema_version: 'remotion_timeline_spec.v1' as const,
+    task_id: 'optional_component_degradation',
+    canvas: { width: 1280, height: 720, fps: 24, duration_sec: 6 },
+    assets: [],
+    scenes: [
+      { id: 'scene_a', type: 'remotion_card' as const, start_sec: 0, duration_sec: 2, custom_render: { component_id: 'cmp_optional_scene_bad' } },
+      { id: 'scene_b', type: 'remotion_card' as const, start_sec: 2, duration_sec: 2 },
+      { id: 'scene_c', type: 'remotion_card' as const, start_sec: 4, duration_sec: 2 },
+    ],
+    transitions: [
+      { id: 'transition_bad', from_scene_id: 'scene_a', to_scene_id: 'scene_b', type: 'wipe' as const, duration_sec: 0.3, custom_render: { component_id: 'cmp_optional_transition_bad' } },
+      { id: 'transition_good', from_scene_id: 'scene_b', to_scene_id: 'scene_c', type: 'fade' as const, duration_sec: 0.3, custom_render: { component_id: 'cmp_optional_transition_good' } },
+    ],
+    overlays: [], audio: [], render_policy: { renderer: 'remotion_timeline' as const },
+  }
+  const settled = await settleTimelineRenderComponentVisualEvidence(optionalComponentSpec, {
+    renderPreview: async ({ componentId }) => ({
+      videoPath: path.join(dataDir, `${componentId}.mp4`),
+      framePaths: [0, 1, 2, 3, 4].map((index) => path.join(dataDir, `${componentId}-${index}.png`)),
+    }),
+    reviewPreview: async ({ acceptanceCriteria, framePaths }) => {
+      const failed = framePaths[0]?.includes('_bad-') ?? false
+      return {
+        passed: !failed,
+        criteria: acceptanceCriteria.map((criterion) => ({ criterion, passed: !failed, evidence: failed ? 'visual mismatch' : 'passed' })),
+        summary: failed ? 'visual mismatch' : 'passed',
+      }
+    },
+    cleanupPreview: async () => undefined,
+  })
+  assert.equal(optionalComponentSpec.scenes[0]?.custom_render?.component_id, 'cmp_optional_scene_bad', 'settlement must not mutate the planner candidate')
+  assert.equal(settled.spec.scenes[0]?.custom_render, undefined)
+  assert.equal(settled.spec.transitions[0]?.custom_render, undefined)
+  assert.equal(settled.spec.transitions[0]?.type, 'wipe', 'transition preset fallback must be preserved')
+  assert.equal(settled.spec.transitions[0]?.duration_sec, 0.3)
+  assert.equal(settled.spec.transitions[1]?.custom_render?.component_id, 'cmp_optional_transition_good')
+  assert.deepEqual(settled.degradations.map((item) => item.componentId).sort(), ['cmp_optional_scene_bad', 'cmp_optional_transition_bad'])
+  assert.deepEqual(settled.degradations.map((item) => item.displayName).sort(), ['cmp_optional_scene_bad', 'cmp_optional_transition_bad'])
+  const invalidReferenceSettlement = await settleTimelineRenderComponentVisualEvidence({
+      ...optionalComponentSpec,
+      scenes: optionalComponentSpec.scenes.map((scene, index) => index === 0
+        ? { ...scene, custom_render: { component_id: 'cmp_missing_reference' } }
+        : scene),
+      transitions: optionalComponentSpec.transitions.slice(1),
+    })
+  assert.equal(invalidReferenceSettlement.degradations.length, 0)
+  assert.equal(
+    invalidReferenceSettlement.spec.scenes[0]?.custom_render?.component_id,
+    'cmp_missing_reference',
+    'missing or forged component ids must remain for the repository hard-reference gate',
+  )
+  const mixedPurposeSettlement = await settleTimelineRenderComponentVisualEvidence({
+    ...optionalComponentSpec,
+    scenes: optionalComponentSpec.scenes.map((scene, index) => index === 0
+      ? { ...scene, custom_render: { component_id: 'cmp_optional_transition_bad' } }
+      : scene),
+  }, {
+    renderPreview: async ({ componentId }) => ({
+      videoPath: path.join(dataDir, `${componentId}-mixed.mp4`),
+      framePaths: [0, 1, 2, 3, 4].map((index) => path.join(dataDir, `${componentId}-mixed-${index}.png`)),
+    }),
+    reviewPreview: async ({ acceptanceCriteria }) => ({
+      passed: false,
+      criteria: acceptanceCriteria.map((criterion) => ({ criterion, passed: false, evidence: 'visual mismatch' })),
+      summary: 'visual mismatch',
+    }),
+    cleanupPreview: async () => undefined,
+  })
+  assert.equal(mixedPurposeSettlement.degradations.length, 0)
+  assert.equal(mixedPurposeSettlement.spec.scenes[0]?.custom_render?.component_id, 'cmp_optional_transition_bad')
+  assert.equal(mixedPurposeSettlement.spec.transitions[0]?.custom_render?.component_id, 'cmp_optional_transition_bad')
+  await assert.rejects(
+    () => settleTimelineRenderComponentVisualEvidence({
+      ...optionalComponentSpec,
+      transitions: optionalComponentSpec.transitions.map((transition, index) => index === 0
+        ? { ...transition, custom_render: { component_id: 'cmp_infrastructure_error' } }
+        : transition),
+    }, {
+      renderPreview: async ({ componentId }) => ({
+        videoPath: path.join(dataDir, `${componentId}-infra.mp4`),
+        framePaths: [0, 1, 2, 3, 4].map((index) => path.join(dataDir, `${componentId}-infra-${index}.png`)),
+      }),
+      reviewPreview: async () => { throw new Error('provider unavailable') },
+      cleanupPreview: async () => undefined,
+    }),
+    /visual review protocol failed.*provider unavailable/i,
+    'infrastructure and review protocol failures must not be mislabeled as visual mismatch',
+  )
+
   let landscapeReviewCalls = 0
   const reusedAtNewAspect = await authorRenderComponent({
     purpose: 'scene',
@@ -317,6 +432,59 @@ try {
   assert.equal(transitionIntegrityChecked, true)
   assert.match(rejected.ok ? '' : rejected.failedSource ?? '', /function Noop/)
   assert.equal((await listRenderComponents()).filter((item) => item.status === 'draft').length, 0)
+
+  let crossStageCodingCalls = 0
+  let crossStageVisualReviews = 0
+  const crossStageRepair = await authorRenderComponent({
+    purpose: 'scene',
+    displayName: 'Cross-stage repair',
+    effectBrief: 'A deterministic blue card that remains visible.',
+    acceptanceCriteria: ['The blue card remains visible in every frame.'],
+    canvas: { width: 360, height: 640, fps: 12, durationSec: 1 },
+    skillContent: '# V2 Render Delivery\nComplete skill content',
+  }, {
+    generateCode: async ({ repairFeedback }) => {
+      crossStageCodingCalls += 1
+      if (crossStageCodingCalls === 1) return {
+        source: `export default function FirstVisualAttempt() { return <div style={{background:'#2563eb'}}>blue</div> }`,
+        effectSummary: 'First visual attempt',
+      }
+      if (crossStageCodingCalls === 2) {
+        assert.match(repairFeedback ?? '', /visual acceptance failed/i)
+        return {
+          source: `export default function BrokenCodeRepair() { fetch('https://example.com') }`,
+          effectSummary: 'Visual repair with a code error',
+        }
+      }
+      assert.match(repairFeedback ?? '', /audit|fetch/i)
+      return {
+        source: `export default function FinalCrossStageRepair() { return <div style={{width:'100%',height:'100%',background:'#2563eb'}}>blue</div> }`,
+        effectSummary: 'Final cross-stage repair',
+      }
+    },
+    renderPreview: async ({ componentId }) => ({
+      videoPath: path.join(dataDir, `${componentId}-cross-stage.mp4`),
+      framePaths: [0, 1, 2, 3, 4].map((index) => path.join(dataDir, `${componentId}-cross-stage-${index}.png`)),
+    }),
+    reviewPreview: async ({ acceptanceCriteria }) => {
+      crossStageVisualReviews += 1
+      const passed = crossStageVisualReviews > 1
+      return {
+        passed,
+        criteria: acceptanceCriteria.map((criterion) => ({
+          criterion,
+          passed,
+          evidence: passed ? 'The final card is visible.' : 'The first card did not meet the requested effect.',
+        })),
+        summary: passed ? 'The final effect passes.' : 'The first effect is visually insufficient.',
+      }
+    },
+    cleanupPreview: async () => undefined,
+  })
+  assert.equal(crossStageRepair.ok, true)
+  assert.equal(crossStageCodingCalls, 3, 'code and visual repair budgets must be independent')
+  assert.equal(crossStageVisualReviews, 2)
+  assert.equal(crossStageRepair.ok ? crossStageRepair.codingCalls : undefined, 3)
 
   let protocolCodingCalls = 0
   const visualProtocolFailure = await authorRenderComponent({

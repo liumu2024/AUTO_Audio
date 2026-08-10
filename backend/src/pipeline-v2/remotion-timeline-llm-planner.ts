@@ -294,8 +294,10 @@ export function buildV2TimelinePlannerPrompt(
     '- When the user requests an effect (filter, compositing, animation, transition) outside the preset set and the instruction explicitly names a sedimented component id, reference it with custom_render { component_id, params } on the target scene or transition. Do not invent component ids that are not explicitly given; do not output React/Remotion code here (components are authored separately through render.author).',
     ...(input.availableComponents?.length
       ? [
-          `Available server-confirmed render components: ${JSON.stringify(input.availableComponents)}`,
-          '- When an available component clearly fits the requested effect and its purpose matches the target object, you may reference it via custom_render. Never invent component ids.',
+          `Available registered render capabilities: ${JSON.stringify(input.availableComponents)}`,
+          '- These are implementation candidates, not recommendations or a priority order. Decide the intended effect before choosing its implementation.',
+          '- Choose the semantically best fit for the current request. Source, list order, and preset-versus-component origin do not imply priority.',
+          '- When a registered component clearly fits the intended effect and its purpose matches the target object, you may reference it via custom_render. Never invent component ids.',
         ]
       : []),
     '- Avoid unnecessary generated video jobs, but do not hide user images just to keep the plan short.',

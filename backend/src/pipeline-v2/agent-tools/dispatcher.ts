@@ -8,6 +8,7 @@ import type { DirectorWorkspaceState } from '../../../../shared/types/director-w
 import type { RemotionTimelineSpecV1 } from '../../../../shared/types/remotion-timeline-spec.v1.js'
 import { analyzeV2Sample } from '../sample-understanding-service.js'
 import { previewV2RemotionTimeline } from '../remotion-timeline-service.js'
+import { buildV2TimelinePlanningReview } from '../remotion-timeline-review.js'
 import { executeV2TimelineDraftRun } from '../timeline-draft-runner.js'
 import { buildV2TimelineRevisionContext } from '../timeline-revision-context.js'
 import { buildDirectorTimelineFacts, evaluateV2TimelineRevisionCommit } from '../timeline-revision-outcome-review.js'
@@ -20,7 +21,7 @@ import {
 } from '../../modules/render-components/component-registry.js'
 import {
   authorRenderComponent,
-  ensureTimelineRenderComponentVisualEvidence,
+  settleTimelineRenderComponentVisualEvidence,
 } from '../../modules/render-components/component-authoring-agent.js'
 import {
   createV2TimelineDraftRepository,
@@ -458,20 +459,8 @@ export async function dispatchV2AgentTool(input: {
           : undefined,
       },
     )
-    const spec = preview.spec
-    try {
-      await ensureTimelineRenderComponentVisualEvidence(spec)
-    } catch (error) {
-      return {
-        callId: request.callId,
-        toolId: request.toolId,
-        ok: false,
-        gate: 'component_visual_validation',
-        summary: `自定义组件未通过当前画幅验收：${error instanceof Error ? error.message : String(error)}`,
-        recovery: '保留当前草稿；可改用其他已注册组件，或重新创作适配当前画幅的组件。',
-        plannerInvoked: true,
-      }
-    }
+    const settled = await settleTimelineRenderComponentVisualEvidence(preview.spec)
+    const spec = settled.spec
     if (request.toolId === 'timeline.patch' && existing) {
       const scope = patchScope as V2TimelineRevisionScope
       const commit = evaluateV2TimelineRevisionCommit({
@@ -497,11 +486,14 @@ export async function dispatchV2AgentTool(input: {
     }
     const validation = validateRemotionTimelineSpec(spec)
     if (!validation.ok) return { callId: request.callId, toolId: request.toolId, ok: false, gate: 'spec_validation', summary: 'V2 时间线未通过结构校验。', output: { validation }, recovery: checked.tool.recovery, plannerInvoked: true }
+    const review = settled.degradations.length > 0
+      ? buildV2TimelinePlanningReview({ spec, validation })
+      : preview.review
     let draft: Awaited<ReturnType<typeof drafts.createDraft>>
     try {
       draft = existing && input.workspace.draftId && input.workspace.baseRevision
-        ? await drafts.saveDraft({ draftId: input.workspace.draftId, userId: input.userId, baseRevision: input.workspace.baseRevision, spec, kind: 'preview', plannerInput: plan, plannerSource: preview.plannerSource, review: preview.review, traceDir: preview.traceDir, authorizedDraftComponentIds: input.authorizedDraftComponentIds })
-        : await drafts.createDraft({ userId: input.userId, plannerInput: plan, spec, plannerSource: preview.plannerSource, review: preview.review, traceDir: preview.traceDir, authorizedDraftComponentIds: input.authorizedDraftComponentIds })
+        ? await drafts.saveDraft({ draftId: input.workspace.draftId, userId: input.userId, baseRevision: input.workspace.baseRevision, spec, kind: 'preview', plannerInput: plan, plannerSource: preview.plannerSource, review, traceDir: preview.traceDir, authorizedDraftComponentIds: input.authorizedDraftComponentIds })
+        : await drafts.createDraft({ userId: input.userId, plannerInput: plan, spec, plannerSource: preview.plannerSource, review, traceDir: preview.traceDir, authorizedDraftComponentIds: input.authorizedDraftComponentIds })
     } catch (error) {
       if (!(error instanceof V2TimelineComponentReferenceError)) throw error
       return {
@@ -514,7 +506,10 @@ export async function dispatchV2AgentTool(input: {
         plannerInvoked: true,
       }
     }
-    return { callId: request.callId, toolId: request.toolId, ok: true, summary: request.toolId === 'timeline.patch' ? 'V2 时间线修订已保存为新的草稿版本。' : 'V2 时间线方案已保存为可编辑草稿。', draft: { id: draft.id, revision: draft.revision, spec: draft.spec, traceDir: preview.traceDir }, output: { timelineFacts: buildDirectorTimelineFacts(draft.revision, draft.spec), validation }, plannerInvoked: true }
+    const degradationSummary = settled.degradations.length > 0
+      ? `；以下可选效果未通过视觉验收，已保留对应对象的基础呈现：${settled.degradations.map((item) => `${item.displayName}（${item.targetIds.join('、')}）`).join('；')}`
+      : ''
+    return { callId: request.callId, toolId: request.toolId, ok: true, summary: `${request.toolId === 'timeline.patch' ? 'V2 时间线修订已保存为新的草稿版本。' : 'V2 时间线方案已保存为可编辑草稿。'}${degradationSummary}`, draft: { id: draft.id, revision: draft.revision, spec: draft.spec, traceDir: preview.traceDir }, output: { timelineFacts: buildDirectorTimelineFacts(draft.revision, draft.spec), validation, componentDegradations: settled.degradations }, plannerInvoked: true }
   }
   if (request.toolId === 'timeline.render') {
     if (!existing) return { callId: request.callId, toolId: request.toolId, ok: false, summary: '正式渲染需要当前 V2 草稿版本。', recovery: checked.tool.recovery }
