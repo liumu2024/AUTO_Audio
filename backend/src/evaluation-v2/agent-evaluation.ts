@@ -641,7 +641,7 @@ async function checkPlannerRequirements(
   }
   for (const fact of expectedMemories) {
     if (recalled.some((statement) => includesFactSemantic(statement, fact))) passed += 1
-    else failures.push(`Planner 输入缺少召回的长期创作知识：${fact}`)
+    else failures.push(`Planner 输入缺少召回的用户创作偏好：${fact}`)
   }
   return { checks, passed, failures }
 }
@@ -1249,7 +1249,7 @@ function reportMarkdown(report: EvaluationReport) {
     `- 对话事实召回率：${percent(summary.conversationRecallRate)}`,
     `- Judge 回复质量通过率：${percent(summary.judgeReplyQualityRate)}（${summary.judgedTurns} 轮）`,
     '',
-    '## 长期创作知识层',
+    '## 用户创作偏好层',
     '',
     `- 写入精确率 / 召回率：${percent(summary.memoryWritePrecision)} / ${percent(summary.memoryWriteRecall)}`,
     `- 作用域准确率：${percent(summary.memoryScopeAccuracyRate)}`,
@@ -1630,20 +1630,20 @@ export async function runV2AgentEvaluation(input: {
         if (timelineValid === false) failures.push('生成的时间线结构无效或缺失')
         failures.push(...timelineRequirements.failures)
         failures.push(...plannerRequirements.failures)
-        if (!memoryEvaluation.expectationPassed) failures.push('长期创作知识写入动作与预期不一致')
+        if (!memoryEvaluation.expectationPassed) failures.push('用户创作偏好写入动作与预期不一致')
         if (memoryEvaluation.scopePassed !== memoryEvaluation.scopeChecks) {
-          failures.push('长期创作知识的作用域与预期不一致')
+          failures.push('用户创作偏好的作用域与预期不一致')
         }
         if (memoryEvaluation.retrievalPassed !== memoryEvaluation.retrievalChecks) {
-          failures.push('长期创作知识 Top-K 召回与标注不一致')
+          failures.push('用户创作偏好 Top-K 召回与标注不一致')
         }
         if (memoryEvaluation.applicationPassed !== memoryEvaluation.applicationChecks) {
-          failures.push('回复没有正确采用召回的长期创作知识')
+          failures.push('回复没有正确采用召回的用户创作偏好')
         }
-        if (!memoryEvaluation.nonInterferencePassed) failures.push('不应沉淀的轮次写入了长期创作知识')
-        if (memoryEvaluation.crossScopeMemoryLeak) failures.push('检测到跨草稿长期创作知识泄漏')
-        if (memoryEvaluation.memoryBlockedTurn) failures.push('长期创作知识失败导致整轮没有回复')
-        if (memoryEvaluation.falseMemoryPersistenceClaim) failures.push('长期创作知识保存失败后仍宣称已保存')
+        if (!memoryEvaluation.nonInterferencePassed) failures.push('不应沉淀的轮次写入了用户创作偏好')
+        if (memoryEvaluation.crossScopeMemoryLeak) failures.push('检测到跨草稿用户创作偏好泄漏')
+        if (memoryEvaluation.memoryBlockedTurn) failures.push('用户创作偏好保存失败导致整轮没有回复')
+        if (memoryEvaluation.falseMemoryPersistenceClaim) failures.push('用户创作偏好保存失败后仍宣称已保存')
         if (
           testTurn.expected.dryRender
           && !toolResults.some((result) => result.ok && result.toolId === 'timeline.render')

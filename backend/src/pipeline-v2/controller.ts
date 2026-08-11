@@ -2,7 +2,14 @@ import type { Request, Response } from 'express'
 
 import { analyzeV2Sample } from './sample-understanding-service.js'
 import { previewV2RemotionTimeline } from './remotion-timeline-service.js'
+import { V2_TIMELINE_PLANNER_PROTOCOL_VERSION } from './remotion-timeline-llm-planner.js'
 import type { V2PlannerInput, V2PlannerMaterialInput } from './v2-input.js'
+import { RENDER_COMPONENT_VISUAL_POLICY_VERSION } from '../modules/render-components/component-registry.js'
+import {
+  executeV2JsonIdempotentOperation,
+  V2IdempotencyConflictError,
+  v2IdempotencyRequestHash,
+} from './idempotency-repository.js'
 
 function stringValue(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback
@@ -119,6 +126,7 @@ export async function postV2SampleAnalyze(req: Request, res: Response): Promise<
   }
 
   const result = await analyzeV2Sample({
+    userId: Number(req.headers['x-user-id'] ?? 1) || 1,
     taskId,
     prompt: stringValue(req.body?.prompt, 'V2 Sample Understanding'),
     sampleVideoPath,
@@ -129,8 +137,46 @@ export async function postV2SampleAnalyze(req: Request, res: Response): Promise<
 }
 
 export async function postV2TimelinePreview(req: Request, res: Response): Promise<void> {
-  const taskId = stringValue(req.body?.taskId, `v2_timeline_preview_${Date.now()}`)
-  const result = await previewV2RemotionTimeline(v2PlannerInputFromRequest(req, taskId))
-
-  res.json(result)
+  const idempotencyKey = String(req.headers['idempotency-key'] ?? '').trim()
+  if (!idempotencyKey || idempotencyKey.length > 200) {
+    res.status(400).json({ error: 'A valid Idempotency-Key header is required.' })
+    return
+  }
+  const userId = Number(req.headers['x-user-id'] ?? 1) || 1
+  const taskId = stringValue(
+    req.body?.taskId,
+    `v2_timeline_preview_${v2IdempotencyRequestHash({ userId, idempotencyKey }).slice(0, 16)}`,
+  )
+  try {
+    const outcome = await executeV2JsonIdempotentOperation({
+      reservation: {
+        userId,
+        operation: 'timeline.preview',
+        idempotencyKey,
+        resourceKey: 'ephemeral-preview',
+        requestHash: v2IdempotencyRequestHash({
+          userId,
+          body: req.body,
+          plannerProtocol: V2_TIMELINE_PLANNER_PROTOCOL_VERSION,
+          componentVisualPolicy: RENDER_COMPONENT_VISUAL_POLICY_VERSION,
+        }),
+      },
+      execute: () => previewV2RemotionTimeline(v2PlannerInputFromRequest(req, taskId)),
+    })
+    if (outcome.kind === 'running') {
+      res.status(202).json({ status: 'running' })
+      return
+    }
+    if (outcome.kind === 'failed' || !outcome.value) {
+      res.status(422).json({ error: outcome.receipt.failure?.message ?? 'Timeline preview failed.' })
+      return
+    }
+    res.json(outcome.value)
+  } catch (error) {
+    if (error instanceof V2IdempotencyConflictError) {
+      res.status(409).json({ error: error.message })
+      return
+    }
+    throw error
+  }
 }

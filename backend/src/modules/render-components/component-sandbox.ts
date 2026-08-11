@@ -1,5 +1,7 @@
 import ts from 'typescript'
 
+export const RENDER_COMPONENT_SANDBOX_POLICY_VERSION = 'render_component_sandbox.v1'
+
 /**
  * Static audit for model-authored render components. The component ultimately
  * runs inside the Remotion browser bundle, so the audit is the sandbox boundary:

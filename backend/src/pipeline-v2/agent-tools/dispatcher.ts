@@ -17,13 +17,17 @@ import type { V2TimelineRevisionScope } from '../timeline-revision-scope.js'
 import {
   listPromotedComponents,
   readRenderComponent,
+  RENDER_COMPONENT_VISUAL_POLICY_VERSION,
   timelineRenderComponentReferences,
   type RenderComponentSummary,
 } from '../../modules/render-components/component-registry.js'
 import {
   authorRenderComponent,
+  RENDER_COMPONENT_AUTHORING_POLICY_VERSION,
+  RENDER_COMPONENT_RUNTIME_VERSION,
   settleTimelineRenderComponentVisualEvidence,
 } from '../../modules/render-components/component-authoring-agent.js'
+import { RENDER_COMPONENT_SANDBOX_POLICY_VERSION } from '../../modules/render-components/component-sandbox.js'
 import {
   createV2TimelineDraftRepository,
   V2TimelineComponentReferenceError,
@@ -37,6 +41,12 @@ import {
   type V2AgentToolMode,
 } from './registry.js'
 import type { V2AgentExecutionStage } from '../agent-skills/registry.js'
+import {
+  executeV2JsonIdempotentOperation,
+  V2IdempotencyConflictError,
+  v2IdempotencyRequestHash,
+} from '../idempotency-repository.js'
+import { V2_TIMELINE_PLANNER_PROTOCOL_VERSION } from '../remotion-timeline-llm-planner.js'
 
 export interface V2AgentToolProposal {
   /** Model-local action reference. It is never used as an execution identity. */
@@ -83,6 +93,24 @@ export interface V2AgentToolAuthorizationGrant {
   evidence: string
 }
 
+export interface V2AgentToolDispatchInput {
+  stage: V2AgentExecutionStage
+  prompt: string
+  /** The tool request's own instruction, used as the revision review boundary
+   * for scoped edits. Falls back to the full conversation prompt when absent. */
+  requestInstruction?: string
+  userId: number
+  context: DirectorContext
+  runtime: DirectorConversationRuntime
+  workspace: DirectorWorkspaceState
+  authorization?: V2AgentToolAuthorizationGrant
+  traceSessionId?: string
+  recalledCreativeMemories?: string[]
+  recalledCreativeKnowledge?: string[]
+  authorizedDraftComponentIds?: string[]
+  onProgress?: (event: V2AgentToolProgress) => void | Promise<void>
+}
+
 const drafts = createV2TimelineDraftRepository()
 
 function creationMode(context: DirectorContext): V2PlannerInput['creationMode'] {
@@ -106,6 +134,7 @@ function plannerInput(input: {
   authorization?: V2AgentToolAuthorizationGrant
   stage: V2AgentExecutionStage
   recalledCreativeMemories?: string[]
+  recalledCreativeKnowledge?: string[]
   availableComponents?: RenderComponentSummary[]
 }): V2PlannerInput {
   return {
@@ -130,6 +159,7 @@ function plannerInput(input: {
         .filter((item) => item.status === 'active')
         .map((item) => item.statement),
       recalledCreativeMemories: input.recalledCreativeMemories ?? [],
+      recalledCreativeKnowledge: input.recalledCreativeKnowledge ?? [],
       draftId: input.workspace.draftId,
       baseRevision: input.workspace.baseRevision,
       authorizationEvidence: input.authorization?.evidence,
@@ -156,22 +186,7 @@ function plannerInput(input: {
   }
 }
 
-export async function dispatchV2AgentTool(input: {
-  stage: V2AgentExecutionStage
-  prompt: string
-  /** The tool request's own instruction, used as the revision review boundary
-   * for scoped edits. Falls back to the full conversation prompt when absent. */
-  requestInstruction?: string
-  userId: number
-  context: DirectorContext
-  runtime: DirectorConversationRuntime
-  workspace: DirectorWorkspaceState
-  authorization?: V2AgentToolAuthorizationGrant
-  traceSessionId?: string
-  recalledCreativeMemories?: string[]
-  authorizedDraftComponentIds?: string[]
-  onProgress?: (event: V2AgentToolProgress) => void | Promise<void>
-}): Promise<V2AgentToolResult> {
+async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise<V2AgentToolResult> {
   const request = input.stage.toolRequest
   if (input.stage.primarySkill.id !== request.skillId) {
     return { callId: request.callId, toolId: request.toolId, ok: false, summary: 'Tool 与本轮主 Skill 不一致。', recovery: '重新生成一致的 Skill/Tool 提案。' }
@@ -284,8 +299,10 @@ export async function dispatchV2AgentTool(input: {
       authorization: input.authorization,
       stage: input.stage,
       recalledCreativeMemories: input.recalledCreativeMemories,
+      recalledCreativeKnowledge: input.recalledCreativeKnowledge,
     })
     const result = await analyzeV2Sample({
+      userId: input.userId,
       taskId: `v2_sample_tool_${Date.now()}_${randomUUID().slice(0, 8)}`,
       prompt: input.prompt,
       sampleVideoPath: sample.url,
@@ -415,6 +432,7 @@ export async function dispatchV2AgentTool(input: {
       authorization: input.authorization,
       stage: input.stage,
       recalledCreativeMemories: input.recalledCreativeMemories,
+      recalledCreativeKnowledge: input.recalledCreativeKnowledge,
       availableComponents,
     })
     if (existing && input.workspace.draftId && input.workspace.baseRevision) {
@@ -560,6 +578,102 @@ export async function dispatchV2AgentTool(input: {
     }
   }
   return { callId: request.callId, toolId: request.toolId, ok: false, summary: '当前 V2 Tool 尚无执行器。', recovery: checked.tool.recovery }
+}
+
+const IDEMPOTENT_TOOL_OPERATIONS: Partial<Record<string, string>> = {
+  'timeline.plan': 'timeline.plan',
+  'timeline.patch': 'timeline.save',
+  'render.author': 'render.author',
+}
+
+export async function dispatchV2AgentTool(
+  input: V2AgentToolDispatchInput,
+): Promise<V2AgentToolResult> {
+  const request = input.stage.toolRequest
+  const operation = IDEMPOTENT_TOOL_OPERATIONS[request.toolId]
+  if (!operation) return dispatchV2AgentToolOnce(input)
+
+  try {
+    const outcome = await executeV2JsonIdempotentOperation({
+      reservation: {
+        userId: input.userId,
+        draftId: input.workspace.draftId,
+        operation,
+        idempotencyKey: request.callId,
+        resourceKey: `${input.traceSessionId ?? 'director'}:${input.workspace.draftId ?? 'new'}:${input.workspace.baseRevision ?? 0}`,
+        requestHash: v2IdempotencyRequestHash({
+          request,
+          prompt: input.prompt,
+          requestInstruction: input.requestInstruction,
+          context: input.context,
+          runtime: input.runtime,
+          workspace: {
+            draftId: input.workspace.draftId,
+            baseRevision: input.workspace.baseRevision,
+            selectedItemId: input.workspace.selectedItemId,
+            confirmedRequirements: input.workspace.confirmedRequirements,
+          },
+          authorization: input.authorization,
+          skill: {
+            id: input.stage.primarySkill.id,
+            version: input.stage.primarySkill.version,
+            hash: input.stage.primarySkill.hash,
+            referenceHashes: input.stage.references.map((item) => item.hash),
+          },
+          recalledCreativeMemories: input.recalledCreativeMemories,
+          recalledCreativeKnowledge: input.recalledCreativeKnowledge,
+          authorizedDraftComponentIds: input.authorizedDraftComponentIds,
+          componentAuthoring: request.toolId === 'render.author'
+            ? {
+                model: env.directorAgentModel,
+                runtime: RENDER_COMPONENT_RUNTIME_VERSION,
+                authoringPolicy: RENDER_COMPONENT_AUTHORING_POLICY_VERSION,
+                sandboxPolicy: RENDER_COMPONENT_SANDBOX_POLICY_VERSION,
+                visualPolicy: RENDER_COMPONENT_VISUAL_POLICY_VERSION,
+              }
+            : undefined,
+          timelinePlanning: request.toolId === 'timeline.plan' || request.toolId === 'timeline.patch'
+            ? {
+                plannerProtocol: V2_TIMELINE_PLANNER_PROTOCOL_VERSION,
+                componentVisualPolicy: RENDER_COMPONENT_VISUAL_POLICY_VERSION,
+              }
+            : undefined,
+        }),
+      },
+      execute: () => dispatchV2AgentToolOnce(input),
+      failureFromResult: (result) => result.ok
+        ? undefined
+        : { code: 'request_rejected', message: result.summary },
+    })
+    if (outcome.kind === 'running') {
+      return {
+        callId: request.callId,
+        toolId: request.toolId,
+        ok: false,
+        gate: 'idempotency_running',
+        summary: '相同工具请求仍在执行，未重复调用。',
+        recovery: '等待首次调用完成后重试同一请求。',
+      }
+    }
+    if (outcome.value) return outcome.value
+    return {
+      callId: request.callId,
+      toolId: request.toolId,
+      ok: false,
+      gate: 'idempotency_failed',
+      summary: outcome.receipt.failure?.message ?? '首次工具请求失败。',
+    }
+  } catch (error) {
+    if (!(error instanceof V2IdempotencyConflictError)) throw error
+    return {
+      callId: request.callId,
+      toolId: request.toolId,
+      ok: false,
+      gate: 'idempotency_conflict',
+      summary: error.message,
+      recovery: '为新的工具意图生成新的服务端 callId。',
+    }
+  }
 }
 
 export function toolResultTimelineFacts(result: V2AgentToolResult): DirectorTimelineFacts | undefined {

@@ -7,7 +7,6 @@ import { env } from './config/env.js'
 import {
   getDirectorWorkspace,
   postDirectorAgentChat,
-  postDirectorWorkspaceOutcome,
 } from './modules/director-agent/director-agent.controller.js'
 import { postUpload } from './modules/upload/upload.controller.js'
 import { uploadMiddleware } from './modules/upload/upload.middleware.js'
@@ -20,6 +19,12 @@ import {
   removeCreativeMemory,
   searchCreativeMemories,
 } from './modules/creative-memory/creative-memory.controller.js'
+import {
+  getCreativeKnowledge,
+  patchCreativeKnowledge,
+  removeCreativeKnowledge,
+  searchCreativeKnowledge,
+} from './modules/creative-knowledge/creative-knowledge.controller.js'
 import {
   postV2SampleAnalyze,
   postV2TimelinePreview,
@@ -53,12 +58,15 @@ app.post(
 
 app.post('/api/director/chat', postDirectorAgentChat)
 app.get('/api/director/workspaces/:workspaceSessionId', getDirectorWorkspace)
-app.post('/api/director/workspaces/:workspaceSessionId/outcomes', postDirectorWorkspaceOutcome)
 app.get('/api/creative-memories', getCreativeMemories)
 app.get('/api/creative-memories/search', searchCreativeMemories)
 app.post('/api/creative-memories', postCreativeMemory)
 app.patch('/api/creative-memories/:memoryId', patchCreativeMemory)
 app.delete('/api/creative-memories/:memoryId', removeCreativeMemory)
+app.get('/api/creative-knowledge', getCreativeKnowledge)
+app.get('/api/creative-knowledge/search', searchCreativeKnowledge)
+app.patch('/api/creative-knowledge/:knowledgeId', patchCreativeKnowledge)
+app.delete('/api/creative-knowledge/:knowledgeId', removeCreativeKnowledge)
 app.use('/v2-renders', express.static(path.resolve(process.cwd(), 'v2-renders')))
 app.post('/api/v2/sample/analyze', postV2SampleAnalyze)
 app.post('/api/v2/timeline-drafts/preview', postV2TimelineDraftPreview)

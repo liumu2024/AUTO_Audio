@@ -237,12 +237,14 @@ export function DirectorChatPanel() {
   const dragDepthRef = useRef(0)
   const abortRef = useRef<AbortController | null>(null)
   const streamCancelRef = useRef(false)
+  const workspaceRevisionsRef = useRef(new Map<string, number>())
   useEffect(() => {
     const workspaceSessionId = browserWorkspaceSessionId()
     void getDirectorWorkspaceSession(workspaceSessionId)
       .then(async (session) => {
         if (!session) return
         if (browserWorkspaceSessionId() !== workspaceSessionId) return
+        workspaceRevisionsRef.current.set(workspaceSessionId, session.state.stateRevision)
         applyDirectorWorkspaceContext(session.state.context)
         await restoreWorkspaceDraft({
           workspace: session.state,
@@ -408,6 +410,8 @@ export function DirectorChatPanel() {
     let directMessage: string | null = null
     const debugThoughts: string[] = []
     const requestWorkspaceSessionId = browserWorkspaceSessionId()
+    const turnRequestId = crypto.randomUUID()
+    const workspaceStateRevision = workspaceRevisionsRef.current.get(requestWorkspaceSessionId) ?? 0
 
     try {
       await streamDirectorChat(
@@ -422,7 +426,8 @@ export function DirectorChatPanel() {
             : {}),
           contextMaterialsAuthoritative,
           contextSampleAuthoritative,
-          turnRequestId: crypto.randomUUID(),
+          turnRequestId,
+          workspaceStateRevision,
           workspaceSessionId: requestWorkspaceSessionId,
           context: directorContext,
           runtime: {
@@ -511,6 +516,10 @@ export function DirectorChatPanel() {
             useDirectorContextStore.getState().setDirectorState(event.state)
           }
           if (event.type === 'workspace_session') {
+            if (event.turnRequestId !== turnRequestId) return
+            const currentRevision = workspaceRevisionsRef.current.get(event.workspaceSessionId) ?? 0
+            if (event.stateRevision < currentRevision) return
+            workspaceRevisionsRef.current.set(event.workspaceSessionId, event.stateRevision)
             rememberActiveDirectorWorkspaceSessionId(
               window.sessionStorage,
               event.workspaceSessionId,

@@ -31,6 +31,8 @@ import {
   setRenderComponentDisplayName,
   timelineRenderComponentReferences,
 } from './component-registry.js'
+export const RENDER_COMPONENT_RUNTIME_VERSION = 'React 19.2.6; Remotion 4.0.469'
+export const RENDER_COMPONENT_AUTHORING_POLICY_VERSION = 'render_component_authoring.v1'
 
 const GeneratedComponentSchema = z.object({
   source: z.string().min(1).max(40_000),
@@ -143,7 +145,7 @@ export function buildRenderComponentCodingPrompt(input: RenderComponentAuthoring
 }): string {
   return [
     'You are the coding Agent for one sandboxed React/Remotion component. Return JSON only: {"source": string, "effectSummary": string}.',
-    'Installed runtime: React 19.2.6; Remotion 4.0.469.',
+    `Installed runtime: ${RENDER_COMPONENT_RUNTIME_VERSION}.`,
     `Canvas: ${input.canvas.width}x${input.canvas.height}, ${input.canvas.fps}fps, current task duration ${input.canvas.durationSec}s.`,
     `Purpose: ${input.purpose}.`,
     `Registered display name: ${input.displayName}`,

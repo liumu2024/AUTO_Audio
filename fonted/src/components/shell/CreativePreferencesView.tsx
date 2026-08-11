@@ -19,6 +19,7 @@ import {
   type CreativeMemorySearchResult,
 } from '@/lib/api'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
+import { CreativeKnowledgePanel } from './CreativeKnowledgePanel'
 
 type ScopeFilter = 'all' | CreativeMemoryDto['scopeType']
 type StatusFilter = 'all' | CreativeMemoryDto['status']
@@ -222,6 +223,7 @@ export function CreativePreferencesView() {
             <p className="rounded-xl border border-dashed border-zinc-800 p-8 text-center text-sm text-zinc-500">当前筛选下还没有创作偏好。</p>
           )}
         </div>
+        <CreativeKnowledgePanel />
       </div>
       <Dialog
         open={editing !== null}

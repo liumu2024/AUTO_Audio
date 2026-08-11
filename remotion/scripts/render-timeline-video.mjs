@@ -19,6 +19,11 @@ const compositionId = argValue('--composition-id') ?? 'V2TimelineVideo'
 const browserExecutable = argValue('--browser-executable')
 const customComponentsRegistry = argValue('--custom-components-registry')
 const keepBundle = process.argv.includes('--keep-bundle')
+const frameStart = Number(argValue('--frame-start'))
+const frameEnd = Number(argValue('--frame-end'))
+const frameRange = Number.isInteger(frameStart) && Number.isInteger(frameEnd)
+  ? [frameStart, frameEnd]
+  : undefined
 
 if (!propsPath || !outputPath) {
   console.error(
@@ -82,6 +87,7 @@ await renderMedia({
   pixelFormat: 'yuv420p',
   browserExecutable,
   logLevel: 'warn',
+  frameRange,
   onStart: (data) => {
     console.log(`[v2-timeline-render] frames=${data.frameCount}`)
   },

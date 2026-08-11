@@ -110,7 +110,14 @@ export function hydrateDirectorWorkspaceState(state: DirectorWorkspaceState): Di
     existing.filter((item) => item.status === 'active').map((item) => normalizedStatement(item.statement)),
   )
   const imported = importedRequirements(legacyConstraints.filter((item) => !activeStatements.has(item)))
-  return { ...clone(state), context, confirmedRequirements: [...existing, ...imported] }
+  return {
+    ...clone(state),
+    stateRevision: Number.isInteger(state.stateRevision) && state.stateRevision >= 0
+      ? state.stateRevision
+      : 0,
+    context,
+    confirmedRequirements: [...existing, ...imported],
+  }
 }
 
 /**
@@ -143,6 +150,7 @@ export function createDirectorWorkspaceState(input: {
   const { context, legacyConstraints } = normalizedContext(input.context)
   const currentTimeline = context.currentTimeline
   return {
+    stateRevision: 0,
     context,
     confirmedRequirements: importedRequirements(legacyConstraints),
     draftId: input.draftId ?? currentTimeline?.draftId,

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
@@ -18,6 +19,12 @@ const server = spawn(process.execPath, [tsxCli, 'src/app.ts'], {
   },
   stdio: 'ignore',
 })
+
+assert.doesNotMatch(
+  readFileSync(resolve(backendRoot, 'src/app.ts'), 'utf8'),
+  /director\/workspaces\/:workspaceSessionId\/outcomes/,
+  'workspace mutations must only pass through the serialized Director turn boundary',
+)
 
 async function waitForHealthyServer(): Promise<void> {
   const deadline = Date.now() + 10_000

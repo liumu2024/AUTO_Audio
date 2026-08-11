@@ -18,6 +18,11 @@ export type DirectorSurfaceMode =
 
 export type DirectorAgentStreamEvent =
   | {
+      type: 'turn_receipt'
+      turnRequestId: string
+      status: 'running' | 'replayed' | 'failed'
+    }
+  | {
       type: 'surface'
       mode: DirectorSurfaceMode
       confidence: number
@@ -84,6 +89,8 @@ export type DirectorAgentStreamEvent =
   | {
       type: 'workspace_session'
       workspaceSessionId: string
+      turnRequestId: string
+      stateRevision: number
       state: DirectorWorkspaceState
       traceDir: string
       modelCalled: boolean

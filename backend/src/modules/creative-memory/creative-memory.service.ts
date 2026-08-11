@@ -1,6 +1,16 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import { prisma } from '../../shared/prisma.service.js'
+import {
+  createV2IdempotencyRepository,
+  executeV2JsonIdempotentOperation,
+  v2IdempotencyRequestHash,
+} from '../../pipeline-v2/idempotency-repository.js'
+import {
+  longestSharedCreativeHanPhrase,
+  normalizeCreativeText,
+  rankCreativeTextRows,
+} from './creative-text-retrieval.js'
 
 export type CreativeMemoryScope = 'user' | 'draft'
 export type CreativeMemoryStatus = 'active' | 'candidate' | 'revoked'
@@ -70,6 +80,8 @@ type DbMemory = {
   userId: number
   scopeType: string
   draftId: string | null
+  scopeKey: string
+  semanticKey: string
   statement: string
   status: string
   origin: string
@@ -92,38 +104,19 @@ type CreativeMemoryDelegate = {
 const memories = () => (prisma as unknown as { creativeMemory: CreativeMemoryDelegate }).creativeMemory
 
 function normalizedText(value: string): string {
-  return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim()
+  return normalizeCreativeText(value)
 }
 
-function tokens(value: string): string[] {
-  const normalized = normalizedText(value)
-  const ascii = normalized.match(/[a-z0-9]+/g) ?? []
-  const hanRuns = normalized.match(/[\p{Script=Han}]+/gu) ?? []
-  const han = hanRuns.flatMap((run) => {
-    const chars = [...run]
-    if (chars.length < 2) return chars
-    return chars.slice(0, -1).map((char, index) => `${char}${chars[index + 1]}`)
-  })
-  return [...ascii, ...han]
+function memoryScopeKey(scopeType: CreativeMemoryScope, draftId?: string): string {
+  return scopeType === 'draft' ? `draft:${draftId}` : 'user'
+}
+
+function memorySemanticKey(statement: string): string {
+  return createHash('md5').update(normalizedText(statement)).digest('hex')
 }
 
 export function longestSharedHanPhrase(left: string, right: string) {
-  const runs = normalizedText(left).match(/[\p{Script=Han}]+/gu) ?? []
-  let best = ''
-  for (const run of runs) {
-    const chars = [...run]
-    for (let length = Math.min(chars.length, 12); length >= 4; length -= 1) {
-      if (length <= [...best].length) break
-      for (let index = 0; index + length <= chars.length; index += 1) {
-        const phrase = chars.slice(index, index + length).join('')
-        if (normalizedText(right).includes(phrase)) {
-          best = phrase
-          break
-        }
-      }
-    }
-  }
-  return best
+  return longestSharedCreativeHanPhrase(left, right)
 }
 
 function record(row: DbMemory): CreativeMemoryRecord {
@@ -224,36 +217,58 @@ export async function createCreativeMemory(input: {
 }): Promise<CreativeMemoryRecord> {
   const statement = assertStatement(input.statement)
   await assertScope(input.userId, input.scopeType, input.draftId)
-  const existing = (await memories().findMany({ where: { userId: input.userId }, take: 500 }))
-    .find((item) => item.scopeType === input.scopeType
-      && item.draftId === (input.draftId ?? null)
-      && item.status !== 'revoked'
-      && normalizedText(item.statement) === normalizedText(statement))
-  if (existing) {
-    if (existing.status === 'candidate' && input.status === 'active') {
-      await memories().updateMany({
-        where: { id: existing.id, userId: input.userId },
-        data: { status: 'active', revokedAt: null },
+  const scopeKey = memoryScopeKey(input.scopeType, input.draftId)
+  const semanticKey = memorySemanticKey(statement)
+  const reuseExisting = async (existing: DbMemory) => {
+    let current = existing
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const needsPromotion = current.status === 'revoked'
+        || (current.status === 'candidate' && input.status === 'active')
+      if (!needsPromotion) return record(current)
+      const update = await memories().updateMany({
+        where: { id: current.id, userId: input.userId, status: current.status },
+        data: {
+          statement,
+          status: input.status,
+          origin: input.origin,
+          sourceWorkspaceSessionId: input.sourceWorkspaceSessionId?.trim() || null,
+          sourceTurnIdsJson: (input.sourceTurnIds ?? []).slice(0, 20),
+          sourceExcerpt: input.sourceExcerpt?.trim().slice(0, 1_000) || null,
+          revokedAt: null,
+        },
       })
-      return record({ ...existing, status: 'active', revokedAt: null })
+      const updated = await memories().findFirst({ where: { id: current.id, userId: input.userId } })
+      if (!updated) throw new Error('Creative memory disappeared after reuse.')
+      if (update.count === 1 && updated.status === input.status) return record(updated)
+      current = updated
     }
-    return record(existing)
+    throw new Error('Creative memory changed concurrently while being reused.')
   }
+  const existing = await memories().findFirst({ where: { userId: input.userId, scopeKey, semanticKey } })
+  if (existing) return reuseExisting(existing)
 
-  return record(await memories().create({
-    data: {
-      id: `mem_${randomUUID()}`,
-      userId: input.userId,
-      scopeType: input.scopeType,
-      draftId: input.draftId ?? null,
-      statement,
-      status: input.status,
-      origin: input.origin,
-      sourceWorkspaceSessionId: input.sourceWorkspaceSessionId?.trim() || null,
-      sourceTurnIdsJson: (input.sourceTurnIds ?? []).slice(0, 20),
-      sourceExcerpt: input.sourceExcerpt?.trim().slice(0, 1_000) || null,
-    },
-  }))
+  try {
+    return record(await memories().create({
+      data: {
+        id: `mem_${randomUUID()}`,
+        userId: input.userId,
+        scopeType: input.scopeType,
+        draftId: input.draftId ?? null,
+        scopeKey,
+        semanticKey,
+        statement,
+        status: input.status,
+        origin: input.origin,
+        sourceWorkspaceSessionId: input.sourceWorkspaceSessionId?.trim() || null,
+        sourceTurnIdsJson: (input.sourceTurnIds ?? []).slice(0, 20),
+        sourceExcerpt: input.sourceExcerpt?.trim().slice(0, 1_000) || null,
+      },
+    }))
+  } catch (error) {
+    const concurrent = await memories().findFirst({ where: { userId: input.userId, scopeKey, semanticKey } })
+    if (concurrent) return reuseExisting(concurrent)
+    throw error
+  }
 }
 
 export async function listCreativeMemories(input: {
@@ -283,18 +298,33 @@ export async function updateCreativeMemory(input: {
   id: string
   statement?: string
   status?: CreativeMemoryStatus
+  expectedStatus?: CreativeMemoryStatus
 }): Promise<CreativeMemoryRecord> {
   const current = await memories().findFirst({ where: { id: input.id, userId: input.userId } })
   if (!current) throw new Error('Creative memory not found.')
   const data: Record<string, unknown> = {}
-  if (input.statement !== undefined) data.statement = assertStatement(input.statement)
+  if (input.statement !== undefined) {
+    const statement = assertStatement(input.statement)
+    data.statement = statement
+    data.semanticKey = memorySemanticKey(statement)
+  }
   if (input.status !== undefined) {
     data.status = input.status
     data.revokedAt = input.status === 'revoked' ? new Date() : null
   }
   if (!Object.keys(data).length) return record(current)
-  const changed = await memories().updateMany({ where: { id: input.id, userId: input.userId }, data })
-  if (changed.count !== 1) throw new Error('Creative memory update failed.')
+  const changed = await memories().updateMany({
+    where: {
+      id: input.id,
+      userId: input.userId,
+      ...(input.expectedStatus ? { status: input.expectedStatus } : {}),
+    },
+    data,
+  })
+  if (changed.count !== 1) {
+    if (input.expectedStatus) throw new Error('Creative memory changed concurrently; retry with the current record.')
+    throw new Error('Creative memory update failed.')
+  }
   const updated = await memories().findFirst({ where: { id: input.id, userId: input.userId } })
   if (!updated) throw new Error('Creative memory disappeared after update.')
   return record(updated)
@@ -305,77 +335,30 @@ export async function deleteCreativeMemory(input: { userId: number; id: string }
 }
 
 function rank(rows: DbMemory[], query: string, limit: number) {
-  const minimumScore = 1.5
-  const queryTokens = [...new Set(tokens(query))]
-  if (!queryTokens.length) return {
-    items: [] as RankedCreativeMemory[],
-    audit: rows.map((row) => ({
-      memoryId: row.id,
-      status: row.status as 'active' | 'candidate',
-      score: 0,
-      matchedTerms: [] as string[],
-      selected: false,
-      reason: 'below_threshold' as const,
-    })),
-  }
-  const documents = rows.map((row) => ({ row, terms: tokens(row.statement) }))
-  const averageLength = documents.reduce((sum, item) => sum + item.terms.length, 0) / Math.max(1, documents.length)
-  const queryText = normalizedText(query)
-  const scored = documents.map(({ row, terms }) => {
-    const frequencies = new Map<string, number>()
-    for (const term of terms) frequencies.set(term, (frequencies.get(term) ?? 0) + 1)
-    let score = 0
-    const matchedTerms: string[] = []
-    for (const term of queryTokens) {
-      const frequency = frequencies.get(term) ?? 0
-      if (!frequency) continue
-      matchedTerms.push(term)
-      const documentFrequency = documents.filter((item) => item.terms.includes(term)).length
-      const idf = Math.log(1 + (documents.length - documentFrequency + 0.5) / (documentFrequency + 0.5))
-      const denominator = frequency + 1.2 * (0.25 + 0.75 * terms.length / Math.max(1, averageLength))
-      score += idf * (frequency * 2.2) / denominator
-    }
-    const statementText = normalizedText(row.statement)
-    if (statementText.includes(queryText) || queryText.includes(statementText)) score += 3
-    const sharedPhrase = longestSharedHanPhrase(row.statement, query)
-    if (sharedPhrase) {
-      score += Math.min(3, [...sharedPhrase].length * 0.5)
-      matchedTerms.push(sharedPhrase)
-    }
-    return { row, score, matchedTerms }
+  const ranked = rankCreativeTextRows({
+    rows,
+    id: (row) => row.id,
+    text: (row) => row.statement,
+    updatedAt: (row) => row.updatedAt,
+    query,
+    limit,
   })
-  scored.sort((left, right) =>
-    right.score - left.score
-    || right.row.updatedAt.getTime() - left.row.updatedAt.getTime()
-    || left.row.id.localeCompare(right.row.id),
-  )
-  const eligible = scored.filter((item) => item.score >= minimumScore)
-  const items = eligible.slice(0, limit).map((item, index) => ({
-    memory: record(item.row),
-    score: Number(item.score.toFixed(6)),
-    matchedTerms: item.matchedTerms,
-    rank: index + 1,
-  }))
-  const selectedIds = new Set(items.map((item) => item.memory.id))
   return {
-    items,
-    audit: scored.map((item) => {
-      const eligibleRank = item.score >= minimumScore ? eligible.indexOf(item) + 1 : undefined
-      const selected = selectedIds.has(item.row.id)
-      return {
-        memoryId: item.row.id,
-        status: item.row.status as 'active' | 'candidate',
-        score: Number(item.score.toFixed(6)),
-        matchedTerms: item.matchedTerms,
-        ...(eligibleRank ? { rank: eligibleRank } : {}),
-        selected,
-        reason: selected
-          ? 'selected' as const
-          : item.score < minimumScore
-            ? 'below_threshold' as const
-            : 'top_k_cutoff' as const,
-      }
-    }),
+    items: ranked.items.map((item) => ({
+      memory: record(item.row),
+      score: item.score,
+      matchedTerms: item.matchedTerms,
+      rank: item.rank,
+    })),
+    audit: ranked.audit.map((item) => ({
+      memoryId: item.row.id,
+      status: item.row.status as 'active' | 'candidate',
+      score: item.score,
+      matchedTerms: item.matchedTerms,
+      ...('rank' in item && item.rank ? { rank: item.rank } : {}),
+      selected: item.selected,
+      reason: item.reason,
+    })),
   }
 }
 
@@ -444,82 +427,40 @@ export async function applyCreativeMemoryActions(input: {
   requirementStatements?: string[]
 }): Promise<CreativeMemoryActionReceipt[]> {
   const receipts: CreativeMemoryActionReceipt[] = []
+  const idempotency = createV2IdempotencyRepository()
   for (const action of input.actions) {
     try {
-      if (!action.sourceTurnIds.includes(input.currentTurnId)) {
-        throw new Error('Creative memory action must cite the current source turn.')
-      }
-      if (action.operation === 'add') {
-        const scopeType = action.scopeType ?? 'user'
-        const statement = assertStatement(action.statement)
-        const origin = action.origin ?? 'inferred'
-        const duplicateOfRequirement = (input.requirementStatements ?? []).some((requirement) =>
-          Boolean(longestSharedHanPhrase(statement, requirement)))
-        const status = await effectiveCreativeMemoryStatus({
+      const outcome = await executeV2JsonIdempotentOperation<CreativeMemoryActionReceipt>({
+        repository: idempotency,
+        reservation: {
           userId: input.userId,
-          scopeType,
-          draftId: scopeType === 'draft' ? input.currentDraftId : undefined,
-          statement,
-          origin,
-          requestedStatus: action.status ?? 'candidate',
-          currentWorkspaceSessionId: input.workspaceSessionId,
-          duplicateOfRequirement,
-        })
-        const memory = await createCreativeMemory({
-          userId: input.userId,
-          scopeType,
-          draftId: scopeType === 'draft' ? input.currentDraftId : undefined,
-          statement,
-          status,
-          origin,
-          sourceWorkspaceSessionId: input.workspaceSessionId,
-          sourceTurnIds: action.sourceTurnIds,
-          sourceExcerpt: action.sourceExcerpt,
-        })
-        receipts.push({
-          ref: action.ref,
-          operation: action.operation,
-          status: 'succeeded',
-          memoryId: memory.id,
-          reason: duplicateOfRequirement ? 'duplicate_of_requirement' : undefined,
-          effectiveStatus: status,
-        })
-        continue
-      }
-      if (!action.targetMemoryId) throw new Error('Creative memory targetMemoryId is required.')
-      const target = await memories().findFirst({ where: { id: action.targetMemoryId, userId: input.userId } })
-      if (!target || target.status === 'revoked') throw new Error('Creative memory target is missing or inactive.')
-      if (input.recalledMemoryIds && !input.recalledMemoryIds.has(target.id)) {
-        throw new Error('Creative memory target was not recalled in this turn.')
-      }
-      if (target.scopeType === 'draft' && target.draftId !== input.currentDraftId) {
-        throw new Error('Creative memory target belongs to another draft.')
-      }
-      if (action.operation === 'revoke') {
-        await updateCreativeMemory({ userId: input.userId, id: target.id, status: 'revoked' })
-        receipts.push({ ref: action.ref, operation: action.operation, status: 'succeeded', memoryId: target.id })
-        continue
-      }
-      const replacement = await createCreativeMemory({
-        userId: input.userId,
-        scopeType: target.scopeType as CreativeMemoryScope,
-        draftId: target.draftId ?? undefined,
-        statement: assertStatement(action.statement),
-        status: action.status ?? (target.status as 'active' | 'candidate'),
-        origin: action.origin ?? (target.origin as CreativeMemoryOrigin),
-        sourceWorkspaceSessionId: input.workspaceSessionId,
-        sourceTurnIds: action.sourceTurnIds,
-        sourceExcerpt: action.sourceExcerpt,
+          draftId: input.currentDraftId,
+          operation: `memory.${action.operation}`,
+          idempotencyKey: `${input.currentTurnId}:${action.ref}`,
+          resourceKey: action.targetMemoryId ?? action.scopeType ?? 'user',
+          requestHash: v2IdempotencyRequestHash({
+            workspaceSessionId: input.workspaceSessionId,
+            currentDraftId: input.currentDraftId,
+            action: {
+              ...action,
+              statement: action.statement ? normalizedText(action.statement) : undefined,
+            },
+          }),
+        },
+        execute: () => applyCreativeMemoryAction(input, action),
+        failureFromResult: (receipt) => receipt.status === 'failed'
+          ? { code: 'memory_action_failed', message: receipt.reason ?? 'Creative memory action failed.' }
+          : undefined,
       })
-      if (replacement.id !== target.id) {
-        try {
-          await updateCreativeMemory({ userId: input.userId, id: target.id, status: 'revoked' })
-        } catch (error) {
-          await deleteCreativeMemory({ userId: input.userId, id: replacement.id })
-          throw error
-        }
+      if (outcome.kind === 'running') {
+        receipts.push(await waitForCreativeMemoryAction(idempotency, {
+          userId: input.userId,
+          operation: `memory.${action.operation}`,
+          idempotencyKey: `${input.currentTurnId}:${action.ref}`,
+        }))
+      } else if (outcome.value) {
+        receipts.push(outcome.value)
       }
-      receipts.push({ ref: action.ref, operation: action.operation, status: 'succeeded', memoryId: replacement.id })
     } catch (error) {
       receipts.push({
         ref: action.ref,
@@ -530,4 +471,110 @@ export async function applyCreativeMemoryActions(input: {
     }
   }
   return receipts
+}
+
+async function waitForCreativeMemoryAction(
+  repository: ReturnType<typeof createV2IdempotencyRepository>,
+  key: { userId: number; operation: string; idempotencyKey: string },
+): Promise<CreativeMemoryActionReceipt> {
+  while (true) {
+    const receipt = await repository.get(key)
+    if (!receipt || receipt.status === 'running') {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      continue
+    }
+    const value = receipt.resultJson && typeof receipt.resultJson === 'object'
+      ? (receipt.resultJson as { value?: CreativeMemoryActionReceipt }).value
+      : undefined
+    if (value) return value
+    throw new Error(receipt.failure?.message ?? 'Creative memory action finished without a stored receipt.')
+  }
+}
+
+async function applyCreativeMemoryAction(
+  input: Parameters<typeof applyCreativeMemoryActions>[0],
+  action: CreativeMemoryAction,
+): Promise<CreativeMemoryActionReceipt> {
+  try {
+    if (!action.sourceTurnIds.includes(input.currentTurnId)) {
+      throw new Error('Creative memory action must cite the current source turn.')
+    }
+    if (action.operation === 'add') {
+      const scopeType = action.scopeType ?? 'user'
+      const statement = assertStatement(action.statement)
+      const origin = action.origin ?? 'inferred'
+      const duplicateOfRequirement = (input.requirementStatements ?? []).some((requirement) =>
+        Boolean(longestSharedHanPhrase(statement, requirement)))
+      const status = await effectiveCreativeMemoryStatus({
+        userId: input.userId,
+        scopeType,
+        draftId: scopeType === 'draft' ? input.currentDraftId : undefined,
+        statement,
+        origin,
+        requestedStatus: action.status ?? 'candidate',
+        currentWorkspaceSessionId: input.workspaceSessionId,
+        duplicateOfRequirement,
+      })
+      const memory = await createCreativeMemory({
+        userId: input.userId,
+        scopeType,
+        draftId: scopeType === 'draft' ? input.currentDraftId : undefined,
+        statement,
+        status,
+        origin,
+        sourceWorkspaceSessionId: input.workspaceSessionId,
+        sourceTurnIds: action.sourceTurnIds,
+        sourceExcerpt: action.sourceExcerpt,
+      })
+      return {
+        ref: action.ref,
+        operation: action.operation,
+        status: 'succeeded',
+        memoryId: memory.id,
+        ...(duplicateOfRequirement ? { reason: 'duplicate_of_requirement' } : {}),
+        effectiveStatus: status,
+      }
+    }
+    if (!action.targetMemoryId) throw new Error('Creative memory targetMemoryId is required.')
+    const target = await memories().findFirst({ where: { id: action.targetMemoryId, userId: input.userId } })
+    if (!target || target.status === 'revoked') throw new Error('Creative memory target is missing or inactive.')
+    if (input.recalledMemoryIds && !input.recalledMemoryIds.has(target.id)) {
+      throw new Error('Creative memory target was not recalled in this turn.')
+    }
+    if (target.scopeType === 'draft' && target.draftId !== input.currentDraftId) {
+      throw new Error('Creative memory target belongs to another draft.')
+    }
+    if (action.operation === 'revoke') {
+      await updateCreativeMemory({
+        userId: input.userId,
+        id: target.id,
+        status: 'revoked',
+        expectedStatus: target.status as CreativeMemoryStatus,
+      })
+      return { ref: action.ref, operation: action.operation, status: 'succeeded', memoryId: target.id }
+    }
+    const statement = assertStatement(action.statement)
+    const changed = await memories().updateMany({
+      where: { id: target.id, userId: input.userId, status: target.status },
+      data: {
+        statement,
+        semanticKey: memorySemanticKey(statement),
+        status: action.status ?? target.status,
+        origin: action.origin ?? target.origin,
+        sourceWorkspaceSessionId: input.workspaceSessionId,
+        sourceTurnIdsJson: action.sourceTurnIds.slice(0, 20),
+        sourceExcerpt: action.sourceExcerpt?.trim().slice(0, 1_000) || null,
+        revokedAt: null,
+      },
+    })
+    if (changed.count !== 1) throw new Error('Creative memory changed concurrently; retry with the current record.')
+    return { ref: action.ref, operation: action.operation, status: 'succeeded', memoryId: target.id }
+  } catch (error) {
+    return {
+      ref: action.ref,
+      operation: action.operation,
+      status: 'failed',
+      reason: error instanceof Error ? error.message : String(error),
+    }
+  }
 }

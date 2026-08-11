@@ -92,6 +92,8 @@ model CreativeMemory {
   userId                   Int      @map("user_id")
   scopeType                String   @map("scope_type")
   draftId                  String?  @map("draft_id")
+  scopeKey                 String   @map("scope_key")
+  semanticKey              String   @map("semantic_key")
   statement                String
   status                   String
   origin                   String
@@ -107,13 +109,30 @@ model CreativeMemory {
 
   @@index([userId, status])
   @@index([draftId, status])
+  @@unique([userId, scopeKey, semanticKey])
   @@map("creative_memories")
+}
+
+model CreativeKnowledge {
+  id              String    @id
+  statement       String
+  applicability   String
+  status          String
+  semanticKey     String    @unique @map("semantic_key")
+  sourcesJson     Json      @map("sources_json")
+  createdByUserId Int?      @map("created_by_user_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  revokedAt       DateTime? @map("revoked_at")
+
+  @@index([status, updatedAt])
+  @@map("creative_knowledge")
 }
 
 model V2IdempotencyReceipt {
   id             String    @id
   userId         Int       @map("user_id")
-  draftId        String    @map("draft_id")
+  draftId        String?   @map("draft_id")
   operation      String
   idempotencyKey String    @map("idempotency_key")
   resourceKey    String    @map("resource_key")
@@ -121,6 +140,7 @@ model V2IdempotencyReceipt {
   status         String
   phase          String?
   resultRef      String?   @map("result_ref")
+  resultJson     Json?     @map("result_json")
   providerTaskId String?   @map("provider_task_id")
   failureJson    Json?     @map("failure_json")
   createdAt      DateTime  @default(now()) @map("created_at")
@@ -128,7 +148,7 @@ model V2IdempotencyReceipt {
   completedAt    DateTime? @map("completed_at")
 
   user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  draft V2TimelineDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  draft V2TimelineDraft? @relation(fields: [draftId], references: [id], onDelete: Cascade)
 
   @@unique([userId, operation, idempotencyKey])
   @@index([draftId, operation, createdAt])

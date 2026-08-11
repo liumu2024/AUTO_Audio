@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 import {
   applyDirectorRequirementChange,
@@ -8,6 +11,10 @@ import {
   createDirectorWorkspaceState,
   hydrateDirectorWorkspaceState,
 } from '../src/modules/director-agent/director-workspace-session.js'
+import {
+  createDirectorWorkspaceSessionRepository,
+  DirectorWorkspaceRevisionConflictError,
+} from '../src/modules/director-agent/director-workspace-session-repository.js'
 
 const state = createDirectorWorkspaceState({
   context: {
@@ -23,6 +30,7 @@ const state = createDirectorWorkspaceState({
     },
   },
 })
+assert.equal(state.stateRevision, 0)
 assert.deepEqual(state.context.userIntent, { goal: 'generate_timeline' })
 assert.equal(state.confirmedRequirements.length, 1)
 assert.equal(state.confirmedRequirements[0]?.statement, '字幕应根据画面内容创作，不复用素材文件名')
@@ -62,6 +70,7 @@ const hydratedLegacySubtitleState = hydrateDirectorWorkspaceState({
     slots: { ...preserved.context.slots, subtitlePolicy: 'keep' } as typeof preserved.context.slots,
   },
 })
+assert.equal(hydratedLegacySubtitleState.stateRevision, 0)
 assert.equal('subtitlePolicy' in hydratedLegacySubtitleState.context.slots, false)
 const hydratedLegacySampleState = hydrateDirectorWorkspaceState({
   ...preserved,
@@ -164,5 +173,28 @@ assert.deepEqual(emptyStatement.state, revoked.state)
 const compactContext = compactDirectorWorkspaceContext(revoked.state)
 assert.equal(compactContext.durableFacts.confirmedRequirements.some((item) => item.statement === '画面使用中性低饱和色调'), true)
 assert.equal(compactContext.durableFacts.recentRequirementChanges.some((item) => item.statement === '画面使用暖色调'), true)
+
+const sessionDir = mkdtempSync(path.join(os.tmpdir(), 'v2-director-workspace-cas-'))
+const previousSessionDir = process.env.V2_DIRECTOR_SESSION_DIR
+process.env.V2_DIRECTOR_SESSION_DIR = sessionDir
+try {
+  const repository = createDirectorWorkspaceSessionRepository()
+  const initial = await repository.save({ id: 'workspace_cas', userId: 1, state, expectedStateRevision: 0 })
+  const left = applyDirectorWorkspacePatch(initial.state, { responseId: 'response_left' })
+  const right = applyDirectorWorkspacePatch(initial.state, { responseId: 'response_right' })
+  const commits = await Promise.allSettled([
+    repository.save({ id: initial.id, userId: 1, state: left, expectedStateRevision: 1 }),
+    repository.save({ id: initial.id, userId: 1, state: right, expectedStateRevision: 1 }),
+  ])
+  assert.equal(commits.filter((item) => item.status === 'fulfilled').length, 1)
+  const rejectedCommit = commits.find((item) => item.status === 'rejected')
+  assert.equal(rejectedCommit?.status, 'rejected')
+  assert.equal(rejectedCommit.status === 'rejected' && rejectedCommit.reason instanceof DirectorWorkspaceRevisionConflictError, true)
+  assert.equal((await repository.get(initial.id, 1))?.state.stateRevision, 2)
+} finally {
+  if (previousSessionDir === undefined) delete process.env.V2_DIRECTOR_SESSION_DIR
+  else process.env.V2_DIRECTOR_SESSION_DIR = previousSessionDir
+  rmSync(sessionDir, { recursive: true, force: true })
+}
 
 console.log('[smoke] V2 director workspace state contract passed')

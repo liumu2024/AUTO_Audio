@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto'
-
 import type { Request, Response } from 'express'
 
 import { validateRemotionTimelineSpec } from '../../../shared/lib/remotion-timeline-validator.js'
@@ -11,8 +9,14 @@ import {
   V2TimelineIdempotencyFailedError,
   V2TimelineIdempotencyRunningError,
 } from './timeline-draft-runner.js'
-import { V2IdempotencyConflictError } from './idempotency-repository.js'
+import {
+  executeV2JsonIdempotentOperation,
+  V2IdempotencyConflictError,
+  v2IdempotencyRequestHash,
+} from './idempotency-repository.js'
 import { ensureTimelineRenderComponentVisualEvidence } from '../modules/render-components/component-authoring-agent.js'
+import { RENDER_COMPONENT_VISUAL_POLICY_VERSION } from '../modules/render-components/component-registry.js'
+import { V2_TIMELINE_PLANNER_PROTOCOL_VERSION } from './remotion-timeline-llm-planner.js'
 import { buildV2TimelineRevisionContext } from './timeline-revision-context.js'
 import {
   createV2TimelineDraftRepository,
@@ -123,22 +127,32 @@ function draftHistoryDto(draft: V2TimelineDraftHistoryRecord) {
   }
 }
 
-function sendConflict(res: Response, error: V2TimelineRevisionConflictError) {
-  res.status(409).json({
+function revisionConflictBody(error: V2TimelineRevisionConflictError) {
+  return {
     error: error.message,
     code: 'V2_TIMELINE_REVISION_CONFLICT',
     draftId: error.draftId,
     expectedRevision: error.expectedRevision,
     actualRevision: error.actualRevision,
-  })
+  }
 }
 
-function sendComponentReferenceError(res: Response, error: V2TimelineComponentReferenceError) {
-  res.status(422).json({
+function componentReferenceBody(error: V2TimelineComponentReferenceError) {
+  return {
     error: 'Invalid timeline component reference.',
     code: 'V2_TIMELINE_COMPONENT_REFERENCE',
     issues: error.issues,
-  })
+  }
+}
+
+function idempotencyKeyFrom(req: Request): string | null {
+  const key = String(req.headers['idempotency-key'] ?? '').trim()
+  return key && key.length <= 200 ? key : null
+}
+
+interface StoredHttpResponse {
+  statusCode: number
+  body: unknown
 }
 
 function persistedPlannerInput(input: ReturnType<typeof v2PlannerInputFromRequest>) {
@@ -147,81 +161,120 @@ function persistedPlannerInput(input: ReturnType<typeof v2PlannerInputFromReques
 }
 
 export async function postV2TimelineDraftPreview(req: Request, res: Response): Promise<void> {
-  const taskId = `v2_preview_${Date.now()}_${randomUUID().slice(0, 8)}`
+  const idempotencyKey = idempotencyKeyFrom(req)
+  if (!idempotencyKey) {
+    res.status(400).json({ error: 'A valid Idempotency-Key header is required.' })
+    return
+  }
   const userId = userIdFrom(req)
   const draftId = typeof req.body?.draftId === 'string' ? req.body.draftId : undefined
   const baseRevision = revisionValue(req.body?.baseRevision)
-  let plannerInput = v2PlannerInputFromRequest(req, taskId)
-  if (draftId) {
-    if (!baseRevision) {
-      res.status(400).json({ error: 'baseRevision is required when revising a V2 draft.' })
-      return
-    }
-    const [draft, base] = await Promise.all([
-      repository.getDraft(draftId, userId),
-      repository.getRevision(draftId, baseRevision, userId),
-    ])
-    if (!draft || !base) {
-      res.status(404).json({ error: 'V2 timeline draft revision not found.' })
-      return
-    }
-    if (draft.revision !== baseRevision) {
-      sendConflict(res, new V2TimelineRevisionConflictError(draftId, baseRevision, draft.revision))
-      return
-    }
-    plannerInput = {
-      ...plannerInput,
-      planningContext: {
-        kind: 'revision',
-        activeRequirements: plannerInput.planningContext?.activeRequirements ?? [],
-        draftId,
-        baseRevision,
-        authorizationEvidence: plannerInput.planningContext?.authorizationEvidence,
-      },
-      revisionContext: buildV2TimelineRevisionContext({
-        draftId,
-        baseRevision,
-        spec: base.spec,
-      }),
-      revisionBaseSpec: base.spec,
-    }
-  }
-  const preview = await previewV2RemotionTimeline(plannerInput)
-  if (!preview.validation.ok) {
-    res.status(422).json({ error: 'V2 timeline preview is not valid.', validation: preview.validation })
-    return
-  }
-
+  const taskId = `v2_preview_${v2IdempotencyRequestHash({ userId, idempotencyKey }).slice(0, 16)}`
   try {
-    await ensureTimelineRenderComponentVisualEvidence(preview.spec)
-    const draft = draftId
-      ? await repository.saveDraft({
-          draftId,
+    const outcome = await executeV2JsonIdempotentOperation<StoredHttpResponse>({
+      reservation: {
+        userId,
+        draftId,
+        operation: 'timeline.draft.preview',
+        idempotencyKey,
+        resourceKey: `${draftId ?? 'new'}:${baseRevision ?? 0}`,
+        requestHash: v2IdempotencyRequestHash({
           userId,
-          baseRevision: baseRevision ?? 0,
-          spec: preview.spec,
-          kind: 'preview',
-          plannerInput: persistedPlannerInput(plannerInput),
-          plannerSource: preview.plannerSource,
-          review: preview.review,
-          traceDir: preview.traceDir,
-        })
-      : await repository.createDraft({
-          userId,
-          plannerInput: persistedPlannerInput(plannerInput),
-          spec: preview.spec,
-          plannerSource: preview.plannerSource,
-          review: preview.review,
-          traceDir: preview.traceDir,
-        })
-    res.json({ ...preview, draft: draftDto(draft) })
-  } catch (error) {
-    if (error instanceof V2TimelineComponentReferenceError) {
-      sendComponentReferenceError(res, error)
+          body: req.body,
+          plannerProtocol: V2_TIMELINE_PLANNER_PROTOCOL_VERSION,
+          componentVisualPolicy: RENDER_COMPONENT_VISUAL_POLICY_VERSION,
+        }),
+      },
+      execute: async () => {
+        let plannerInput = v2PlannerInputFromRequest(req, taskId)
+        if (draftId) {
+          if (!baseRevision) {
+            return { statusCode: 400, body: { error: 'baseRevision is required when revising a V2 draft.' } }
+          }
+          const [draft, base] = await Promise.all([
+            repository.getDraft(draftId, userId),
+            repository.getRevision(draftId, baseRevision, userId),
+          ])
+          if (!draft || !base) {
+            return { statusCode: 404, body: { error: 'V2 timeline draft revision not found.' } }
+          }
+          if (draft.revision !== baseRevision) {
+            const error = new V2TimelineRevisionConflictError(draftId, baseRevision, draft.revision)
+            return { statusCode: 409, body: revisionConflictBody(error) }
+          }
+          plannerInput = {
+            ...plannerInput,
+            planningContext: {
+              kind: 'revision',
+              activeRequirements: plannerInput.planningContext?.activeRequirements ?? [],
+              draftId,
+              baseRevision,
+              authorizationEvidence: plannerInput.planningContext?.authorizationEvidence,
+            },
+            revisionContext: buildV2TimelineRevisionContext({
+              draftId,
+              baseRevision,
+              spec: base.spec,
+            }),
+            revisionBaseSpec: base.spec,
+          }
+        }
+        const preview = await previewV2RemotionTimeline(plannerInput)
+        if (!preview.validation.ok) {
+          return {
+            statusCode: 422,
+            body: { error: 'V2 timeline preview is not valid.', validation: preview.validation },
+          }
+        }
+        try {
+          await ensureTimelineRenderComponentVisualEvidence(preview.spec)
+          const draft = draftId
+            ? await repository.saveDraft({
+                draftId,
+                userId,
+                baseRevision: baseRevision ?? 0,
+                spec: preview.spec,
+                kind: 'preview',
+                plannerInput: persistedPlannerInput(plannerInput),
+                plannerSource: preview.plannerSource,
+                review: preview.review,
+                traceDir: preview.traceDir,
+              })
+            : await repository.createDraft({
+                userId,
+                plannerInput: persistedPlannerInput(plannerInput),
+                spec: preview.spec,
+                plannerSource: preview.plannerSource,
+                review: preview.review,
+                traceDir: preview.traceDir,
+              })
+          return { statusCode: 200, body: { ...preview, draft: draftDto(draft) } }
+        } catch (error) {
+          if (error instanceof V2TimelineComponentReferenceError) {
+            return { statusCode: 422, body: componentReferenceBody(error) }
+          }
+          if (error instanceof V2TimelineRevisionConflictError) {
+            return { statusCode: 409, body: revisionConflictBody(error) }
+          }
+          throw error
+        }
+      },
+      failureFromResult: (result) => result.statusCode >= 400
+        ? { code: 'request_rejected', message: 'Timeline draft preview was rejected.' }
+        : undefined,
+    })
+    if (outcome.kind === 'running') {
+      res.status(202).json({ status: 'running' })
       return
     }
-    if (error instanceof V2TimelineRevisionConflictError) {
-      sendConflict(res, error)
+    if (outcome.value) {
+      res.status(outcome.value.statusCode).json(outcome.value.body)
+      return
+    }
+    res.status(422).json({ error: outcome.receipt.failure?.message ?? 'Timeline draft preview failed.' })
+  } catch (error) {
+    if (error instanceof V2IdempotencyConflictError) {
+      res.status(409).json({ error: error.message })
       return
     }
     throw error
@@ -254,6 +307,12 @@ export async function deleteV2TimelineDraft(req: Request, res: Response): Promis
 
 export async function putV2TimelineDraft(req: Request, res: Response): Promise<void> {
   const draftId = String(req.params.draftId)
+  const idempotencyKey = idempotencyKeyFrom(req)
+  if (!idempotencyKey) {
+    res.status(400).json({ error: 'A valid Idempotency-Key header is required.' })
+    return
+  }
+  const userId = userIdFrom(req)
   const baseRevision = revisionValue(req.body?.baseRevision)
   const spec = req.body?.spec as RemotionTimelineSpecV1 | undefined
   if (!baseRevision || !spec) {
@@ -266,22 +325,52 @@ export async function putV2TimelineDraft(req: Request, res: Response): Promise<v
     return
   }
   try {
-    await ensureTimelineRenderComponentVisualEvidence(spec)
-    const draft = await repository.saveDraft({
-      draftId,
-      userId: userIdFrom(req),
-      baseRevision,
-      spec,
-      kind: 'user_edit',
+    const outcome = await executeV2JsonIdempotentOperation<StoredHttpResponse>({
+      reservation: {
+        userId,
+        draftId,
+        operation: 'timeline.save',
+        idempotencyKey,
+        resourceKey: `${draftId}:${baseRevision}`,
+        requestHash: v2IdempotencyRequestHash({ userId, draftId, body: req.body }),
+      },
+      execute: async () => {
+        try {
+          await ensureTimelineRenderComponentVisualEvidence(spec)
+          const draft = await repository.saveDraft({
+            draftId,
+            userId,
+            baseRevision,
+            spec,
+            kind: 'user_edit',
+          })
+          return { statusCode: 200, body: { draft: draftDto(draft) } }
+        } catch (error) {
+          if (error instanceof V2TimelineComponentReferenceError) {
+            return { statusCode: 422, body: componentReferenceBody(error) }
+          }
+          if (error instanceof V2TimelineRevisionConflictError) {
+            return { statusCode: 409, body: revisionConflictBody(error) }
+          }
+          throw error
+        }
+      },
+      failureFromResult: (result) => result.statusCode >= 400
+        ? { code: 'request_rejected', message: 'Timeline draft save was rejected.' }
+        : undefined,
     })
-    res.json({ draft: draftDto(draft) })
-  } catch (error) {
-    if (error instanceof V2TimelineComponentReferenceError) {
-      sendComponentReferenceError(res, error)
+    if (outcome.kind === 'running') {
+      res.status(202).json({ status: 'running' })
       return
     }
-    if (error instanceof V2TimelineRevisionConflictError) {
-      sendConflict(res, error)
+    if (outcome.value) {
+      res.status(outcome.value.statusCode).json(outcome.value.body)
+      return
+    }
+    res.status(422).json({ error: outcome.receipt.failure?.message ?? 'Timeline draft save failed.' })
+  } catch (error) {
+    if (error instanceof V2IdempotencyConflictError) {
+      res.status(409).json({ error: error.message })
       return
     }
     throw error

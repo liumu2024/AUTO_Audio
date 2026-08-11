@@ -166,6 +166,8 @@ export async function renderV2RemotionTimeline(input: {
   authorizedDraftComponentIds?: readonly string[]
   authorizedPreviewComponentIds?: readonly string[]
   recordComponentOutcomes?: boolean
+  /** Evaluation-only range rendering; production callers omit it. */
+  frameRange?: { startFrame: number; endFrame: number }
 }): Promise<V2TimelineRenderResult> {
   const spec = assertValidRemotionTimelineSpec(input.spec)
   const componentIds = referencedComponentIds(spec)
@@ -199,6 +201,10 @@ export async function renderV2RemotionTimeline(input: {
     ]
     const browserExecutable = process.env.REMOTION_BROWSER_EXECUTABLE?.trim()
     if (browserExecutable) args.push('--browser-executable', browserExecutable)
+    if (input.frameRange) {
+      args.push('--frame-start', String(input.frameRange.startFrame))
+      args.push('--frame-end', String(input.frameRange.endFrame))
+    }
 
     const customRegistry = await createCustomComponentRegistry({ spec: renderSpec, remotionRoot })
     args.push('--custom-components-registry', customRegistry.entryPath)

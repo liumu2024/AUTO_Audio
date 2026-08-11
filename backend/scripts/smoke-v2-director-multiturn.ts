@@ -388,6 +388,11 @@ try {
     saveWorkspace: async () => { throw new Error('mock save failure') },
   })) unsaved.push(event)
   assert.equal(unsaved.some((event) => event.type === 'workspace_session'), false)
+  assert.equal(
+    unsaved.some((event) => event.type === 'error'),
+    true,
+    'workspace persistence failures must remain failed when the Director turn is replayed',
+  )
   assert.equal(Object.hasOwn(unsaved.find((event) => event.type === 'done') ?? {}, 'message'), false)
   assert.equal(
     (unsaved.find((event) => event.type === 'assistant_reply') as { message: string }).message,
@@ -428,6 +433,7 @@ try {
     `草稿 v${restoredDraft.revision} 已保存，但会话状态同步失败；重新打开该草稿可恢复结果。`,
   )
   assert.equal(partiallySaved.some((event) => event.type === 'workspace_session'), false)
+  assert.equal(partiallySaved.some((event) => event.type === 'error'), true)
   assert.equal(Object.hasOwn(partiallySaved.find((event) => event.type === 'done') ?? {}, 'message'), false)
 
   const ephemeralResult = [] as Array<{ type: string; [key: string]: unknown }>
@@ -458,6 +464,7 @@ try {
     '工具执行已返回成功，但依赖工作区的状态未保存，请重试。',
   )
   assert.equal(ephemeralResult.some((event) => event.type === 'workspace_session'), false)
+  assert.equal(ephemeralResult.some((event) => event.type === 'error'), true)
 
   const isolated = await turn(
     'apply independent and dependent actions',

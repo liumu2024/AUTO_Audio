@@ -189,12 +189,41 @@ const chatPanelSource = await readFile(
   new URL('../../fonted/src/components/sidebar/DirectorChatPanel.tsx', import.meta.url),
   'utf8',
 )
+const frontendApiSource = await readFile(
+  new URL('../../fonted/src/lib/api.ts', import.meta.url),
+  'utf8',
+)
 assert.match(
   chatPanelSource,
   /event\.toolId === 'timeline\.render'[\s\S]*event\.result[\s\S]*setResult/,
   'Director render receipts must update the existing V2 result store',
 )
 assert.match(chatPanelSource, /总用时.*秒/, 'render progress must label elapsed seconds as total elapsed time')
+assert.match(
+  frontendApiSource,
+  /MAX_DIRECTOR_REPLAY_POLLS[\s\S]*await sendDirectorTurn[\s\S]*turnReceiptRunning/,
+  'a disconnected or still-running Director turn must poll with the same payload instead of leaving the UI pending',
+)
+assert.match(
+  frontendApiSource,
+  /MAX_IDEMPOTENCY_POLL_ATTEMPTS[\s\S]*idempotentJsonRequest[\s\S]*still running/,
+  'preview and save polling must terminate instead of leaving the UI pending forever',
+)
+assert.match(
+  frontendApiSource,
+  /runV2TimelineDraft[\s\S]*MAX_IDEMPOTENCY_POLL_ATTEMPTS[\s\S]*still running/,
+  'render polling must use the same finite boundary',
+)
+assert.match(
+  frontendApiSource,
+  /AbortSignal\.timeout\(IDEMPOTENT_HTTP_TIMEOUT_MS\)/,
+  'each idempotent HTTP attempt must have a finite network timeout',
+)
+assert.match(
+  frontendApiSource,
+  /sendDirectorTurn[\s\S]*directorRequestSignal\(signal,\s*deadline - Date\.now\(\)\)/,
+  'each Director SSE attempt must combine caller cancellation with a finite request timeout',
+)
 
 const materialLibrarySource = await readFile(
   new URL('../../fonted/src/stores/materialLibraryStore.ts', import.meta.url),

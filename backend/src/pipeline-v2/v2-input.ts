@@ -20,6 +20,8 @@ export interface V2PlanningContext {
   activeRequirements: string[]
   /** Relevant active long-term knowledge recalled for this turn; it is not persisted as V2 state. */
   recalledCreativeMemories?: string[]
+  /** Relevant reviewed creation methods; separate from user preferences and never persisted as V2 state. */
+  recalledCreativeKnowledge?: string[]
   draftId?: string
   baseRevision?: number
   authorizationEvidence?: string

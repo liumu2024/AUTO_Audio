@@ -4,6 +4,10 @@ import type { DirectorWorkspaceState } from './director-workspace-session.js';
 import type { RemotionTimelineSpecV1 } from './remotion-timeline-spec.v1.js';
 export type DirectorSurfaceMode = 'smalltalk' | 'help' | 'capability_intro' | 'creative_guide' | 'task' | 'edit' | 'repair' | 'unknown';
 export type DirectorAgentStreamEvent = {
+    type: 'turn_receipt';
+    turnRequestId: string;
+    status: 'running' | 'replayed' | 'failed';
+} | {
     type: 'surface';
     mode: DirectorSurfaceMode;
     confidence: number;
@@ -82,6 +86,8 @@ export type DirectorAgentStreamEvent = {
 } | {
     type: 'workspace_session';
     workspaceSessionId: string;
+    turnRequestId: string;
+    stateRevision: number;
     state: DirectorWorkspaceState;
     traceDir: string;
     modelCalled: boolean;

@@ -34,6 +34,7 @@ export interface DirectorAgentChatPayload {
   contextSampleAuthoritative?: boolean
   workspaceSessionId?: string
   turnRequestId?: string
+  workspaceStateRevision?: number
 }
 
 export interface DirectorWorkspaceSessionResponse {
@@ -239,6 +240,40 @@ export interface CreativeMemorySearchResult {
   }>
 }
 
+export interface CreativeKnowledgeDto {
+  id: string
+  statement: string
+  applicability: string
+  status: 'active' | 'candidate' | 'revoked'
+  sources: Array<{
+    taskId: string
+    sampleName?: string
+    methodIds: string[]
+    evidenceRanges: Array<{ start_sec: number; end_sec: number }>
+  }>
+  createdByUserId?: number
+  createdAt: string
+  updatedAt: string
+  revokedAt?: string
+}
+
+export interface CreativeKnowledgeSearchResult {
+  items: Array<{
+    knowledge: CreativeKnowledgeDto
+    score: number
+    matchedTerms: string[]
+    rank: number
+  }>
+  audit: Array<{
+    knowledgeId: string
+    score: number
+    matchedTerms: string[]
+    rank?: number
+    selected: boolean
+    reason: 'selected' | 'below_threshold' | 'top_k_cutoff' | 'status_filtered'
+  }>
+}
+
 async function request<T>(
   path: string,
   init?: RequestInit,
@@ -262,6 +297,51 @@ function requestResponse(path: string, init?: RequestInit): Promise<Response> {
       ...init?.headers,
     },
   })
+}
+
+const MAX_IDEMPOTENCY_POLL_ATTEMPTS = 300
+const IDEMPOTENT_HTTP_TIMEOUT_MS = 30_000
+const DIRECTOR_REPLAY_TIMEOUT_MS = 5 * 60_000
+
+function idempotentRequestSignal(): AbortSignal {
+  return AbortSignal.timeout(IDEMPOTENT_HTTP_TIMEOUT_MS)
+}
+
+function directorRequestSignal(signal: AbortSignal | undefined, remainingMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(Math.max(1, Math.min(IDEMPOTENT_HTTP_TIMEOUT_MS, remainingMs)))
+  return signal ? AbortSignal.any([signal, timeout]) : timeout
+}
+
+async function idempotentJsonRequest<T>(input: {
+  path: string
+  method: 'POST' | 'PUT'
+  body: unknown
+  idempotencyKey: string
+}): Promise<T> {
+  const send = () => requestResponse(input.path, {
+    method: input.method,
+    headers: { 'Idempotency-Key': input.idempotencyKey },
+    body: JSON.stringify(input.body),
+    signal: idempotentRequestSignal(),
+  })
+  let response: Response
+  try {
+    response = await send()
+  } catch {
+    response = await send()
+  }
+  for (let attempt = 0; response.status === 202 && attempt < MAX_IDEMPOTENCY_POLL_ATTEMPTS; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    response = await send()
+  }
+  if (response.status === 202) {
+    throw new Error(`The idempotent request is still running: ${input.path}`)
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string }
+    throw new Error(body.error ?? `HTTP ${response.status} ${input.path}`)
+  }
+  return response.json() as Promise<T>
 }
 
 export async function healthCheck(): Promise<{ ok: boolean }> {
@@ -325,19 +405,59 @@ export async function deleteCreativeMemory(id: string) {
   )
 }
 
-export async function previewV2Timeline(payload: V2TimelinePayload) {
-  return request<V2TimelinePreviewResult>('/api/v2/timeline/preview', {
+export async function listCreativeKnowledge(status?: CreativeKnowledgeDto['status']) {
+  const query = new URLSearchParams()
+  if (status) query.set('status', status)
+  return request<{ knowledge: CreativeKnowledgeDto[] }>(
+    `/api/creative-knowledge${query.size ? `?${query}` : ''}`,
+  )
+}
+
+export async function searchCreativeKnowledge(queryText: string) {
+  const query = new URLSearchParams({ q: queryText })
+  return request<CreativeKnowledgeSearchResult>(`/api/creative-knowledge/search?${query}`)
+}
+
+export async function updateCreativeKnowledge(input: {
+  id: string
+  statement?: string
+  applicability?: string
+  status?: CreativeKnowledgeDto['status']
+}) {
+  return request<{ knowledge: CreativeKnowledgeDto }>(
+    `/api/creative-knowledge/${encodeURIComponent(input.id)}`,
+    { method: 'PATCH', body: JSON.stringify(input) },
+  )
+}
+
+export async function deleteCreativeKnowledge(id: string) {
+  return request<{ deleted: true }>(
+    `/api/creative-knowledge/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export async function previewV2Timeline(
+  payload: V2TimelinePayload,
+  idempotencyKey = crypto.randomUUID(),
+) {
+  return idempotentJsonRequest<V2TimelinePreviewResult>({
+    path: '/api/v2/timeline/preview',
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: payload,
+    idempotencyKey,
   })
 }
 
 export async function previewV2TimelineDraft(
   payload: V2TimelinePayload & { draftId?: string; baseRevision?: number },
+  idempotencyKey = crypto.randomUUID(),
 ) {
-  return request<V2TimelineDraftPreviewResult>('/api/v2/timeline-drafts/preview', {
+  return idempotentJsonRequest<V2TimelineDraftPreviewResult>({
+    path: '/api/v2/timeline-drafts/preview',
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: payload,
+    idempotencyKey,
   })
 }
 
@@ -364,14 +484,14 @@ export async function saveV2TimelineDraft(input: {
   draftId: string
   baseRevision: number
   spec: RemotionTimelineSpecV1
+  idempotencyKey?: string
 }) {
-  return request<{ draft: V2TimelineDraftDto }>(
-    `/api/v2/timeline-drafts/${encodeURIComponent(input.draftId)}`,
-    {
-      method: 'PUT',
-      body: JSON.stringify({ baseRevision: input.baseRevision, spec: input.spec }),
-    },
-  )
+  return idempotentJsonRequest<{ draft: V2TimelineDraftDto }>({
+    path: `/api/v2/timeline-drafts/${encodeURIComponent(input.draftId)}`,
+    method: 'PUT',
+    body: { baseRevision: input.baseRevision, spec: input.spec },
+    idempotencyKey: input.idempotencyKey ?? crypto.randomUUID(),
+  })
 }
 
 export async function runV2TimelineDraft(input: {
@@ -385,6 +505,7 @@ export async function runV2TimelineDraft(input: {
     method: 'POST',
     headers: { 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify({ revision: input.revision }),
+    signal: idempotentRequestSignal(),
   })
   let response: Response
   try {
@@ -394,15 +515,20 @@ export async function runV2TimelineDraft(input: {
   }
   if (response.status === 202) {
     const pending = await response.json() as { renderRunId: string }
-    for (;;) {
+    for (let attempt = 0; attempt < MAX_IDEMPOTENCY_POLL_ATTEMPTS; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 1000))
       const run = await request<{
         status: 'running' | 'completed' | 'failed'
-      }>(`${path}/${encodeURIComponent(pending.renderRunId)}`)
+      }>(`${path}/${encodeURIComponent(pending.renderRunId)}`, {
+        signal: idempotentRequestSignal(),
+      })
       if (run.status === 'running') continue
       if (run.status === 'failed') throw new Error('The original V2 render request failed.')
       response = await post()
       break
+    }
+    if (response.status === 202) {
+      throw new Error(`The idempotent render request is still running: ${pending.renderRunId}`)
     }
   }
   if (!response.ok) {
@@ -459,9 +585,11 @@ export async function streamDirectorChat(
   onEvent: (event: DirectorAgentStreamEvent) => void,
   signal?: AbortSignal,
 ) {
-  const res = await fetch(`${env.apiBase}/api/director/chat`, {
+  const MAX_DIRECTOR_REPLAY_POLLS = 300
+  const deadline = Date.now() + DIRECTOR_REPLAY_TIMEOUT_MS
+  const sendDirectorTurn = () => fetch(`${env.apiBase}/api/director/chat`, {
     method: 'POST',
-    signal,
+    signal: directorRequestSignal(signal, deadline - Date.now()),
     headers: {
       'Content-Type': 'application/json',
       'X-User-Id': String(env.userId),
@@ -469,34 +597,54 @@ export async function streamDirectorChat(
     body: JSON.stringify(payload),
   })
 
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string }
-    throw new Error(body.error ?? `HTTP ${res.status} /api/director/chat`)
-  }
-  if (!res.body) return
-
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-
-    const chunks = buffer.split('\n\n')
-    buffer = chunks.pop() ?? ''
-
-    for (const chunk of chunks) {
-      const line = chunk
-        .split('\n')
-        .find((item) => item.startsWith('data: '))
-      if (!line) continue
-      const json = line.slice('data: '.length).trim()
-      if (!json) continue
-      onEvent(JSON.parse(json) as DirectorAgentStreamEvent)
+  for (let attempt = 0; attempt < MAX_DIRECTOR_REPLAY_POLLS; attempt += 1) {
+    if (Date.now() >= deadline) break
+    let res: Response
+    try {
+      res = await sendDirectorTurn()
+    } catch (error) {
+      if (signal?.aborted || attempt === MAX_DIRECTOR_REPLAY_POLLS - 1) throw error
+      await new Promise((resolve) => setTimeout(resolve, 1_000))
+      continue
     }
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string }
+      throw new Error(body.error ?? `HTTP ${res.status} /api/director/chat`)
+    }
+
+    let turnReceiptRunning = false
+    let finalResultSeen = false
+    let doneSeen = false
+    if (res.body) {
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const chunks = buffer.split('\n\n')
+        buffer = chunks.pop() ?? ''
+        for (const chunk of chunks) {
+          const line = chunk.split('\n').find((item) => item.startsWith('data: '))
+          if (!line) continue
+          const json = line.slice('data: '.length).trim()
+          if (!json) continue
+          const event = JSON.parse(json) as DirectorAgentStreamEvent
+          if (event.type === 'turn_receipt' && event.status === 'running') turnReceiptRunning = true
+          if (event.type === 'assistant_reply' || event.type === 'workspace_session' || event.type === 'error') {
+            finalResultSeen = true
+          }
+          if (event.type === 'done') doneSeen = true
+          onEvent(event)
+        }
+      }
+    }
+    if (doneSeen && (!turnReceiptRunning || finalResultSeen)) return
+    if (signal?.aborted) throw signal.reason
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
   }
+  throw new Error('Director request is still running; retry the same turn after it finishes.')
 }
 
 export async function getDirectorWorkspaceSession(workspaceSessionId: string) {
@@ -510,27 +658,4 @@ export async function getDirectorWorkspaceSession(workspaceSessionId: string) {
     throw new Error(body.error ?? `HTTP ${res.status} director workspace`)
   }
   return res.json() as Promise<DirectorWorkspaceSessionResponse>
-}
-
-export async function reportDirectorWorkspaceOutcome(input: {
-  workspaceSessionId: string
-  action: string
-  ok: boolean
-  outcome: string
-  traceDir?: string
-  currentTimeline?: DirectorContext['currentTimeline']
-}) {
-  const res = await fetch(
-    `${env.apiBase}/api/director/workspaces/${encodeURIComponent(input.workspaceSessionId)}/outcomes`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': String(env.userId) },
-      body: JSON.stringify(input),
-    },
-  )
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string }
-    throw new Error(body.error ?? `HTTP ${res.status} director workspace outcome`)
-  }
-  return res.json() as Promise<DirectorWorkspaceSessionResponse & { traceDir: string }>
 }

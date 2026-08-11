@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -16,6 +16,10 @@ try {
     updateCreativeMemory,
   } = await import('../src/modules/creative-memory/creative-memory.service.js')
   const { prisma } = await import('../src/shared/prisma.service.js')
+  const {
+    createV2IdempotencyRepository,
+    v2IdempotencyRequestHash,
+  } = await import('../src/pipeline-v2/idempotency-repository.js')
   for (const id of ['draft_alpha', 'draft_beta']) {
     await prisma.v2TimelineDraft.create({
       data: {
@@ -111,6 +115,54 @@ try {
   assert.equal(
     (await listCreativeMemories({ userId: 1 })).find((item) => item.id === explicitActive[0].memoryId)?.status,
     'active',
+  )
+
+  const runningAction = {
+    ref: 'running_replay',
+    operation: 'add' as const,
+    scopeType: 'user' as const,
+    statement: 'Prefer measured pacing',
+    status: 'active' as const,
+    origin: 'explicit' as const,
+    sourceTurnIds: ['turn_running_replay'],
+  }
+  const idempotency = createV2IdempotencyRepository()
+  const runningReservation = await idempotency.reserve({
+    userId: 1,
+    operation: 'memory.add',
+    idempotencyKey: 'turn_running_replay:running_replay',
+    resourceKey: 'user',
+    requestHash: v2IdempotencyRequestHash({
+      workspaceSessionId: 'workspace_running_replay',
+      currentDraftId: undefined,
+      action: { ...runningAction, statement: 'prefer measured pacing' },
+    }),
+  })
+  assert.equal(runningReservation.kind, 'reserved')
+  const storedRunningResult = {
+    ref: runningAction.ref,
+    operation: runningAction.operation,
+    status: 'succeeded' as const,
+    memoryId: 'memory_running_replay',
+    effectiveStatus: 'active' as const,
+  }
+  setTimeout(() => {
+    void idempotency.update({
+      id: runningReservation.receipt.id,
+      status: 'completed',
+      resultJson: { value: storedRunningResult },
+    })
+  }, 50)
+  const replayedRunning = await applyCreativeMemoryActions({
+    userId: 1,
+    workspaceSessionId: 'workspace_running_replay',
+    currentTurnId: 'turn_running_replay',
+    actions: [runningAction],
+  })
+  assert.deepEqual(
+    replayedRunning,
+    [storedRunningResult],
+    'an in-flight retry must await and replay the original memory receipt instead of fabricating a failure',
   )
 
   const crossSessionNearDuplicate = await applyCreativeMemoryActions({
@@ -324,6 +376,157 @@ try {
     (await listCreativeMemories({ userId: 1 })).find((item) => item.id === unrelatedRequirement[0].memoryId)?.status,
     'active',
     'unrelated transferable preference must stay active',
+  )
+
+  const idempotentAction = {
+    userId: 1,
+    workspaceSessionId: 'workspace_memory_idempotent',
+    currentTurnId: 'turn_memory_idempotent',
+    actions: [{
+      ref: 'memory_action_1',
+      operation: 'add' as const,
+      scopeType: 'user' as const,
+      statement: 'Prefer concise documentary narration',
+      status: 'active' as const,
+      origin: 'explicit' as const,
+      sourceTurnIds: ['turn_memory_idempotent'],
+    }],
+  }
+  const idempotentFirst = await applyCreativeMemoryActions(idempotentAction)
+  const idempotentReplay = await applyCreativeMemoryActions(idempotentAction)
+  assert.deepEqual(idempotentReplay, idempotentFirst)
+  assert.equal((await createV2IdempotencyRepository().get({
+    userId: 1,
+    operation: 'memory.add',
+    idempotencyKey: 'turn_memory_idempotent:memory_action_1',
+  }))?.status, 'completed')
+
+  const concurrentStatement = 'Prefer restrained cyan data visualization'
+  const concurrent = await Promise.all(Array.from({ length: 4 }, (_, index) =>
+    createCreativeMemory({
+      userId: 1,
+      scopeType: 'user',
+      statement: index % 2 ? `  ${concurrentStatement}  ` : concurrentStatement,
+      status: 'active',
+      origin: 'explicit',
+      sourceWorkspaceSessionId: `workspace_concurrent_${index}`,
+    })))
+  assert.equal(new Set(concurrent.map((item) => item.id)).size, 1)
+  assert.equal(
+    (await listCreativeMemories({ userId: 1 })).filter(
+      (item) => item.statement.trim() === concurrentStatement,
+    ).length,
+    1,
+    'semantic duplicates must converge under concurrent requests',
+  )
+
+  await updateCreativeMemory({ userId: 1, id: concurrent[0].id, status: 'revoked' })
+  const restored = await createCreativeMemory({
+    userId: 1,
+    scopeType: 'user',
+    statement: concurrentStatement,
+    status: 'active',
+    origin: 'explicit',
+    sourceWorkspaceSessionId: 'workspace_restore',
+  })
+  assert.equal(restored.id, concurrent[0].id, 'revoked semantic duplicates must reuse the existing entity')
+
+  const staleTarget = await createCreativeMemory({
+    userId: 1,
+    scopeType: 'user',
+    statement: 'Prefer stable editorial pacing',
+    status: 'candidate',
+    origin: 'inferred',
+    sourceWorkspaceSessionId: 'workspace_stale_target',
+  })
+  await updateCreativeMemory({ userId: 1, id: staleTarget.id, status: 'revoked' })
+  await assert.rejects(
+    () => updateCreativeMemory({
+      userId: 1,
+      id: staleTarget.id,
+      statement: 'Prefer energetic editorial pacing',
+      status: 'active',
+      expectedStatus: 'candidate',
+    }),
+    /changed concurrently/i,
+  )
+  assert.equal(
+    (await listCreativeMemories({ userId: 1 })).find((item) => item.id === staleTarget.id)?.status,
+    'revoked',
+    'a stale replacement must not reactivate a concurrently revoked memory',
+  )
+
+  const mixedStatusStatement = 'Prefer decisive high-contrast title cards'
+  const mixedStatus = await Promise.all([
+    createCreativeMemory({
+      userId: 1, scopeType: 'user', statement: mixedStatusStatement,
+      status: 'candidate', origin: 'inferred', sourceWorkspaceSessionId: 'workspace_candidate_first',
+    }),
+    createCreativeMemory({
+      userId: 1, scopeType: 'user', statement: mixedStatusStatement,
+      status: 'active', origin: 'explicit', sourceWorkspaceSessionId: 'workspace_active_second',
+    }),
+  ])
+  assert.equal(new Set(mixedStatus.map((item) => item.id)).size, 1)
+  assert.equal(
+    (await listCreativeMemories({ userId: 1 })).find((item) => item.id === mixedStatus[0]!.id)?.status,
+    'active',
+    'a concurrent explicit preference must promote an inferred candidate winner',
+  )
+
+  const interleaved = await createCreativeMemory({
+    userId: 1,
+    scopeType: 'user',
+    statement: 'Prefer calm documentary framing',
+    status: 'candidate',
+    origin: 'inferred',
+    sourceWorkspaceSessionId: 'workspace_interleaved_candidate',
+  })
+  const memoryDelegate = (prisma as unknown as {
+    creativeMemory: {
+      updateMany: (input: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>
+    }
+  }).creativeMemory
+  const originalUpdateMany = memoryDelegate.updateMany.bind(memoryDelegate)
+  let forcedConcurrentRevoke = false
+  memoryDelegate.updateMany = async (update) => {
+    if (!forcedConcurrentRevoke
+      && update.where.id === interleaved.id
+      && update.where.status === 'candidate'
+      && update.data.status === 'active') {
+      forcedConcurrentRevoke = true
+      await originalUpdateMany({ where: { id: interleaved.id, userId: 1 }, data: { status: 'revoked' } })
+      return { count: 0 }
+    }
+    return originalUpdateMany(update)
+  }
+  try {
+    const promoted = await createCreativeMemory({
+      userId: 1,
+      scopeType: 'user',
+      statement: 'Prefer calm documentary framing',
+      status: 'active',
+      origin: 'explicit',
+      sourceWorkspaceSessionId: 'workspace_interleaved_active',
+    })
+    assert.equal(promoted.status, 'active')
+    assert.equal(
+      (await listCreativeMemories({ userId: 1 })).find((item) => item.id === interleaved.id)?.status,
+      'active',
+      'an add must not report active while a concurrent revoke left the entity revoked',
+    )
+  } finally {
+    memoryDelegate.updateMany = originalUpdateMany
+  }
+
+  const migrationSql = readFileSync(
+    new URL('../prisma/migrations/202608110003_add_memory_semantic_identity/migration.sql', import.meta.url),
+    'utf8',
+  )
+  assert.match(
+    migrationSql,
+    /normalize\("statement",\s*NFKC\)/i,
+    'PostgreSQL hydration must use the same NFKC normalization as runtime and local JSON',
   )
 
   console.log('V2 creative memory smoke passed.')

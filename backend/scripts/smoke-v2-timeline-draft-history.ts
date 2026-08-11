@@ -16,10 +16,13 @@ const { createV2TimelineDraftRepository } = await import(
   '../src/pipeline-v2/timeline-draft-repository.js'
 )
 const { prisma } = await import('../src/shared/prisma.service.js')
+const { postV2TimelinePreview } = await import('../src/pipeline-v2/controller.js')
 const { executeV2TimelineDraftRun } = await import('../src/pipeline-v2/timeline-draft-runner.js')
 const {
   createV2IdempotencyRepository,
+  executeV2JsonIdempotentOperation,
   V2IdempotencyConflictError,
+  V2IdempotencyOperationFailedError,
 } = await import('../src/pipeline-v2/idempotency-repository.js')
 const {
   promoteRenderComponent,
@@ -32,17 +35,25 @@ const {
   deleteV2TimelineDraft,
   getV2TimelineDraft,
   getV2TimelineDrafts,
+  postV2TimelineDraftPreview,
+  putV2TimelineDraft,
 } = await import('../src/pipeline-v2/timeline-draft-controller.js')
 
 function request(input: {
   userId?: string
   draftId?: string
   limit?: string
+  idempotencyKey?: string
+  body?: unknown
 }) {
   return {
-    headers: { 'x-user-id': input.userId ?? '1' },
+    headers: {
+      'x-user-id': input.userId ?? '1',
+      ...(input.idempotencyKey ? { 'idempotency-key': input.idempotencyKey } : {}),
+    },
     params: input.draftId ? { draftId: input.draftId } : {},
     query: input.limit ? { limit: input.limit } : {},
+    body: input.body,
   } as never
 }
 
@@ -73,6 +84,55 @@ const plannerInput = {
   plannerMode: 'deterministic' as const,
 }
 const spec = buildDeterministicRemotionTimelineSpec(plannerInput)
+const ephemeralPreviewRequest = request({
+  idempotencyKey: 'ephemeral-preview-idempotency',
+  body: {
+    prompt: '无持久化幂等预览', plannerMode: 'deterministic', durationSec: 6,
+    canvas: { width: 640, height: 360, fps: 12 },
+  },
+})
+const ephemeralPreviewA = response()
+await postV2TimelinePreview(ephemeralPreviewRequest, ephemeralPreviewA.res)
+const ephemeralPreviewB = response()
+await postV2TimelinePreview(ephemeralPreviewRequest, ephemeralPreviewB.res)
+assert.deepEqual(
+  ephemeralPreviewB.result().body,
+  JSON.parse(JSON.stringify(ephemeralPreviewA.result().body)),
+)
+const previewRequest = request({
+  idempotencyKey: 'draft-preview-idempotency',
+  body: {
+    prompt: '幂等预览草稿',
+    plannerMode: 'deterministic',
+    durationSec: 8,
+    canvas: { width: 640, height: 360, fps: 12 },
+  },
+})
+const previewResponseA = response()
+await postV2TimelineDraftPreview(previewRequest, previewResponseA.res)
+const previewResponseB = response()
+await postV2TimelineDraftPreview(previewRequest, previewResponseB.res)
+assert.equal(previewResponseA.result().statusCode, 200)
+assert.deepEqual(
+  previewResponseB.result().body,
+  JSON.parse(JSON.stringify(previewResponseA.result().body)),
+)
+const previewDraft = (previewResponseA.result().body as { draft: { draftId: string; revision: number; spec: typeof spec } }).draft
+const saveRequest = request({
+  draftId: previewDraft.draftId,
+  idempotencyKey: 'draft-save-idempotency',
+  body: {
+    baseRevision: previewDraft.revision,
+    spec: { ...previewDraft.spec, task_id: `${previewDraft.spec.task_id}_saved` },
+  },
+})
+const saveResponseA = response()
+await putV2TimelineDraft(saveRequest, saveResponseA.res)
+const saveResponseB = response()
+await putV2TimelineDraft(saveRequest, saveResponseB.res)
+assert.equal(saveResponseA.result().statusCode, 200)
+assert.deepEqual(saveResponseB.result().body, JSON.parse(JSON.stringify(saveResponseA.result().body)))
+assert.equal(await repository.deleteDraft(previewDraft.draftId, 1), true)
 const legacySpec = structuredClone(spec)
 delete legacySpec.creative_brief
 const hydratedLegacyDraft = await repository.createDraft({
@@ -197,6 +257,86 @@ assert.equal(saved.creationMode, 'material_brief')
 const source = await repository.getRevision(saved.id, saved.revision, 1)
 assert.ok(source)
 const idempotency = createV2IdempotencyRepository()
+const directorRequest = {
+  userId: 1,
+  operation: 'director.turn',
+  idempotencyKey: 'director-turn-without-draft',
+  resourceKey: 'workspace-session-1',
+  requestHash: 'director-request-a',
+}
+const directorReservations = await Promise.all([
+  idempotency.reserve(directorRequest),
+  idempotency.reserve(directorRequest),
+])
+assert.equal(directorReservations.filter((item) => item.kind === 'reserved').length, 1)
+assert.equal(directorReservations.filter((item) => item.kind === 'replay').length, 1)
+const completedDirectorReceipt = await idempotency.update({
+  id: directorReservations[0]!.receipt.id,
+  status: 'completed',
+  resultJson: {
+    assistantReply: '已完成',
+    events: [{ type: 'done' }],
+  },
+})
+assert.equal(completedDirectorReceipt.draftId, undefined)
+assert.deepEqual(completedDirectorReceipt.resultJson, {
+  assistantReply: '已完成',
+  events: [{ type: 'done' }],
+})
+await assert.rejects(
+  () => idempotency.reserve({
+    ...directorRequest,
+    resourceKey: 'workspace-session-2',
+    requestHash: 'director-request-b',
+  }),
+  V2IdempotencyConflictError,
+)
+let previewExecutions = 0
+const previewOperation = () => executeV2JsonIdempotentOperation({
+  repository: idempotency,
+  reservation: {
+    userId: 1,
+    operation: 'timeline.preview',
+    idempotencyKey: 'preview-result-replay',
+    resourceKey: 'new-preview',
+    requestHash: 'preview-request-a',
+  },
+  execute: async () => {
+    previewExecutions += 1
+    return { previewId: 'preview_1', ok: true }
+  },
+})
+assert.equal((await previewOperation()).kind, 'executed')
+const previewReplay = await previewOperation()
+assert.equal(previewReplay.kind, 'replayed')
+assert.deepEqual(previewReplay.kind === 'replayed' ? previewReplay.value : null, {
+  previewId: 'preview_1', ok: true,
+})
+assert.equal(previewExecutions, 1)
+let thrownExecutions = 0
+const thrownOperation = () => executeV2JsonIdempotentOperation({
+  repository: idempotency,
+  reservation: {
+    userId: 1,
+    operation: 'timeline.preview',
+    idempotencyKey: 'preview-thrown-failure-replay',
+    resourceKey: 'failed-preview',
+    requestHash: 'failed-preview-request',
+  },
+  execute: async () => {
+    thrownExecutions += 1
+    throw new Error('stable preview failure')
+  },
+})
+for (let attempt = 0; attempt < 2; attempt += 1) {
+  await assert.rejects(
+    thrownOperation,
+    (error: unknown) => error instanceof V2IdempotencyOperationFailedError
+      && error.code === 'operation_failed'
+      && error.message === 'stable preview failure',
+  )
+}
+assert.equal(thrownExecutions, 1, 'a thrown idempotent failure must replay without executing again')
 const firstReservation = await idempotency.reserve({
   userId: 1, draftId: draft.id, operation: 'timeline.render', idempotencyKey: 'history-key',
   resourceKey: `${draft.id}:${source.revision}`, requestHash: 'request-a', resultRef: 'run-a',

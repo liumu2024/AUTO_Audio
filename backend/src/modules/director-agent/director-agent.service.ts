@@ -22,6 +22,7 @@ import {
   searchCreativeMemories,
   type CreativeMemoryActionReceipt,
 } from '../creative-memory/creative-memory.service.js'
+import { searchCreativeKnowledge } from '../creative-knowledge/creative-knowledge.service.js'
 import {
   appendDirectorWorkspaceTurn,
   applyDirectorRequirementChange,
@@ -37,6 +38,7 @@ import { routeConversationSurface } from './surface-router.js'
 import type {
   DirectorAgentChatRequest,
 } from './director-agent.types.js'
+import { normalizeDirectorWorkspaceId } from './director-turn-idempotency.js'
 import type {
   DirectorContextSlots,
   DirectorEffectiveCreativeConfig,
@@ -53,80 +55,6 @@ export async function getDirectorWorkspaceSession(input: {
   return workspaceSessions.get(input.workspaceSessionId, input.userId)
 }
 
-export async function recordDirectorWorkspaceOutcome(input: {
-  workspaceSessionId: string
-  userId: number
-  action: string
-  ok: boolean
-  outcome: string
-  traceDir?: string
-  currentTimeline?: DirectorAgentChatRequest['context']['currentTimeline']
-}) {
-  const current = await workspaceSessions.get(input.workspaceSessionId, input.userId)
-  if (!current) return null
-  const draftId = input.currentTimeline?.draftId
-  const revision = input.currentTimeline?.currentRevision
-  const persistedRevision = draftId && revision
-    ? await timelineDrafts.getRevision(draftId, revision, input.userId)
-    : null
-  const timelineFacts = persistedRevision
-    ? buildDirectorTimelineFacts(persistedRevision.revision, persistedRevision.spec)
-    : undefined
-  let state = applyDirectorWorkspacePatch(current.state, {
-    context: input.currentTimeline
-      ? { currentTimeline: input.currentTimeline, timelineFacts }
-      : undefined,
-    draftId: input.currentTimeline?.draftId,
-    baseRevision: input.currentTimeline?.currentRevision,
-    selectedItemId:
-      input.currentTimeline?.selectedClipId ?? input.currentTimeline?.selectedSceneId,
-    latestExecution: {
-      action: input.action,
-      outcome: input.outcome,
-      traceDir: input.traceDir,
-    },
-    recentFailure: input.ok
-      ? null
-      : { reason: input.outcome, recovery: '保留当前 V2 草稿；修正问题后可继续讨论或重试。' },
-  })
-  state = appendDirectorWorkspaceTurn(state, {
-    role: 'system',
-    content: `${input.action}: ${input.outcome}`,
-    at: new Date().toISOString(),
-    outcome: input.ok ? 'completed' : 'failed',
-  })
-  state = compactDirectorWorkspaceTurns(state)
-  const saved = await workspaceSessions.save({
-    id: input.workspaceSessionId,
-    userId: input.userId,
-    state,
-  })
-  const trace = createV2TraceWriter({
-    taskId: `${input.workspaceSessionId}__outcome_${Date.now()}`,
-    sessionId: input.workspaceSessionId,
-    operationId: `outcome_${Date.now()}`,
-  })
-  await trace.writeJson('00-director-turn', 'execution-outcome.json', {
-    action: input.action,
-    ok: input.ok,
-    outcome: input.outcome,
-    trace_dir: input.traceDir ?? null,
-    draft_id: saved.state.draftId ?? null,
-    revision: saved.state.baseRevision ?? null,
-  })
-  if (timelineFacts) await trace.writeJson('00-director-turn', 'persisted-v2-timeline-facts.json', timelineFacts)
-  await trace.appendSessionEvent({
-    type: 'execution_outcome',
-    action: input.action,
-    ok: input.ok,
-    outcome: input.outcome,
-    draft_id: saved.state.draftId ?? null,
-    revision: saved.state.baseRevision ?? null,
-    artifact_dir: trace.rootDir,
-  })
-  return { state: saved.state, traceDir: trace.rootDir }
-}
-
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -141,13 +69,6 @@ function sampleLabel(input: DirectorAgentChatRequest) {
   if (input.runtime.isSampleParsed) return '样例视频已完成结构和风格解析'
   if (input.runtime.sampleUrl) return '样例视频已上传，尚未解析'
   return '尚未上传样例视频'
-}
-
-function workspaceId(value: string | undefined): string {
-  const candidate = value?.trim()
-  return candidate && /^[a-zA-Z0-9_-]{8,100}$/.test(candidate)
-    ? candidate
-    : `v2_director_${randomUUID()}`
 }
 
 function runtimeObservationPatch(input: DirectorAgentChatRequest) {
@@ -377,11 +298,23 @@ export async function* streamDirectorAgentChat(
     saveWorkspace?: typeof workspaceSessions.save
   } = {},
 ): AsyncGenerator<DirectorAgentStreamEvent> {
-  const id = workspaceId(input.workspaceSessionId)
+  const id = normalizeDirectorWorkspaceId(input.workspaceSessionId)
   const turnRequestId = input.turnRequestId?.trim().slice(0, 200) || randomUUID()
   const userId = input.userId ?? 1
   const persisted = await workspaceSessions.get(id, userId)
   const before = persisted?.state ?? createDirectorWorkspaceState({ context: input.context })
+  if (
+    persisted
+    && input.workspaceStateRevision !== undefined
+    && input.workspaceStateRevision !== before.stateRevision
+  ) {
+    yield {
+      type: 'error',
+      message: `工作区已从 v${input.workspaceStateRevision} 更新到 v${before.stateRevision}，请基于最新状态重试本轮请求。`,
+    }
+    yield { type: 'done' }
+    return
+  }
   let workspaceState = persisted
     ? applyDirectorWorkspacePatch(before, runtimeObservationPatch(input))
     : before
@@ -521,6 +454,25 @@ export async function* streamDirectorAgentChat(
       return summary
     }, {} as Record<string, number>),
     error: creativeMemoryRetrievalError ?? null,
+  })
+  let creativeKnowledgeRetrieval = { items: [], audit: [] } as Awaited<ReturnType<typeof searchCreativeKnowledge>>
+  let creativeKnowledgeRetrievalError: string | undefined
+  try {
+    creativeKnowledgeRetrieval = await searchCreativeKnowledge({ query: input.prompt })
+  } catch (error) {
+    creativeKnowledgeRetrievalError = error instanceof Error ? error.message : String(error)
+  }
+  await trace.writeJson('00-director-turn', 'creative-knowledge-retrieval.json', {
+    query: input.prompt,
+    selected: creativeKnowledgeRetrieval.items.map((item) => ({
+      id: item.knowledge.id,
+      statement: item.knowledge.statement,
+      applicability: item.knowledge.applicability,
+      score: item.score,
+      rank: item.rank,
+    })),
+    audit: creativeKnowledgeRetrieval.audit,
+    error: creativeKnowledgeRetrievalError ?? null,
   })
   const routed = await routeDirectorIntentWithLlm({
     ...input,
@@ -766,6 +718,9 @@ export async function* streamDirectorAgentChat(
             recalledCreativeMemories: creativeMemoryRetrieval.active.map(
               (item) => item.memory.statement,
             ),
+            recalledCreativeKnowledge: creativeKnowledgeRetrieval.items.map(
+              (item) => item.knowledge.statement,
+            ),
             authorizedDraftComponentIds: request.dependsOn.flatMap((ref) => {
               const dependencyRequest = requestedTools.find((item) => item.ref === ref)
               const dependencyResult = dependencyRequest
@@ -965,12 +920,19 @@ export async function* streamDirectorAgentChat(
   workspaceState = compactDirectorWorkspaceTurns(workspaceState)
   let saved
   try {
-    saved = await (dependencies.saveWorkspace ?? workspaceSessions.save)({ id, userId, state: workspaceState })
+    saved = await (dependencies.saveWorkspace ?? workspaceSessions.save)({
+      id,
+      userId,
+      state: workspaceState,
+      expectedStateRevision: before.stateRevision,
+    })
   } catch (error) {
+    const message = workspaceSaveFailureConfirmation(toolResults)
     await trace.writeJson('00-director-turn', 'workspace-save-failure.json', {
       error: error instanceof Error ? error.message : String(error),
     })
-    yield { type: 'assistant_reply', message: workspaceSaveFailureConfirmation(toolResults) }
+    yield { type: 'assistant_reply', message }
+    yield { type: 'error', message }
     yield { type: 'done' }
     return
   }
@@ -999,6 +961,11 @@ export async function* streamDirectorAgentChat(
     },
     creative_memory_requests: routed.memoryActions,
     creative_memory_changes: memoryActionReceipts,
+    creative_knowledge_retrieval: {
+      selected: creativeKnowledgeRetrieval.items,
+      audit: creativeKnowledgeRetrieval.audit,
+      error: creativeKnowledgeRetrievalError ?? null,
+    },
     action_receipts: actionReceipts,
     effective_creative_config: effectiveCreativeConfig,
     fallback_reason: routed.fallbackReason ?? null,
@@ -1045,6 +1012,8 @@ export async function* streamDirectorAgentChat(
   yield {
     type: 'workspace_session',
     workspaceSessionId: id,
+    turnRequestId,
+    stateRevision: saved.state.stateRevision,
     state: saved.state,
     traceDir: trace.rootDir,
     modelCalled: routed.modelCalled,

@@ -19,6 +19,8 @@ export interface ConfirmedRequirement {
 }
 
 export interface DirectorWorkspaceState {
+  /** Monotonic server revision used to reject stale workspace events. */
+  stateRevision: number
   context: DirectorContext
   confirmedRequirements: ConfirmedRequirement[]
   draftId?: string

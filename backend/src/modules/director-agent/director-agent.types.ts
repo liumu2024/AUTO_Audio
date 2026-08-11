@@ -13,6 +13,8 @@ export interface DirectorAgentChatRequest {
   contextSampleAuthoritative?: boolean
   /** Stable for one user submission and reused only for transport retries. */
   turnRequestId?: string
+  /** Last server workspace revision observed by this browser. */
+  workspaceStateRevision?: number
   /** Stable browser workspace id; the server creates a V2 session when absent. */
   workspaceSessionId?: string
   /** Injected by the controller from the authenticated/request user boundary. */

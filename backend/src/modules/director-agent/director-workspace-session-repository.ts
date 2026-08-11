@@ -18,6 +18,15 @@ interface StoredSessions {
   sessions: DirectorWorkspaceSessionRecord[]
 }
 
+export class DirectorWorkspaceRevisionConflictError extends Error {
+  constructor(
+    readonly expectedStateRevision: number,
+    readonly actualStateRevision: number,
+  ) {
+    super(`Director workspace changed concurrently (expected revision ${expectedStateRevision}, actual ${actualStateRevision}).`)
+  }
+}
+
 function storagePath(): string {
   return path.resolve(
     process.cwd(),
@@ -77,6 +86,7 @@ export function createDirectorWorkspaceSessionRepository() {
       id: string
       userId: number
       state: DirectorWorkspaceState
+      expectedStateRevision: number
     }): Promise<DirectorWorkspaceSessionRecord> =>
       locked(async () => {
         const data = await readAll()
@@ -84,10 +94,17 @@ export function createDirectorWorkspaceSessionRepository() {
         const index = data.sessions.findIndex(
           (item) => item.id === input.id && item.userId === input.userId,
         )
+        const hydrated = hydrateDirectorWorkspaceState(input.state)
+        const previousRevision = index >= 0
+          ? hydrateDirectorWorkspaceState(data.sessions[index]!.state).stateRevision
+          : 0
+        if (previousRevision !== input.expectedStateRevision) {
+          throw new DirectorWorkspaceRevisionConflictError(input.expectedStateRevision, previousRevision)
+        }
         const next: DirectorWorkspaceSessionRecord = {
           id: input.id,
           userId: input.userId,
-          state: hydrateDirectorWorkspaceState(input.state),
+          state: { ...hydrated, stateRevision: previousRevision + 1 },
           createdAt: index >= 0 ? data.sessions[index]!.createdAt : now,
           updatedAt: now,
         }

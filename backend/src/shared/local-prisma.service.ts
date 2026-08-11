@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
@@ -57,6 +58,8 @@ interface LocalCreativeMemory {
   userId: number
   scopeType: 'user' | 'draft'
   draftId: string | null
+  scopeKey: string
+  semanticKey: string
   statement: string
   status: 'active' | 'candidate' | 'revoked'
   origin: 'explicit' | 'inferred'
@@ -68,10 +71,23 @@ interface LocalCreativeMemory {
   revokedAt: string | null
 }
 
+interface LocalCreativeKnowledge {
+  id: string
+  statement: string
+  applicability: string
+  status: 'active' | 'candidate' | 'revoked'
+  semanticKey: string
+  sourcesJson: unknown
+  createdByUserId: number | null
+  createdAt: string
+  updatedAt: string
+  revokedAt: string | null
+}
+
 interface LocalV2IdempotencyReceipt {
   id: string
   userId: number
-  draftId: string
+  draftId: string | null
   operation: string
   idempotencyKey: string
   resourceKey: string
@@ -79,6 +95,7 @@ interface LocalV2IdempotencyReceipt {
   status: 'running' | 'completed' | 'failed'
   phase: string | null
   resultRef: string | null
+  resultJson: unknown
   providerTaskId: string | null
   failureJson: unknown
   createdAt: string
@@ -92,6 +109,7 @@ interface LocalDbState {
   v2TimelineRevisions: LocalV2TimelineRevision[]
   v2TimelineRenderRuns: LocalV2TimelineRenderRun[]
   creativeMemories: LocalCreativeMemory[]
+  creativeKnowledge: LocalCreativeKnowledge[]
   v2IdempotencyReceipts: LocalV2IdempotencyReceipt[]
 }
 
@@ -122,8 +140,19 @@ function defaultState(): LocalDbState {
     v2TimelineRevisions: [],
     v2TimelineRenderRuns: [],
     creativeMemories: [],
+    creativeKnowledge: [],
     v2IdempotencyReceipts: [],
   }
+}
+
+function localMemoryScopeKey(memory: Pick<LocalCreativeMemory, 'scopeType' | 'draftId'>): string {
+  return memory.scopeType === 'draft' ? `draft:${memory.draftId}` : 'user'
+}
+
+function localMemorySemanticKey(statement: string): string {
+  return createHash('md5')
+    .update(statement.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim())
+    .digest('hex')
 }
 
 function loadState(): LocalDbState {
@@ -141,7 +170,12 @@ function loadState(): LocalDbState {
     v2TimelineDrafts: saved.v2TimelineDrafts ?? [],
     v2TimelineRevisions: saved.v2TimelineRevisions ?? [],
     v2TimelineRenderRuns: saved.v2TimelineRenderRuns ?? [],
-    creativeMemories: saved.creativeMemories ?? [],
+    creativeMemories: (saved.creativeMemories ?? []).map((memory) => ({
+      ...memory,
+      scopeKey: memory.scopeKey || localMemoryScopeKey(memory),
+      semanticKey: memory.semanticKey || localMemorySemanticKey(memory.statement),
+    })),
+    creativeKnowledge: saved.creativeKnowledge ?? [],
     v2IdempotencyReceipts: saved.v2IdempotencyReceipts ?? [],
   }
 }
@@ -188,6 +222,15 @@ function creativeMemoryOut(memory: LocalCreativeMemory): Record<string, unknown>
     createdAt: new Date(memory.createdAt),
     updatedAt: new Date(memory.updatedAt),
     revokedAt: ensureDate(memory.revokedAt),
+  }
+}
+
+function creativeKnowledgeOut(knowledge: LocalCreativeKnowledge): Record<string, unknown> {
+  return {
+    ...clone(knowledge),
+    createdAt: new Date(knowledge.createdAt),
+    updatedAt: new Date(knowledge.updatedAt),
+    revokedAt: ensureDate(knowledge.revokedAt),
   }
 }
 
@@ -310,7 +353,7 @@ function makeLocalPrisma() {
             (memory) => !memory.draftId || !deletedIds.has(memory.draftId),
           )
           state.v2IdempotencyReceipts = state.v2IdempotencyReceipts.filter(
-            (receipt) => !deletedIds.has(receipt.draftId),
+            (receipt) => receipt.draftId === null || !deletedIds.has(receipt.draftId),
           )
           return { count: deletedIds.size }
         }),
@@ -350,11 +393,25 @@ function makeLocalPrisma() {
       create: async (args: { data: Partial<LocalCreativeMemory> }) =>
         write(() => {
           const now = new Date().toISOString()
+          const scopeType = args.data.scopeType === 'draft' ? 'draft' : 'user'
+          const draftId = (args.data.draftId as string | null | undefined) ?? null
+          const scopeKey = String(args.data.scopeKey ?? localMemoryScopeKey({ scopeType, draftId }))
+          const semanticKey = String(
+            args.data.semanticKey ?? localMemorySemanticKey(String(args.data.statement)),
+          )
+          if (state.creativeMemories.some((item) =>
+            item.userId === Number(args.data.userId)
+            && item.scopeKey === scopeKey
+            && item.semanticKey === semanticKey)) {
+            throw new Error('Creative memory semantic identity already exists')
+          }
           const memory: LocalCreativeMemory = {
             id: String(args.data.id),
             userId: Number(args.data.userId),
-            scopeType: args.data.scopeType === 'draft' ? 'draft' : 'user',
-            draftId: (args.data.draftId as string | null | undefined) ?? null,
+            scopeType,
+            draftId,
+            scopeKey,
+            semanticKey,
             statement: String(args.data.statement),
             status: (args.data.status as LocalCreativeMemory['status']) ?? 'active',
             origin: (args.data.origin as LocalCreativeMemory['origin']) ?? 'explicit',
@@ -410,6 +467,13 @@ function makeLocalPrisma() {
             )) continue
             const rawRevokedAt = (args.data as unknown as Record<string, unknown>).revokedAt
             const data = clone(args.data) as Partial<LocalCreativeMemory>
+            if (data.semanticKey && state.creativeMemories.some((item) =>
+              item.id !== memory.id
+              && item.userId === memory.userId
+              && item.scopeKey === memory.scopeKey
+              && item.semanticKey === data.semanticKey)) {
+              throw new Error('Creative memory semantic identity already exists')
+            }
             Object.assign(memory, data, { updatedAt: new Date().toISOString() })
             if (rawRevokedAt instanceof Date) {
               memory.revokedAt = rawRevokedAt.toISOString()
@@ -429,6 +493,85 @@ function makeLocalPrisma() {
           return { count: before - state.creativeMemories.length }
         }),
     },
+    creativeKnowledge: {
+      create: async (args: { data: Partial<LocalCreativeKnowledge> }) =>
+        write(() => {
+          const semanticKey = String(args.data.semanticKey)
+          if (state.creativeKnowledge.some((item) => item.semanticKey === semanticKey)) {
+            throw new Error('Creative knowledge semantic identity already exists')
+          }
+          const now = new Date().toISOString()
+          const knowledge: LocalCreativeKnowledge = {
+            id: String(args.data.id),
+            statement: String(args.data.statement),
+            applicability: String(args.data.applicability),
+            status: (args.data.status as LocalCreativeKnowledge['status']) ?? 'candidate',
+            semanticKey,
+            sourcesJson: args.data.sourcesJson ?? [],
+            createdByUserId: args.data.createdByUserId == null ? null : Number(args.data.createdByUserId),
+            createdAt: now,
+            updatedAt: now,
+            revokedAt: null,
+          }
+          state.creativeKnowledge.push(knowledge)
+          return creativeKnowledgeOut(knowledge)
+        }),
+      findMany: async (args: {
+        where?: Record<string, unknown>
+        orderBy?: Record<string, 'asc' | 'desc'>
+        take?: number
+      }) => {
+        const rows = state.creativeKnowledge.filter((knowledge) =>
+          Object.entries(args.where ?? {}).every(
+            ([key, value]) => knowledge[key as keyof LocalCreativeKnowledge] === value,
+          ),
+        )
+        const [field, direction] = Object.entries(args.orderBy ?? {})[0] ?? []
+        if (field) {
+          const factor = direction === 'asc' ? 1 : -1
+          rows.sort((left, right) => String(left[field as keyof LocalCreativeKnowledge] ?? '')
+            .localeCompare(String(right[field as keyof LocalCreativeKnowledge] ?? '')) * factor)
+        }
+        return rows.slice(0, args.take ?? undefined).map(creativeKnowledgeOut)
+      },
+      findFirst: async (args: { where?: Record<string, unknown> }) => {
+        const row = state.creativeKnowledge.find((knowledge) =>
+          Object.entries(args.where ?? {}).every(
+            ([key, value]) => knowledge[key as keyof LocalCreativeKnowledge] === value,
+          ),
+        )
+        return row ? creativeKnowledgeOut(row) : null
+      },
+      updateMany: async (args: {
+        where: Record<string, unknown>
+        data: Partial<LocalCreativeKnowledge>
+      }) => write(() => {
+        let count = 0
+        for (const knowledge of state.creativeKnowledge) {
+          if (!Object.entries(args.where).every(
+            ([key, value]) => knowledge[key as keyof LocalCreativeKnowledge] === value,
+          )) continue
+          if (args.data.semanticKey && state.creativeKnowledge.some((item) =>
+            item.id !== knowledge.id && item.semanticKey === args.data.semanticKey)) {
+            throw new Error('Creative knowledge semantic identity already exists')
+          }
+          const rawRevokedAt = (args.data as unknown as Record<string, unknown>).revokedAt
+          Object.assign(knowledge, clone(args.data), { updatedAt: new Date().toISOString() })
+          if (rawRevokedAt instanceof Date) knowledge.revokedAt = rawRevokedAt.toISOString()
+          count += 1
+        }
+        return { count }
+      }),
+      deleteMany: async (args: { where: Record<string, unknown> }) => write(() => {
+        const before = state.creativeKnowledge.length
+        state.creativeKnowledge = state.creativeKnowledge.filter((knowledge) =>
+          !Object.entries(args.where).every(
+            ([key, value]) => knowledge[key as keyof LocalCreativeKnowledge] === value,
+          ),
+        )
+        return { count: before - state.creativeKnowledge.length }
+      }),
+    },
     v2IdempotencyReceipt: {
       create: async (args: { data: Partial<LocalV2IdempotencyReceipt> }) =>
         write(() => {
@@ -441,7 +584,7 @@ function makeLocalPrisma() {
           const receipt: LocalV2IdempotencyReceipt = {
             id: String(args.data.id),
             userId: Number(args.data.userId),
-            draftId: String(args.data.draftId),
+            draftId: args.data.draftId == null ? null : String(args.data.draftId),
             operation: String(args.data.operation),
             idempotencyKey: String(args.data.idempotencyKey),
             resourceKey: String(args.data.resourceKey),
@@ -449,6 +592,7 @@ function makeLocalPrisma() {
             status: (args.data.status as LocalV2IdempotencyReceipt['status']) ?? 'running',
             phase: (args.data.phase as string | null | undefined) ?? null,
             resultRef: (args.data.resultRef as string | null | undefined) ?? null,
+            resultJson: args.data.resultJson ?? null,
             providerTaskId: (args.data.providerTaskId as string | null | undefined) ?? null,
             failureJson: args.data.failureJson ?? null,
             createdAt: now,

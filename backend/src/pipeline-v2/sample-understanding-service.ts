@@ -6,6 +6,7 @@ import {
   type V2SampleUnderstandingResult,
 } from '../../../shared/types/v2-sample-understanding.js'
 import { extractStructuredJsonCandidate } from '../modules/agent-tools/structured-json-tool.js'
+import { createCreativeKnowledgeCandidatesFromSample } from '../modules/creative-knowledge/creative-knowledge.service.js'
 import { env } from '../config/env.js'
 import { extractAudioVisualUnderstandingHints } from './audio-visual-feature-extractor.js'
 import { resolveVideoInput } from './resolve-video-input.js'
@@ -67,6 +68,7 @@ const SampleUnderstandingJsonSchema = {
 } as const
 
 export interface V2SampleAnalyzeInput {
+  userId?: number
   taskId: string
   prompt: string
   sampleVideoPath: string
@@ -417,6 +419,22 @@ export async function analyzeV2Sample(input: V2SampleAnalyzeInput): Promise<V2Sa
     }
   }
   await trace.writeJson('02-sample-understanding', 'sample-understanding.json', understanding)
+  if (input.userId) {
+    try {
+      const candidates = await createCreativeKnowledgeCandidatesFromSample({
+        userId: input.userId,
+        understanding,
+      })
+      await trace.writeJson('02-sample-understanding', 'creative-knowledge-candidates.json', {
+        knowledge_ids: candidates.map((item) => item.id),
+        count: candidates.length,
+      })
+    } catch (error) {
+      await trace.writeJson('02-sample-understanding', 'creative-knowledge-candidates-error.json', {
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
   await trace.writeText('02-sample-understanding', 'sample-understanding.md', [
     '# V2 Sample Understanding', '', understanding.summary, '',
     `- Source: ${understanding.source}`,

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import type { Prisma } from '@prisma/client'
 
 import { prisma } from '../shared/prisma.service.js'
 
@@ -8,7 +9,7 @@ export type V2IdempotencyPhase = 'reserved' | 'submitting' | 'polling' | 'render
 export interface V2IdempotencyReceiptRecord {
   id: string
   userId: number
-  draftId: string
+  draftId?: string
   operation: string
   idempotencyKey: string
   resourceKey: string
@@ -16,6 +17,7 @@ export interface V2IdempotencyReceiptRecord {
   status: V2IdempotencyStatus
   phase?: V2IdempotencyPhase
   resultRef?: string
+  resultJson?: unknown
   providerTaskId?: string
   failure?: { code: string; message: string }
   createdAt: Date
@@ -26,6 +28,13 @@ export interface V2IdempotencyReceiptRecord {
 export class V2IdempotencyConflictError extends Error {
   constructor() {
     super('Idempotency key was already used for a different request.')
+  }
+}
+
+export class V2IdempotencyOperationFailedError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message)
+    this.name = 'V2IdempotencyOperationFailedError'
   }
 }
 
@@ -47,7 +56,7 @@ function fromRow(row: Record<string, unknown>): V2IdempotencyReceiptRecord {
   return {
     id: String(row.id),
     userId: Number(row.userId),
-    draftId: String(row.draftId),
+    draftId: row.draftId == null ? undefined : String(row.draftId),
     operation: String(row.operation),
     idempotencyKey: String(row.idempotencyKey),
     resourceKey: String(row.resourceKey),
@@ -55,6 +64,7 @@ function fromRow(row: Record<string, unknown>): V2IdempotencyReceiptRecord {
     status: row.status as V2IdempotencyStatus,
     phase: (row.phase as V2IdempotencyPhase | null) ?? undefined,
     resultRef: (row.resultRef as string | null) ?? undefined,
+    resultJson: row.resultJson ?? undefined,
     providerTaskId: (row.providerTaskId as string | null) ?? undefined,
     failure: (row.failureJson as V2IdempotencyReceiptRecord['failure'] | null) ?? undefined,
     createdAt: row.createdAt as Date,
@@ -66,7 +76,7 @@ function fromRow(row: Record<string, unknown>): V2IdempotencyReceiptRecord {
 export interface V2IdempotencyRepository {
   reserve(input: {
     userId: number
-    draftId: string
+    draftId?: string
     operation: string
     idempotencyKey: string
     resourceKey: string
@@ -79,9 +89,72 @@ export interface V2IdempotencyRepository {
     status?: V2IdempotencyStatus
     phase?: V2IdempotencyPhase
     resultRef?: string
+    resultJson?: unknown
     providerTaskId?: string
     failure?: V2IdempotencyReceiptRecord['failure']
   }): Promise<V2IdempotencyReceiptRecord>
+}
+
+export type V2JsonIdempotentOperationResult<T> =
+  | { kind: 'executed' | 'replayed'; value: T; receipt: V2IdempotencyReceiptRecord }
+  | { kind: 'running'; receipt: V2IdempotencyReceiptRecord }
+  | { kind: 'failed'; value?: T; receipt: V2IdempotencyReceiptRecord }
+
+function storedJsonValue<T>(value: unknown): T | undefined {
+  if (!value || typeof value !== 'object' || !Object.hasOwn(value, 'value')) return undefined
+  return (value as { value: T }).value
+}
+
+export async function executeV2JsonIdempotentOperation<T>(input: {
+  repository?: V2IdempotencyRepository
+  reservation: Parameters<V2IdempotencyRepository['reserve']>[0]
+  execute: () => Promise<T>
+  failureFromResult?: (value: T) => V2IdempotencyReceiptRecord['failure'] | undefined
+}): Promise<V2JsonIdempotentOperationResult<T>> {
+  const repository = input.repository ?? createV2IdempotencyRepository()
+  const reservation = await repository.reserve(input.reservation)
+  if (reservation.kind === 'replay') {
+    const value = storedJsonValue<T>(reservation.receipt.resultJson)
+    if (reservation.receipt.status === 'running') {
+      return { kind: 'running', receipt: reservation.receipt }
+    }
+    if (reservation.receipt.status === 'failed') {
+      if (value === undefined) {
+        throw new V2IdempotencyOperationFailedError(
+          reservation.receipt.failure?.code ?? 'operation_failed',
+          reservation.receipt.failure?.message ?? 'The idempotent operation failed.',
+        )
+      }
+      return { kind: 'failed', ...(value === undefined ? {} : { value }), receipt: reservation.receipt }
+    }
+    if (value === undefined) {
+      throw new Error(`Idempotent result ${reservation.receipt.id} is missing resultJson.`)
+    }
+    return { kind: 'replayed', value, receipt: reservation.receipt }
+  }
+
+  try {
+    const value = await input.execute()
+    const failure = input.failureFromResult?.(value)
+    const receipt = await repository.update({
+      id: reservation.receipt.id,
+      status: failure ? 'failed' : 'completed',
+      resultJson: { value },
+      ...(failure ? { failure } : {}),
+    })
+    return failure
+      ? { kind: 'failed', value, receipt }
+      : { kind: 'executed', value, receipt }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const failure = { code: 'operation_failed', message }
+    await repository.update({
+      id: reservation.receipt.id,
+      status: 'failed',
+      failure,
+    })
+    throw new V2IdempotencyOperationFailedError(failure.code, failure.message)
+  }
 }
 
 export function createV2IdempotencyRepository(): V2IdempotencyRepository {
@@ -123,6 +196,9 @@ export function createV2IdempotencyRepository(): V2IdempotencyRepository {
           ...(input.status ? { status: input.status } : {}),
           ...(input.phase ? { phase: input.phase } : {}),
           ...(input.resultRef ? { resultRef: input.resultRef } : {}),
+          ...(Object.prototype.hasOwnProperty.call(input, 'resultJson')
+            ? { resultJson: input.resultJson as Prisma.InputJsonValue }
+            : {}),
           ...(input.providerTaskId ? { providerTaskId: input.providerTaskId } : {}),
           ...(input.failure ? { failureJson: input.failure } : {}),
           ...(input.status === 'completed' || input.status === 'failed' ? { completedAt: new Date() } : {}),
