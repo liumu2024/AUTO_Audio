@@ -22,7 +22,6 @@ export interface V2PlanningContext {
   recalledCreativeMemories?: string[]
   draftId?: string
   baseRevision?: number
-  selectedClipId?: string
   authorizationEvidence?: string
 }
 
@@ -61,6 +60,8 @@ export interface V2PlannerInput {
   revisionBaseSpec?: RemotionTimelineSpecV1
   /** Tool-authorized field scope applied before review and persistence. */
   revisionScope?: V2TimelineRevisionScope
+  /** Distinguishes a creative-direction update from an explicit whole-plan replacement. */
+  revisionGlobalMode?: 'brief_update' | 'full_replan'
   /** Tool-authorized target scene for the scene revision scope. */
   revisionSceneId?: string
   /** Tool-authorized contiguous scene range for structural revisions. */

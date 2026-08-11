@@ -174,6 +174,51 @@ export function validateRemotionTimelineSpec(value: unknown): RemotionTimelineVa
       addIssue(issues, 'error', `${path}.source`, 'unsupported asset source.')
     }
   })
+  const briefImageReferenceIds = new Set(
+    (Array.isArray(spec.creative_brief?.image_references) ? spec.creative_brief.image_references : [])
+      .map((reference) => reference.asset_id),
+  )
+
+  if (spec.creative_brief !== undefined) {
+    const brief = spec.creative_brief
+    if (!isRecord(brief) || typeof brief.direction !== 'string' || !brief.direction.trim()) {
+      addIssue(issues, 'error', 'creative_brief.direction', 'creative brief direction is required.')
+    }
+    const references = Array.isArray(brief?.image_references) ? brief.image_references : []
+    if (!Array.isArray(brief?.image_references)) {
+      addIssue(issues, 'error', 'creative_brief.image_references', 'image_references must be an array.')
+    }
+    references.forEach((reference, index) => {
+      const path = `creative_brief.image_references[${index}]`
+      const asset = assets.find((item) => item.id === reference.asset_id)
+      if (!asset || asset.type !== 'image') {
+        addIssue(issues, 'error', `${path}.asset_id`, 'image reference must use an existing image asset.')
+      }
+      if (!Array.isArray(reference.observed_facts)
+        || reference.observed_facts.some((fact) => typeof fact !== 'string' || !fact.trim())) {
+        addIssue(issues, 'error', `${path}.observed_facts`, 'observed_facts must contain non-empty strings.')
+      }
+      if (typeof reference.intended_use !== 'string' || !reference.intended_use.trim()) {
+        addIssue(issues, 'error', `${path}.intended_use`, 'intended_use is required.')
+      }
+    })
+    if (!Array.isArray(brief?.sample_methods)
+      || brief.sample_methods.some((method) => typeof method !== 'string' || !method.trim())) {
+      addIssue(issues, 'error', 'creative_brief.sample_methods', 'sample_methods must contain non-empty strings.')
+    }
+    if (brief?.planning_gaps !== undefined) {
+      if (!Array.isArray(brief.planning_gaps)) {
+        addIssue(issues, 'error', 'creative_brief.planning_gaps', 'planning_gaps must be an array.')
+      } else {
+        brief.planning_gaps.forEach((gap, index) => {
+          if (!['image_understanding', 'scene_plan', 'sample_transfer'].includes(gap.area)
+            || typeof gap.message !== 'string' || !gap.message.trim()) {
+            addIssue(issues, 'error', `creative_brief.planning_gaps[${index}]`, 'invalid planning gap.')
+          }
+        })
+      }
+    }
+  }
 
   const scenes = Array.isArray(spec.scenes) ? spec.scenes : []
   if (!Array.isArray(spec.scenes)) addIssue(issues, 'error', 'scenes', 'scenes must be an array.')
@@ -205,30 +250,29 @@ export function validateRemotionTimelineSpec(value: unknown): RemotionTimelineVa
         durationSec,
       })
     }
-    if (['user_video', 'ai_video', 'image_motion'].includes(scene.type)) {
-      if (!scene.asset_id) {
-        const plannedOutputAssetId = plannedOutputAssetBySceneId.get(scene.id)
-        if (scene.type === 'ai_video' && plannedOutputAssetId) {
-          addIssue(
-            issues,
-            'warning',
-            `${path}.asset_id`,
-            `asset_id will be assigned from planned generated asset ${plannedOutputAssetId} during material resolution.`,
-          )
-        } else {
-          addIssue(issues, 'error', `${path}.asset_id`, `${scene.type} scenes require asset_id.`)
-        }
-      } else if (!assetIds.has(scene.asset_id)) {
-        if (plannedOutputAssetBySceneId.get(scene.id) === scene.asset_id) {
-          addIssue(
-            issues,
-            'warning',
-            `${path}.asset_id`,
-            'asset_id points to a planned generated asset that must be resolved before render.',
-          )
-        } else {
-          addIssue(issues, 'error', `${path}.asset_id`, 'asset_id must reference an existing asset.')
-        }
+    if (['user_video', 'ai_video', 'image_motion'].includes(scene.type) && !scene.asset_id) {
+      const plannedOutputAssetId = plannedOutputAssetBySceneId.get(scene.id)
+      if (scene.type === 'ai_video' && plannedOutputAssetId) {
+        addIssue(
+          issues,
+          'warning',
+          `${path}.asset_id`,
+          `asset_id will be assigned from planned generated asset ${plannedOutputAssetId} during material resolution.`,
+        )
+      } else {
+        addIssue(issues, 'error', `${path}.asset_id`, `${scene.type} scenes require asset_id.`)
+      }
+    }
+    if (scene.asset_id && !assetIds.has(scene.asset_id)) {
+      if (plannedOutputAssetBySceneId.get(scene.id) === scene.asset_id) {
+        addIssue(
+          issues,
+          'warning',
+          `${path}.asset_id`,
+          'asset_id points to a planned generated asset that must be resolved before render.',
+        )
+      } else {
+        addIssue(issues, 'error', `${path}.asset_id`, 'asset_id must reference an existing asset.')
       }
     }
     if (scene.asset_id) {
@@ -470,6 +514,14 @@ export function validateRemotionTimelineSpec(value: unknown): RemotionTimelineVa
           'error',
           `scenes[${sceneIndex}].creative_intent.description`,
           'image-conditioned generation must explain how the source image is used.',
+        )
+      }
+      if (spec.creative_brief && !briefImageReferenceIds.has(job.input_asset_id)) {
+        addIssue(
+          issues,
+          'error',
+          `creative_brief.image_references`,
+          `image-conditioned generation must describe source asset ${job.input_asset_id}.`,
         )
       }
     }

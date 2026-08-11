@@ -160,8 +160,6 @@ function summarizeCurrentTimeline(context: DirectorContext) {
     renderedRevision: timeline.renderedRevision,
     lastRunId: timeline.lastRunId,
     sceneCount: context.currentTimeline?.sceneCount,
-    selectedClipId: timeline.selectedClipId,
-    selectedSceneId: timeline.selectedSceneId,
     lastChangeSummary: timeline.lastChangeSummary,
   }
 }
@@ -227,24 +225,10 @@ export function compactDirectorContextForPrompt(input: {
           reference: input.context.sampleVideo.reference
             ? {
                 summary: input.context.sampleVideo.reference.summary,
-                atmosphere: input.context.sampleVideo.reference.atmosphere,
-                editing: input.context.sampleVideo.reference.editing,
-                rhythm: input.context.sampleVideo.reference.rhythm,
-                reusableStyle: input.context.sampleVideo.reference.reusableStyle,
-                segmentCount: input.context.sampleVideo.reference.segmentCount,
+                methodHighlights: input.context.sampleVideo.reference.methodHighlights,
+                transferableKnowledge: input.context.sampleVideo.reference.transferableKnowledge,
                 shotCount: input.context.sampleVideo.reference.shotCount,
                 warnings: input.context.sampleVideo.reference.warnings,
-              }
-            : undefined,
-          hasStyleRecipe: Boolean(input.context.sampleVideo.styleRecipe),
-          styleRecipe: input.context.sampleVideo.styleRecipe
-            ? {
-                pacing: input.context.sampleVideo.styleRecipe.pacing,
-                visual_motifs: input.context.sampleVideo.styleRecipe.visual_motifs,
-                recommended_presets:
-                  input.context.sampleVideo.styleRecipe.recommended_presets,
-                timeline_pattern:
-                  input.context.sampleVideo.styleRecipe.timeline_pattern.slice(0, 8),
               }
             : undefined,
         }
@@ -326,11 +310,11 @@ export function buildDirectorModelPrompt(input: {
 - Treat presets and renderedComponents as implementation candidates, not recommendations. Decide the intended effect semantics before choosing its implementation; source and list order do not imply priority.
 - Reuse a matching preset or registered component when it satisfies the intended effect. Use render.author only when neither can satisfy it; do not prefer or avoid either implementation source merely because it is listed.
 - On retry, preserve the current user goal. A previous model suggestion or failed component name is not a user requirement unless the user explicitly adopts it.
-- timeline.patch 的 sceneId 必须使用当前草稿 timelineFacts 中真实存在的场景 id；不确定时省略 sceneId，服务端会按当前选中镜头解析。subtitle 范围可全量修订字幕，也可带目标 sceneId 只改该场景字幕。
+- timeline.patch 的目标 ID 必须来自当前草稿 timelineFacts；UI 当前选中项仅用于展示，不能替模型补全 Tool 目标。目标不明确时先澄清。subtitle 范围可全量修订字幕，也可带目标 sceneId 只改该场景字幕。
 - 已有草稿后不得再次使用 timeline.plan。拆分、合并、插入或删除镜头使用 timeline.patch 的 structure 范围，并从 timelineFacts.scenes 选择一个连续的 sceneIds 范围；只有用户明确要求整体推翻重做时才使用 global。
 - 修改一个或多个具体转场时使用 transition 范围，并从 timelineFacts.transitions 选择全部真实 transitionIds；用户用镜头顺序描述时，根据 fromSceneIndex/toSceneIndex 选择对应转场，不要把转场修改伪装成 scene 或 global 修订。
 - scene 范围修改目标镜头的画面事实、字幕与相邻转场；visual_strategy 只切换目标镜头的视觉呈现（type/fit/motion/background/素材绑定），不动字幕与转场；两者都需要目标场景。
-- 要求台账（stateActions）与创作记忆（memoryActions）不要对同一句话同时输出：记录为“要求/约束”走 stateActions；记住“偏好/长期/以后都这样”走 memoryActions。
+- 要求台账（stateActions）与创作记忆（memoryActions）不得保存内容相同的 statement。若一句话同时包含当前项目要求和可复用偏好证据，可分别保存当前要求与更抽象的偏好 candidate，但不能把项目对象、镜头操作或文案复制进长期偏好。
 - 用户明确说“记住/保存/沉淀”，或表达明确偏好（我喜欢、偏好、习惯、总是用…）时，必须输出对应的 memoryAction：稳定且跨项目→user+active；仅当前草稿→draft+active；不确定或仅一次选择→candidate。
 
 长期创作知识规则：
@@ -342,6 +326,8 @@ export function buildDirectorModelPrompt(input: {
 - A current task object, requested operation, target school/product, scene edit, aspect ratio, or one-off implementation choice must not become long-term memory merely because it appears in a creation request.
 - Keep the reusable creative preference or enduring interest in statement; keep task-specific evidence only in sourceExcerpt. Use candidate when durability or scope is uncertain.
 - A request to regenerate or continue does not create a new memory unless the current input adds new reusable evidence.
+- Examples: “我一直喜欢更搞笑、反差更强的风格” → user active；“把这个视频改得搞笑” → 当前项目要求，不沉淀；“我更喜欢第一段用懒散人物塑造” → 当前要求，并可把“可能偏好松弛、反差式人物塑造”记为 candidate；“第一段改成推镜头” → 当前操作，不沉淀。
+- 样例中有证据支持的导演规律属于可迁移创作方法，不是用户个人偏好；本轮 memoryActions 只处理用户或草稿偏好。
 - replace/revoke 只能引用 retrievedCreativeMemories 中的 memory id。每项必须引用本轮 currentTurnId；记忆失败不会阻断其他动作。
 输出字段：replyDraft、intent、creativeConfigDelta、stateActions、memoryActions、skillRequests、toolRequests、missingInformation。只输出 JSON。
 1

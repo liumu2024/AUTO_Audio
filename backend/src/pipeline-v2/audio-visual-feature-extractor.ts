@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 
 import type { AudioVisualUnderstandingHints } from '../../../shared/types/sample-understanding-skills.js'
 import type { VideoInput } from './video-input.js'
+import { findV2FfprobeBinary } from './ffmpeg-binary.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -78,7 +79,7 @@ interface RhythmAnalysis {
 }
 
 async function probeVideoMetadata(localPath: string): Promise<AudioVisualUnderstandingHints['metadata']> {
-  const ffprobe = resolveFfprobePath()
+  const ffprobe = findV2FfprobeBinary(path.resolve(process.cwd(), '..'))
   const { stdout } = await execFileAsync(ffprobe, [
     '-v',
     'error',
@@ -108,21 +109,6 @@ async function probeVideoMetadata(localPath: string): Promise<AudioVisualUnderst
     width: videoStream?.width,
     height: videoStream?.height,
   }
-}
-
-function resolveFfprobePath(): string {
-  const candidates = [
-    process.env.FFPROBE_PATH,
-    path.resolve(
-      process.cwd(),
-      '../remotion/node_modules/@remotion/compositor-win32-x64-msvc/ffprobe.exe',
-    ),
-    path.resolve(
-      process.cwd(),
-      '../remotion/node_modules/@remotion/compositor-linux-x64-gnu/ffprobe',
-    ),
-  ].filter((item): item is string => Boolean(item))
-  return candidates.find((candidate) => existsSync(candidate)) ?? 'ffprobe'
 }
 
 function resolveFfmpegPath(): string {

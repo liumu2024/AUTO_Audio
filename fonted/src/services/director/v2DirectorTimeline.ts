@@ -302,7 +302,6 @@ export async function previewV2DirectorTimeline(
     kind: current.draftId ? 'revision' as const : 'initial' as const,
     draftId: current.draftId ?? undefined,
     baseRevision: current.draftRevision ?? undefined,
-    selectedClipId: current.selectedClipId ?? undefined,
   }
   const preview = await api.previewV2TimelineDraft({
     ...requestPayload,

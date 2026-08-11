@@ -64,31 +64,26 @@ assert.match(withComponents, /image_motion.*不能生成原图中不存在的内
 assert.match(withComponents, /generate_video/i)
 
 const reference = summarizeDirectorReference({
-  schema_version: 'v2_sample_understanding.v1', task_id: 'sample_many_shots', source: 'llm',
-  sample: { duration_sec: 12 }, summary_zh: 'continuous action sample', story_zh: 'story arc',
-  atmosphere_zh: 'tense', editing_zh: 'rapid cuts', rhythm_zh: 'accelerating',
-  reusable_style_zh: 'match cuts', not_reusable_zh: '', segments: [{
-    id: 'chapter_1', title_zh: 'conflict', start_sec: 0, end_sec: 12,
-    visual_content_zh: 'chase', characters_objects_zh: 'people and vehicles', atmosphere_zh: 'tense',
-    camera_zh: 'varied shots', motion_zh: 'fast', editing_zh: 'continuous cuts', rhythm_zh: 'accelerating',
-    reusable_style_zh: 'match cuts', material_hint_zh: 'action material',
-  }],
+  schema_version: 'v2_sample_understanding.v2', task_id: 'sample_many_shots', source: 'llm',
+  sample: { duration_sec: 12 }, summary: 'continuous action sample',
+  content_observations: [{ statement: 'people and vehicles chase', evidence_ranges: [{ start_sec: 0, end_sec: 12 }] }],
+  method_observations: [{ id: 'method_match', expression: 'rapid match cuts', purpose: 'sustain continuity', timing_rationale: 'during acceleration', evidence_ranges: [{ start_sec: 0, end_sec: 12 }] }],
+  transferable_knowledge: [{ statement: 'match movement across cuts', applicability: 'continuous action', evidence_method_ids: ['method_match'] }],
   shot_evidence: Array.from({ length: 6 }, (_, index) => ({
     id: `shot_${index + 1}`, start_sec: index * 2, end_sec: (index + 1) * 2,
     boundary: index === 5 ? 'end' as const : 'hard_cut' as const, confidence: 0.9,
   })),
-  questions_for_user_zh: [], warnings_zh: [],
+  questions: [], warnings: [],
 })
-assert.equal(reference.segmentCount, 1)
 assert.equal(reference.shotCount, 6)
+assert.deepEqual(reference.methodHighlights, ['rapid match cuts'])
 const withReference = compactDirectorContextForPrompt({
   prompt: 'follow the reference structure',
   context: { ...context, sampleVideo: { id: 'sample_1', url: '/uploads/sample.mp4', reference } },
   runtime: runtime({ sampleUrl: '/uploads/sample.mp4', isSampleParsed: true }),
 })
-assert.equal(withReference.sampleVideo?.reference?.segmentCount, 1)
 assert.equal(withReference.sampleVideo?.reference?.shotCount, 6)
-assert.equal(withReference.sampleVideo?.reference?.editing, 'rapid cuts')
+assert.deepEqual(withReference.sampleVideo?.reference?.transferableKnowledge, ['match movement across cuts'])
 
 const chat = parseDirectorModelDecision(JSON.stringify({
   replyDraft: '这版可以继续沿用中性低饱和。',

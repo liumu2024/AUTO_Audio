@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
+import { assertValidRemotionTimelineSpec } from '../../../shared/lib/remotion-timeline-validator.js'
 import {
   bindRegisteredRenderComponentDisplayNames,
   timelineRenderComponentReferences,
@@ -10,6 +11,7 @@ import {
 } from '../modules/render-components/component-registry.js'
 import type { V2PlannerInput } from './v2-input.js'
 import { prisma } from '../shared/prisma.service.js'
+import { hydrateV2TimelineAssetIds } from './timeline-asset-id-hydration.js'
 
 export type V2StoredPlannerInput = V2PlannerInput & { imageSrc?: string }
 
@@ -114,14 +116,71 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
+function hydrateStoredTimelineSpec(
+  spec: RemotionTimelineSpecV1,
+  plannerInput: V2StoredPlannerInput,
+): RemotionTimelineSpecV1 {
+  const hydrated = hydrateV2TimelineAssetIds(spec, plannerInput)
+  if (hydrated.creative_brief) return hydrated
+
+  const imageAssets = new Set(
+    hydrated.assets
+      .filter((asset) => asset.type === 'image' && asset.source === 'user_asset')
+      .map((asset) => asset.id),
+  )
+  const imageReferences = new Map<string, { intendedUse: string }>()
+  const rememberImageReference = (assetId: string | undefined, intendedUse: string): void => {
+    if (!assetId || !imageAssets.has(assetId) || imageReferences.has(assetId)) return
+    imageReferences.set(assetId, { intendedUse })
+  }
+  for (const scene of hydrated.scenes) {
+    rememberImageReference(
+      scene.asset_id,
+      scene.creative_intent?.description?.trim()
+        || 'Use the original image as the authoritative scene visual.',
+    )
+  }
+  for (const overlay of hydrated.overlays) {
+    rememberImageReference(
+      overlay.asset_id,
+      'Use the original image as the authoritative overlay visual.',
+    )
+  }
+  for (const job of hydrated.material_jobs) {
+    const scene = hydrated.scenes.find((item) => item.id === job.scene_id)
+    rememberImageReference(
+      job.input_asset_id,
+      scene?.creative_intent?.description?.trim()
+        || job.prompt?.trim()
+        || 'Use the original image as the authoritative visual reference.',
+    )
+  }
+
+  return {
+    ...hydrated,
+    creative_brief: {
+      direction: plannerInput.prompt.trim()
+        || hydrated.notes?.find((note) => note.trim())
+        || 'Continue the existing editable video plan.',
+      image_references: [...imageReferences].map(([assetId, reference]) => ({
+        asset_id: assetId,
+        observed_facts: [],
+        intended_use: reference.intendedUse,
+      })),
+      sample_methods: [],
+    },
+  }
+}
+
 function draftFromRow(row: Record<string, unknown>): V2TimelineDraftRecord {
+  const plannerInput = row.plannerInputJson as V2StoredPlannerInput
   return {
     id: String(row.id),
     userId: Number(row.userId),
     revision: Number(row.revision),
-    creationMode: String(row.creationMode),
-    plannerInput: row.plannerInputJson as V2StoredPlannerInput,
-    spec: row.specJson as RemotionTimelineSpecV1,
+    creationMode: plannerInput.creationMode ?? String(row.creationMode),
+    plannerInput,
+    spec: hydrateStoredTimelineSpec(row.specJson as RemotionTimelineSpecV1, plannerInput),
     plannerSource: (row.plannerSource as string | null) ?? undefined,
     review: row.reviewJson ?? undefined,
     traceDir: (row.traceDir as string | null) ?? undefined,
@@ -130,13 +189,16 @@ function draftFromRow(row: Record<string, unknown>): V2TimelineDraftRecord {
   }
 }
 
-function revisionFromRow(row: Record<string, unknown>): V2TimelineRevisionRecord {
+function revisionFromRow(
+  row: Record<string, unknown>,
+  plannerInput: V2StoredPlannerInput,
+): V2TimelineRevisionRecord {
   return {
     id: String(row.id),
     draftId: String(row.draftId),
     revision: Number(row.revision),
     kind: row.kind as V2TimelineRevisionRecord['kind'],
-    spec: row.specJson as RemotionTimelineSpecV1,
+    spec: hydrateStoredTimelineSpec(row.specJson as RemotionTimelineSpecV1, plannerInput),
     plannerSource: (row.plannerSource as string | null) ?? undefined,
     review: row.reviewJson ?? undefined,
     traceDir: (row.traceDir as string | null) ?? undefined,
@@ -219,6 +281,8 @@ export interface V2TimelineDraftRepository {
     revision: number,
     userId: number,
   ): Promise<V2TimelineRevisionRecord | null>
+  getRenderRun(id: string, userId: number): Promise<V2TimelineRenderRunRecord | null>
+  getLatestCompletedRenderRun(draftId: string, userId: number): Promise<V2TimelineRenderRunRecord | null>
   createRenderRun(input: {
     id: string
     draftId: string
@@ -262,11 +326,14 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
 
   return {
     async createDraft(input) {
+      const hydratedInputSpec = hydrateStoredTimelineSpec(input.spec, input.plannerInput)
       await assertTimelineComponentReferences(
-        input.spec,
+        hydratedInputSpec,
         new Set(input.authorizedDraftComponentIds),
       )
-      const spec = await bindRegisteredRenderComponentDisplayNames(input.spec)
+      const spec = assertValidRemotionTimelineSpec(
+        await bindRegisteredRenderComponentDisplayNames(hydratedInputSpec),
+      )
       const id = `v2_draft_${randomUUID()}`
       const draft = await prisma.v2TimelineDraft.create({
         data: {
@@ -336,21 +403,30 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
           current.revision,
         )
       }
-      const currentSpec = current.specJson as unknown as RemotionTimelineSpecV1
+      const currentPlannerInput = current.plannerInputJson as unknown as V2StoredPlannerInput
+      const currentSpec = hydrateStoredTimelineSpec(
+        current.specJson as unknown as RemotionTimelineSpecV1,
+        currentPlannerInput,
+      )
+      const nextPlannerInput = input.plannerInput ?? currentPlannerInput
+      const hydratedInputSpec = hydrateStoredTimelineSpec(input.spec, nextPlannerInput)
       await assertTimelineComponentReferences(
-        input.spec,
+        hydratedInputSpec,
         new Set([
           ...timelineRenderComponentReferences(currentSpec).map((reference) => reference.id),
           ...(input.authorizedDraftComponentIds ?? []),
         ]),
       )
-      const spec = await bindRegisteredRenderComponentDisplayNames(input.spec)
+      const spec = assertValidRemotionTimelineSpec(
+        await bindRegisteredRenderComponentDisplayNames(hydratedInputSpec),
+      )
 
       const nextRevision = input.baseRevision + 1
       const updated = await prisma.v2TimelineDraft.updateMany({
         where: { id: input.draftId, userId: input.userId, revision: input.baseRevision },
         data: {
           revision: nextRevision,
+          creationMode: nextPlannerInput.creationMode ?? String(current.creationMode),
           specJson: asJson(spec),
           ...(input.plannerInput ? { plannerInputJson: asJson(input.plannerInput) } : {}),
           ...(input.plannerSource !== undefined ? { plannerSource: input.plannerSource } : {}),
@@ -395,7 +471,26 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
       const row = await prisma.v2TimelineRevision.findFirst({
         where: { draftId, revision },
       })
-      return row ? revisionFromRow(asRecord(row)) : null
+      return row
+        ? revisionFromRow(asRecord(row), draft.plannerInputJson as unknown as V2StoredPlannerInput)
+        : null
+    },
+
+    async getRenderRun(id, userId) {
+      const row = await prisma.v2TimelineRenderRun.findFirst({ where: { id } })
+      if (!row) return null
+      const draft = await prisma.v2TimelineDraft.findFirst({ where: { id: row.draftId, userId } })
+      return draft ? runFromRow(asRecord(row)) : null
+    },
+
+    async getLatestCompletedRenderRun(draftId, userId) {
+      const draft = await prisma.v2TimelineDraft.findFirst({ where: { id: draftId, userId } })
+      if (!draft) return null
+      const row = await prisma.v2TimelineRenderRun.findFirst({
+        where: { draftId, status: 'completed' },
+        orderBy: { createdAt: 'desc' },
+      })
+      return row ? runFromRow(asRecord(row)) : null
     },
 
     async createRenderRun(input) {

@@ -81,31 +81,12 @@ export interface DirectorIntentResult {
         dependsOn: string[];
     }>;
 }
-export interface SampleStyleRecipe {
-    style_id: string;
-    reference_source: 'sample_video';
-    pacing: 'slow_cinematic' | 'medium' | 'fast_cut' | 'beat_sync';
-    visual_motifs: string[];
-    recommended_presets: string[];
-    timeline_pattern: Array<{
-        phase: string;
-        duration_sec: number;
-        effect_preset?: string;
-        purpose: string;
-        transition_to_next?: string;
-    }>;
-    notes?: string[];
-}
 /** A compact V2-facing summary of reference-video understanding. */
 export interface DirectorReferenceSummary {
     source: 'sample_video';
     summary: string;
-    atmosphere?: string;
-    editing?: string;
-    rhythm?: string;
-    reusableStyle?: string;
-    segmentCount: number;
-    /** Count of high-confidence visual shots, distinct from semantic chapters. */
+    methodHighlights: string[];
+    transferableKnowledge: string[];
     shotCount: number;
     warnings?: string[];
 }
@@ -138,7 +119,6 @@ export interface DirectorSampleVideoContext {
     url: string;
     name?: string;
     reference?: DirectorReferenceSummary;
-    styleRecipe?: SampleStyleRecipe;
     /** Persisted V2-only understanding used by the planner; never a V1 state. */
     sampleUnderstanding?: V2SampleUnderstandingResult;
 }

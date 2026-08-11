@@ -10,7 +10,7 @@ import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-time
 import type { V2SampleUnderstandingResult } from '../../../shared/types/v2-sample-understanding.js'
 import { validateRemotionTimelineSpec } from '../../../shared/lib/remotion-timeline-validator.js'
 import { streamDirectorAgentChat } from '../modules/director-agent/director-agent.service.js'
-import type { DirectorAgentStreamEvent } from '../modules/director-agent/director-agent.types.js'
+import type { DirectorAgentStreamEvent } from '../../../shared/types/director-stream.js'
 import {
   dispatchV2AgentTool,
   type V2AgentToolResult,
@@ -245,7 +245,7 @@ export interface EvaluationReport {
 }
 
 const fixtureSample: V2SampleUnderstandingResult = {
-  schema_version: 'v2_sample_understanding.v1',
+  schema_version: 'v2_sample_understanding.v2',
   task_id: 'evaluation_sample_fixture',
   source: 'heuristic',
   sample: {
@@ -255,32 +255,16 @@ const fixtureSample: V2SampleUnderstandingResult = {
     height: 1920,
     fps: 30,
   },
-  summary_zh: '样例采用三段式结构：情境引入、功能证明、克制收束。',
-  story_zh: '从生活问题进入产品能力，再以自然行动号召收束。',
-  atmosphere_zh: '低饱和、可靠、克制。',
-  editing_zh: '三段均衡剪辑，转场简洁。',
-  rhythm_zh: '前快后稳。',
-  reusable_style_zh: '可借鉴节奏、镜头组织和文字密度。',
-  not_reusable_zh: '不复制样例画面、人物、品牌和文案。',
-  segments: [
-    {
-      id: 'sample_segment_1',
-      title_zh: '情境引入',
-      start_sec: 0,
-      end_sec: 5,
-      visual_content_zh: '夜间回家情境',
-      characters_objects_zh: '人物与门锁',
-      atmosphere_zh: '克制',
-      camera_zh: '中景推进',
-      motion_zh: '缓慢推进',
-      editing_zh: '直接切入',
-      rhythm_zh: '快',
-      reusable_style_zh: '先情境后产品',
-      material_hint_zh: '使用新的产品与生活素材',
-    },
-  ],
-  questions_for_user_zh: [],
-  warnings_zh: ['只作为结构和风格参考。'],
+  summary: '样例先建立生活问题，再证明能力并克制收束。',
+  content_observations: [{ statement: '夜间回家后出现产品能力证明', evidence_ranges: [{ start_sec: 0, end_sec: 10 }] }],
+  method_observations: [{
+    id: 'method_problem_proof', expression: '先建立情境，再揭示解决方案', purpose: '让能力证明具有因果基础',
+    timing_rationale: '观众理解问题后再展示产品', evidence_ranges: [{ start_sec: 0, end_sec: 10 }],
+  }],
+  transferable_knowledge: [{ statement: '先建立问题，再展示解决方案', applicability: '功能证明类短片', evidence_method_ids: ['method_problem_proof'] }],
+  shot_evidence: [],
+  questions: [],
+  warnings: ['只迁移创作方法，不复制具体画面、人物、品牌和文案。'],
 }
 
 function fixtureSpec(taskId: string): RemotionTimelineSpecV1 {
@@ -534,12 +518,9 @@ async function createFixture(
       sampleUnderstanding: fixtureSample,
       reference: {
         source: 'sample_video',
-        summary: fixtureSample.summary_zh,
-        atmosphere: fixtureSample.atmosphere_zh,
-        editing: fixtureSample.editing_zh,
-        rhythm: fixtureSample.rhythm_zh,
-        reusableStyle: fixtureSample.reusable_style_zh,
-        segmentCount: fixtureSample.segments.length,
+        summary: fixtureSample.summary,
+        methodHighlights: fixtureSample.method_observations.map((item) => item.expression),
+        transferableKnowledge: fixtureSample.transferable_knowledge.map((item) => item.statement),
         shotCount: (fixtureSample.shot_evidence ?? []).filter((shot) => shot.confidence >= 0.6).length,
       },
     }

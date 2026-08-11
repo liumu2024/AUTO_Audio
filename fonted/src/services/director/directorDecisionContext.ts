@@ -27,7 +27,6 @@ export function buildDirectorSampleVideoFromUI(input: {
     id: existing?.id ?? 'sample_video',
     url: input.sampleUrl,
     name: input.sampleName,
-    styleRecipe: existing?.styleRecipe,
     reference: existing?.reference,
     sampleUnderstanding: existing?.sampleUnderstanding,
   }

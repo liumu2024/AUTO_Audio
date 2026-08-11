@@ -1,6 +1,6 @@
 import { env } from '@/config/env'
-import type { DirectorSessionState } from '@shared/types/director-state'
 import type { DirectorWorkspaceState } from '@shared/types/director-workspace-session'
+import type { DirectorAgentStreamEvent } from '@shared/types/director-stream'
 import type { DirectorConversationRuntime } from '@shared/lib/director-understanding'
 import type { DirectorContext } from '@shared/types/director-context'
 import type { RemotionTimelineSpecV1 } from '@shared/types/remotion-timeline-spec.v1'
@@ -24,102 +24,6 @@ export interface UploadResult {
     error?: string
   }
 }
-
-export type DirectorAgentStreamEvent =
-  | {
-      type: 'surface'
-      mode:
-        | 'smalltalk'
-        | 'help'
-        | 'capability_intro'
-        | 'creative_guide'
-        | 'task'
-        | 'edit'
-        | 'repair'
-        | 'unknown'
-      confidence: number
-      shouldRunIntentRouter: boolean
-      directMessage?: string
-    }
-  | {
-      type: 'thought'
-      title: string
-      content: string
-    }
-  | {
-      type: 'intent'
-      intent: string
-      confidence: number
-      contentDomain: string
-      source?: 'llm' | 'llm_unstructured_safe_reply' | 'context_fallback'
-    }
-  | {
-      type: 'slot_update'
-      slots: DirectorContext['slots']
-      missingSlots: string[]
-    }
-  | { type: 'constraint_resolution'; config: NonNullable<DirectorContext['effectiveCreativeConfig']> }
-  | { type: 'skill_selected'; skillId: string; purpose: string }
-  | {
-      type: 'skill_loaded'
-      skillId: string
-      version: string
-      source: 'v2_official' | 'official_remotion'
-      hash: string
-      dependency: boolean
-    }
-  | {
-      type: 'tool_proposed'
-      callId: string
-      toolId: string
-      requestedMode: 'preview' | 'execute'
-      effectiveMode: 'preview' | 'execute'
-      modeNormalized: boolean
-    }
-  | { type: 'tool_started'; callId: string; toolId: string }
-  | {
-      type: 'tool_progress'
-      callId: string
-      toolId: string
-      phase: string
-      progress: number
-      message: string
-      elapsedMs?: number
-      jobId?: string
-      sceneId?: string
-    }
-  | {
-      type: 'tool_result'
-      callId: string
-      toolId: string
-      ok: boolean
-      summary: string
-      result?: Record<string, unknown>
-      draft?: Pick<V2TimelineDraftDto, 'draftId' | 'revision' | 'spec' | 'traceDir'>
-    }
-  | { type: 'assistant_reply'; message: string }
-  | { type: 'workspace_snapshot'; workspaceSessionId: string; state: DirectorWorkspaceState }
-  | {
-      type: 'state_update'
-      state: DirectorSessionState
-    }
-  | {
-      type: 'workspace_session'
-      workspaceSessionId: string
-      state: DirectorWorkspaceState
-      traceDir: string
-      modelCalled: boolean
-      responseId?: string
-      responseContinuityDisabled?: boolean
-    }
-  | {
-      type: 'done'
-      message?: string
-    }
-  | {
-      type: 'error'
-      message: string
-    }
 
 export interface DirectorAgentChatPayload {
   prompt: string
@@ -152,7 +56,6 @@ export interface V2TimelinePayload {
     kind: 'initial' | 'revision'
     draftId?: string
     baseRevision?: number
-    selectedClipId?: string
     authorizationEvidence?: string
   }
   materials?: Array<{
@@ -340,14 +243,7 @@ async function request<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(`${env.apiBase}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-User-Id': String(env.userId),
-      ...init?.headers,
-    },
-  })
+  const res = await requestResponse(path, init)
 
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string }
@@ -355,6 +251,17 @@ async function request<T>(
   }
 
   return res.json() as Promise<T>
+}
+
+function requestResponse(path: string, init?: RequestInit): Promise<Response> {
+  return fetch(`${env.apiBase}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-User-Id': String(env.userId),
+      ...init?.headers,
+    },
+  })
 }
 
 export async function healthCheck(): Promise<{ ok: boolean }> {
@@ -470,14 +377,39 @@ export async function saveV2TimelineDraft(input: {
 export async function runV2TimelineDraft(input: {
   draftId: string
   revision: number
+  idempotencyKey?: string
 }) {
-  return request<V2TimelineDraftRunResult>(
-    `/api/v2/timeline-drafts/${encodeURIComponent(input.draftId)}/runs`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ revision: input.revision }),
-    },
-  )
+  const path = `/api/v2/timeline-drafts/${encodeURIComponent(input.draftId)}/runs`
+  const idempotencyKey = input.idempotencyKey ?? crypto.randomUUID()
+  const post = () => requestResponse(path, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify({ revision: input.revision }),
+  })
+  let response: Response
+  try {
+    response = await post()
+  } catch {
+    response = await post()
+  }
+  if (response.status === 202) {
+    const pending = await response.json() as { renderRunId: string }
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      const run = await request<{
+        status: 'running' | 'completed' | 'failed'
+      }>(`${path}/${encodeURIComponent(pending.renderRunId)}`)
+      if (run.status === 'running') continue
+      if (run.status === 'failed') throw new Error('The original V2 render request failed.')
+      response = await post()
+      break
+    }
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string }
+    throw new Error(body.error ?? `HTTP ${response.status} ${path}`)
+  }
+  return response.json() as Promise<V2TimelineDraftRunResult>
 }
 
 export async function analyzeV2Sample(payload: V2SampleAnalyzePayload) {

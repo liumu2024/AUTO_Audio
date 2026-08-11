@@ -2,37 +2,67 @@ import { readFile } from 'node:fs/promises'
 
 import {
   V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION,
+  type V2SampleEvidenceRange,
   type V2SampleUnderstandingResult,
-  type V2SampleUnderstandingSegment,
 } from '../../../shared/types/v2-sample-understanding.js'
-import {
-  extractStructuredJsonCandidate,
-} from '../modules/agent-tools/structured-json-tool.js'
+import { extractStructuredJsonCandidate } from '../modules/agent-tools/structured-json-tool.js'
 import { env } from '../config/env.js'
 import { extractAudioVisualUnderstandingHints } from './audio-visual-feature-extractor.js'
 import { resolveVideoInput } from './resolve-video-input.js'
 import type { VideoInput } from './video-input.js'
-import { createV2TraceWriter } from './trace.js'
-import type { V2TraceContext } from './trace.js'
+import { createV2TraceWriter, type V2TraceContext } from './trace.js'
 import type { V2AgentSkillContext, V2AgentToolContext } from './v2-input.js'
+
+const evidenceRangeSchema = {
+  type: 'object',
+  required: ['start_sec', 'end_sec'],
+  additionalProperties: false,
+  properties: { start_sec: { type: 'number' }, end_sec: { type: 'number' } },
+} as const
 
 const SampleUnderstandingJsonSchema = {
   type: 'object',
-  required: ['schema_version', 'task_id', 'summary_zh', 'segments', 'shot_evidence'],
+  required: [
+    'schema_version', 'task_id', 'summary', 'content_observations',
+    'method_observations', 'transferable_knowledge', 'shot_evidence', 'questions', 'warnings',
+  ],
+  additionalProperties: false,
   properties: {
     schema_version: { type: 'string', const: V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION },
     task_id: { type: 'string' },
-    summary_zh: { type: 'string' },
-    story_zh: { type: 'string' },
-    atmosphere_zh: { type: 'string' },
-    editing_zh: { type: 'string' },
-    rhythm_zh: { type: 'string' },
-    reusable_style_zh: { type: 'string' },
-    not_reusable_zh: { type: 'string' },
-    segments: { type: 'array', items: { type: 'object' } },
+    summary: { type: 'string' },
+    content_observations: {
+      type: 'array',
+      items: {
+        type: 'object', required: ['statement', 'evidence_ranges'], additionalProperties: false,
+        properties: { statement: { type: 'string' }, evidence_ranges: { type: 'array', items: evidenceRangeSchema } },
+      },
+    },
+    method_observations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'expression', 'purpose', 'timing_rationale', 'evidence_ranges'],
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string' }, expression: { type: 'string' }, purpose: { type: 'string' },
+          timing_rationale: { type: 'string' }, evidence_ranges: { type: 'array', items: evidenceRangeSchema },
+        },
+      },
+    },
+    transferable_knowledge: {
+      type: 'array',
+      items: {
+        type: 'object', required: ['statement', 'applicability', 'evidence_method_ids'], additionalProperties: false,
+        properties: {
+          statement: { type: 'string' }, applicability: { type: 'string' },
+          evidence_method_ids: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
     shot_evidence: { type: 'array', items: { type: 'object' } },
-    questions_for_user_zh: { type: 'array', items: { type: 'string' } },
-    warnings_zh: { type: 'array', items: { type: 'string' } },
+    questions: { type: 'array', items: { type: 'string' } },
+    warnings: { type: 'array', items: { type: 'string' } },
   },
 } as const
 
@@ -60,59 +90,13 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
-function splitSegments(durationSec: number): Array<{ start: number; end: number }> {
-  const count = durationSec <= 8 ? 3 : durationSec <= 20 ? 4 : 5
-  const part = durationSec / count
-  return Array.from({ length: count }, (_, index) => {
-    const start = Number((index * part).toFixed(3))
-    const end = index === count - 1 ? durationSec : Number(((index + 1) * part).toFixed(3))
-    return { start, end }
-  })
-}
-
 function heuristicUnderstanding(input: {
   taskId: string
-  prompt: string
   video: VideoInput
   hints: Awaited<ReturnType<typeof extractAudioVisualUnderstandingHints>>
   warning?: string
 }): V2SampleUnderstandingResult {
   const durationSec = Number(input.hints.metadata.video_duration.toFixed(3))
-  const segments: V2SampleUnderstandingSegment[] = splitSegments(durationSec).map((part, index, all) => {
-    const role =
-      index === 0
-        ? '开场建立'
-        : index === all.length - 1
-          ? '收束记忆点'
-          : index === Math.floor(all.length / 2)
-            ? '节奏高点'
-            : '内容推进'
-    return {
-      id: `sample_seg_${String(index + 1).padStart(3, '0')}`,
-      title_zh: role,
-      start_sec: part.start,
-      end_sec: part.end,
-      visual_content_zh: '本地兜底理解只能确认时间结构，具体画面内容需要以多模态模型结果为准。',
-      characters_objects_zh: '未稳定识别到具体人物或主体物体。',
-      atmosphere_zh: input.prompt.trim() || '根据样例画面和节奏建立整体氛围。',
-      camera_zh: '按样例时间段观察镜头景别、视角和主体位置。',
-      motion_zh: '结合画面运动和音乐能量判断推近、平移、静止或切换。',
-      editing_zh: index < all.length - 1 ? '与下一段衔接处需要重点观察转场方式。' : '最后一段承担收束。',
-      rhythm_zh: input.hints.audio_features.energy_peaks.length
-        ? `附近能量点：${input.hints.audio_features.energy_peaks
-            .filter((peak) => peak.time >= part.start && peak.time <= part.end)
-            .slice(0, 3)
-            .map((peak) => `${peak.time.toFixed(2)}s`)
-            .join('、') || '无明显峰值'}`
-        : '未检测到稳定音乐峰值，按平均段落兜底。',
-      transition_after_zh: index < all.length - 1 ? '待模型结合画面判断硬切、淡入淡出、滑动或闪白。' : undefined,
-      text_cues_zh: '未稳定识别到字幕或屏幕文字。',
-      reusable_style_zh: '复用节奏、段落功能和转场位置，不直接复用样例画面。',
-      material_hint_zh: '后续生成方案时需要使用用户上传素材替换样例画面。',
-      caution_zh: '这是启发式兜底报告，不能当作完整视觉理解结论。',
-    }
-  })
-
   return {
     schema_version: V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION,
     task_id: input.taskId,
@@ -124,19 +108,13 @@ function heuristicUnderstanding(input: {
       height: input.hints.metadata.height,
       fps: input.hints.metadata.fps,
     },
-    summary_zh: '已完成样例的时间结构兜底拆解；如果理解模型可用，会进一步补充人物、故事、氛围、镜头和转场细节。',
-    story_zh: '兜底模式无法可靠判断故事内容，只保留段落功能。',
-    atmosphere_zh: input.prompt.trim() || '待根据模型理解补充具体氛围。',
-    editing_zh: '按时长和音频能量点拆成可审查段落，转场类型需模型或人工确认。',
-    rhythm_zh: input.hints.audio_features.beats.length
-      ? `检测到 ${input.hints.audio_features.beats.length} 个节奏点，${input.hints.audio_features.energy_peaks.length} 个能量峰值。`
-      : '未检测到稳定节奏点。',
-    reusable_style_zh: '复用结构、节奏、镜头功能和转场位置。',
-    not_reusable_zh: '样例原始画面不作为成片素材，不直接进入最终视频。',
-    segments,
+    summary: 'Only media metadata was verified; semantic sample understanding requires reanalysis.',
+    content_observations: [],
+    method_observations: [],
+    transferable_knowledge: [],
     shot_evidence: [],
-    questions_for_user_zh: ['你希望后续重点复用样例的节奏、镜头语言、氛围，还是具体转场方式？'],
-    warnings_zh: input.warning ? [input.warning] : [],
+    questions: ['Which storytelling or expression methods should be emphasized after reanalysis?'],
+    warnings: input.warning ? [input.warning] : ['Semantic sample understanding is unavailable.'],
   }
 }
 
@@ -149,39 +127,28 @@ function buildPrompt(input: {
   agentToolContext?: V2AgentToolContext
 }): string {
   return [
-    '你是短视频样例理解 Agent，只负责理解 reference sample，不生成成片方案，不输出 RemotionTimelineSpec。',
+    'You are the V2 sample-video understanding agent. Analyze evidence; do not create a final timeline.',
+    'Return strict JSON only.',
+    `schema_version must be "${V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION}" and task_id must be "${input.taskId}".`,
     '',
-    '只输出严格 JSON，不要 Markdown，不要解释。',
-    `schema_version 必须是 "${V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION}"，task_id 必须是 "${input.taskId}"。`,
-    '',
-    '你需要告诉用户真正关心的样例内容：人物/主体、故事或画面进展、氛围、剪辑手法、镜头景别和运镜、转场方式、节奏依据、字幕/文字线索、可复用风格、不应复用的边界。',
-    '样例视频只作为结构、风格和节奏来源，不是成片素材。',
-    '',
-    '字段要求：',
-    '- summary_zh：一句话概括这个样例是什么。',
-    '- story_zh：说明人物/主体/事件/画面进展；没有人物就说明主要景物或物体。',
-    '- atmosphere_zh：说明情绪、色调、光线、速度感。',
-    '- editing_zh：说明剪辑方式、镜头切换密度、转场类型。',
-    '- rhythm_zh：说明节奏、音乐/运动依据。',
-    '- reusable_style_zh：哪些结构和风格可迁移。',
-    '- not_reusable_zh：哪些不应该照搬。',
-    '- segments：只表示 2-8 个内容章节，不等于实际镜头数量；每章描述叙事功能和画面进展。',
-    '- shot_evidence：按实际可见切换逐镜头输出，包含 id/start_sec/end_sec/boundary/confidence/description_zh。不要为了凑数合并为固定三段或四段；无法可靠判断时返回空数组。',
+    'Answer three distinct questions with timestamp evidence:',
+    '1. What visibly happens? Record content_observations without inventing unseen events.',
+    '2. How is it expressed? Record camera distance and movement, subject movement, pacing, transitions, reveal order, sound/beat alignment, color, light and emotional intensity as method_observations.',
+    '3. Why is each method used at that time? Record its narrative purpose and timing_rationale: attention, environment, character, conflict, proof, climax preparation or emotional closure.',
+    'transferable_knowledge must abstract reusable creation methods and cite evidence_method_ids.',
+    'shot_evidence records only visible shot boundaries. Do not force the video into three, four or five semantic chapters.',
+    'A sample is knowledge evidence, not final footage and not a fixed scene-count template.',
     '',
     'Runtime input:',
-    JSON.stringify(
-      {
-        user_prompt: input.prompt,
-        sample_name: input.video.originalName,
-        sample_mime: input.video.mimeType,
-        sample_size_bytes: input.video.sizeBytes,
-        fallback_time_structure: input.fallback,
-        agent_skill_context: input.agentSkillContext ?? null,
-        agent_tool_context: input.agentToolContext ?? null,
-      },
-      null,
-      2,
-    ),
+    JSON.stringify({
+      user_prompt: input.prompt,
+      sample_name: input.video.originalName,
+      sample_mime: input.video.mimeType,
+      sample_size_bytes: input.video.sizeBytes,
+      verified_media_metadata: input.fallback.sample,
+      agent_skill_context: input.agentSkillContext ?? null,
+      agent_tool_context: input.agentToolContext ?? null,
+    }, null, 2),
   ].join('\n')
 }
 
@@ -198,19 +165,18 @@ function extractText(payload: unknown): string {
     if (!Array.isArray(content)) continue
     for (const block of content) {
       if (!block || typeof block !== 'object') continue
-      const blockRecord = block as Record<string, unknown>
-      if (typeof blockRecord.text === 'string') parts.push(blockRecord.text)
-      if (typeof blockRecord.output_text === 'string') parts.push(blockRecord.output_text)
+      const value = block as Record<string, unknown>
+      if (typeof value.text === 'string') parts.push(value.text)
+      if (typeof value.output_text === 'string') parts.push(value.output_text)
     }
   }
   return parts.join('\n')
 }
 
 async function uploadVideoFile(video: VideoInput): Promise<string> {
-  const buffer = await readFile(video.localPath)
   const form = new FormData()
   form.append('purpose', 'user_data')
-  form.append('file', new Blob([buffer], { type: video.mimeType }), video.originalName)
+  form.append('file', new Blob([await readFile(video.localPath)], { type: video.mimeType }), video.originalName)
   form.append('preprocess_configs[video][fps]', String(env.videoUnderstandingPreprocessFps))
   const response = await fetch(env.videoUnderstandingFilesUrl, {
     method: 'POST',
@@ -221,12 +187,8 @@ async function uploadVideoFile(video: VideoInput): Promise<string> {
   const text = await response.text()
   if (!response.ok) throw new Error(`Files API returned ${response.status}: ${text.slice(0, 500)}`)
   const json = JSON.parse(text) as Record<string, unknown>
-  const id = typeof json.id === 'string' ? json.id : typeof json.file_id === 'string' ? json.file_id : undefined
-  if (!id && json.data && typeof json.data === 'object') {
-    const data = json.data as Record<string, unknown>
-    const nested = typeof data.id === 'string' ? data.id : typeof data.file_id === 'string' ? data.file_id : undefined
-    if (nested) return nested
-  }
+  const data = json.data && typeof json.data === 'object' ? json.data as Record<string, unknown> : undefined
+  const id = [json.id, json.file_id, data?.id, data?.file_id].find((value): value is string => typeof value === 'string')
   if (!id) throw new Error('Files API response did not include file_id.')
   return id
 }
@@ -243,9 +205,7 @@ async function waitForFileReady(fileId: string): Promise<void> {
     const json = JSON.parse(text) as Record<string, unknown>
     const status = String(json.status ?? json.state ?? '').toLowerCase()
     if (status === 'active' || status === 'processed') return
-    if (status === 'failed' || status === 'error' || status === 'cancelled') {
-      throw new Error(`Files preprocessing failed: ${status}`)
-    }
+    if (['failed', 'error', 'cancelled'].includes(status)) throw new Error(`Files preprocessing failed: ${status}`)
     await new Promise((resolve) => setTimeout(resolve, env.videoUnderstandingFileReadyPollIntervalMs))
   }
   throw new Error(`Timed out waiting for Files API preprocessing. file_id=${fileId}`)
@@ -256,39 +216,28 @@ async function callUnderstandingModel(input: {
   prompt: string
   includeVideo?: boolean
   allowStructuredOutput?: boolean
-}): Promise<{
-  raw: unknown
-  structuredOutput: { requested: boolean; providerFallback: boolean; reason?: string }
-}> {
+}): Promise<{ raw: unknown; structuredOutput: { requested: boolean; providerFallback: boolean; reason?: string } }> {
   const requested = env.videoUnderstandingStructuredOutputMode === 'auto' && input.allowStructuredOutput !== false
   const payload = (useSchema: boolean) => ({
     model: env.videoUnderstandingModel,
-    ...(useSchema
-      ? { text: { format: { type: 'json_schema', name: 'v2_sample_understanding', schema: SampleUnderstandingJsonSchema } } }
-      : {}),
-    input: [
-      {
-        role: 'user',
-        content: [
-          ...(input.includeVideo === false ? [] : [{ type: 'input_video' as const, file_id: input.fileId }]),
-          { type: 'input_text', text: input.prompt },
-        ],
-      },
-    ],
+    ...(useSchema ? { text: { format: { type: 'json_schema', name: 'v2_sample_understanding', schema: SampleUnderstandingJsonSchema } } } : {}),
+    input: [{
+      role: 'user',
+      content: [
+        ...(input.includeVideo === false ? [] : [{ type: 'input_video' as const, file_id: input.fileId }]),
+        { type: 'input_text', text: input.prompt },
+      ],
+    }],
   })
-  const request = async (useSchema: boolean) => fetch(env.videoUnderstandingResponsesUrl, {
+  const request = (useSchema: boolean) => fetch(env.videoUnderstandingResponsesUrl, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.videoUnderstandingApiKey}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { Authorization: `Bearer ${env.videoUnderstandingApiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload(useSchema)),
     signal: AbortSignal.timeout(env.videoUnderstandingTimeoutMs),
   })
   let response = await request(requested)
   let text = await response.text()
-  const schemaRejected = requested && !response.ok && [400, 404, 422].includes(response.status)
-  if (schemaRejected) {
+  if (requested && !response.ok && [400, 404, 422].includes(response.status)) {
     response = await request(false)
     const retryText = await response.text()
     if (!response.ok) throw new Error(`Responses API returned ${response.status}: ${retryText.slice(0, 500)}`)
@@ -308,236 +257,185 @@ async function callUnderstandingModel(input: {
 
 function responseAudit(raw: unknown) {
   const record = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
-  return {
-    id: record.id,
-    model: record.model,
-    status: record.status,
-    created_at: record.created_at,
-    usage: record.usage,
-    output_text: extractText(raw),
-  }
+  return { id: record.id, model: record.model, status: record.status, created_at: record.created_at, usage: record.usage, output_text: extractText(raw) }
 }
 
 function parseUnderstandingCandidate(raw: unknown) {
-  const extracted = extractStructuredJsonCandidate(
-    raw,
-    (value): value is V2SampleUnderstandingResult =>
-      typeof value === 'object' &&
-      value !== null &&
-      !Array.isArray(value) &&
-      (value as { schema_version?: unknown }).schema_version === V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION,
-  )
+  const extracted = extractStructuredJsonCandidate(raw, (value): value is V2SampleUnderstandingResult =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      && (value as { schema_version?: unknown }).schema_version === V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION)
   if (extracted.candidate) return { candidate: extracted.candidate, report: extracted.report }
   const text = extractText(raw)
-  if (!text) throw new Error('理解模型未返回可提取的最终文本。')
+  if (!text) throw new Error('Understanding model did not return extractable final text.')
   return { candidate: JSON.parse(text), report: extracted.report }
 }
 
-function jsonRepairPrompt(input: { invalidText: string; error: string; taskId: string }) {
-  return [
-    '只修复下列 JSON 的格式，不重新分析视频，不增加或删除语义内容。',
-    `schema_version 必须是 "${V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION}"，task_id 必须是 "${input.taskId}"。`,
-    `解析错误：${input.error}`,
-    '只输出修复后的严格 JSON，不要 Markdown、解释或推理。',
-    '原始最终文本：',
-    input.invalidText,
-  ].join('\n')
+function normalizeRanges(value: unknown, durationSec: number): V2SampleEvidenceRange[] {
+  return (Array.isArray(value) ? value : []).flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const record = item as Record<string, unknown>
+    const start = clamp(finiteNumber(record.start_sec, 0), 0, durationSec)
+    const end = clamp(finiteNumber(record.end_sec, start), start, durationSec)
+    return end > start ? [{ start_sec: start, end_sec: end }] : []
+  }).slice(0, 12)
 }
 
-function normalizeSegment(raw: unknown, index: number, fallback: V2SampleUnderstandingSegment): V2SampleUnderstandingSegment {
-  const value = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
-  return {
-    id: typeof value.id === 'string' ? value.id : fallback.id,
-    title_zh: typeof value.title_zh === 'string' ? value.title_zh : fallback.title_zh,
-    start_sec: finiteNumber(value.start_sec, fallback.start_sec),
-    end_sec: finiteNumber(value.end_sec, fallback.end_sec),
-    visual_content_zh: typeof value.visual_content_zh === 'string' ? value.visual_content_zh : fallback.visual_content_zh,
-    characters_objects_zh: typeof value.characters_objects_zh === 'string' ? value.characters_objects_zh : fallback.characters_objects_zh,
-    atmosphere_zh: typeof value.atmosphere_zh === 'string' ? value.atmosphere_zh : fallback.atmosphere_zh,
-    camera_zh: typeof value.camera_zh === 'string' ? value.camera_zh : fallback.camera_zh,
-    motion_zh: typeof value.motion_zh === 'string' ? value.motion_zh : fallback.motion_zh,
-    editing_zh: typeof value.editing_zh === 'string' ? value.editing_zh : fallback.editing_zh,
-    rhythm_zh: typeof value.rhythm_zh === 'string' ? value.rhythm_zh : fallback.rhythm_zh,
-    transition_after_zh: typeof value.transition_after_zh === 'string' ? value.transition_after_zh : fallback.transition_after_zh,
-    text_cues_zh: typeof value.text_cues_zh === 'string' ? value.text_cues_zh : fallback.text_cues_zh,
-    reusable_style_zh: typeof value.reusable_style_zh === 'string' ? value.reusable_style_zh : fallback.reusable_style_zh,
-    material_hint_zh: typeof value.material_hint_zh === 'string' ? value.material_hint_zh : fallback.material_hint_zh,
-    caution_zh: typeof value.caution_zh === 'string' ? value.caution_zh : fallback.caution_zh,
-  }
+function strings(value: unknown, limit: number): string[] {
+  return (Array.isArray(value) ? value : [])
+    .filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+    .map((item) => item.trim())
+    .slice(0, limit)
 }
 
 function normalizeUnderstanding(raw: unknown, fallback: V2SampleUnderstandingResult): V2SampleUnderstandingResult {
-  const value = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
-  const rawSegments = Array.isArray(value.segments) ? value.segments : []
-  const segments = (rawSegments.length ? rawSegments : fallback.segments).map((segment, index) =>
-    normalizeSegment(segment, index, fallback.segments[index] ?? fallback.segments[fallback.segments.length - 1]),
-  )
-  const shotEvidence = (Array.isArray(value.shot_evidence) ? value.shot_evidence : [])
-    .flatMap((item, index) => {
-      if (!item || typeof item !== 'object') return []
-      const record = item as Record<string, unknown>
-      const start = clamp(finiteNumber(record.start_sec, 0), 0, fallback.sample.duration_sec)
-      const end = clamp(finiteNumber(record.end_sec, start), start, fallback.sample.duration_sec)
-      const boundary = ['hard_cut', 'soft_transition', 'continuous', 'end', 'unknown'].includes(String(record.boundary))
-        ? String(record.boundary) as 'hard_cut' | 'soft_transition' | 'continuous' | 'end' | 'unknown'
-        : 'unknown'
-      if (end <= start) return []
-      return [{
-        id: typeof record.id === 'string' ? record.id : `sample_shot_${String(index + 1).padStart(3, '0')}`,
-        start_sec: start,
-        end_sec: end,
-        boundary,
-        confidence: clamp(finiteNumber(record.confidence, 0), 0, 1),
-        description_zh: typeof record.description_zh === 'string' ? record.description_zh : undefined,
-      }]
-    })
-    .sort((a, b) => a.start_sec - b.start_sec)
-    .slice(0, 80)
+  const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+  if (value.schema_version !== V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION) {
+    throw new Error(`Unsupported sample understanding schema: ${String(value.schema_version ?? 'missing')}.`)
+  }
+  if (value.task_id !== fallback.task_id) {
+    throw new Error(`Sample understanding task_id must remain ${fallback.task_id}.`)
+  }
+  for (const field of ['content_observations', 'method_observations', 'transferable_knowledge', 'shot_evidence', 'questions', 'warnings']) {
+    if (!Array.isArray(value[field])) throw new Error(`Sample understanding ${field} must be an array.`)
+  }
+  const durationSec = fallback.sample.duration_sec
+  const contentObservations = (Array.isArray(value.content_observations) ? value.content_observations : []).flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const record = item as Record<string, unknown>
+    if (typeof record.statement !== 'string' || !record.statement.trim()) return []
+    return [{ statement: record.statement.trim(), evidence_ranges: normalizeRanges(record.evidence_ranges, durationSec) }]
+  }).slice(0, 60)
+  const methodObservations = (Array.isArray(value.method_observations) ? value.method_observations : []).flatMap((item, index) => {
+    if (!item || typeof item !== 'object') return []
+    const record = item as Record<string, unknown>
+    if (![record.expression, record.purpose, record.timing_rationale].every((field) => typeof field === 'string' && Boolean(field.trim()))) return []
+    return [{
+      id: typeof record.id === 'string' && record.id.trim() ? record.id.trim() : `sample_method_${index + 1}`,
+      expression: String(record.expression).trim(),
+      purpose: String(record.purpose).trim(),
+      timing_rationale: String(record.timing_rationale).trim(),
+      evidence_ranges: normalizeRanges(record.evidence_ranges, durationSec),
+    }]
+  }).slice(0, 60)
+  const methodIds = new Set(methodObservations.map((item) => item.id))
+  const transferableKnowledge = (Array.isArray(value.transferable_knowledge) ? value.transferable_knowledge : []).flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const record = item as Record<string, unknown>
+    if (typeof record.statement !== 'string' || !record.statement.trim()
+      || typeof record.applicability !== 'string' || !record.applicability.trim()) return []
+    return [{
+      statement: record.statement.trim(),
+      applicability: record.applicability.trim(),
+      evidence_method_ids: strings(record.evidence_method_ids, 20).filter((id) => methodIds.has(id)),
+    }]
+  }).slice(0, 40)
+  const shotEvidence = (Array.isArray(value.shot_evidence) ? value.shot_evidence : []).flatMap((item, index) => {
+    if (!item || typeof item !== 'object') return []
+    const record = item as Record<string, unknown>
+    const ranges = normalizeRanges([record], durationSec)
+    if (!ranges[0]) return []
+    const boundary = ['hard_cut', 'soft_transition', 'continuous', 'end', 'unknown'].includes(String(record.boundary))
+      ? String(record.boundary) as V2SampleUnderstandingResult['shot_evidence'][number]['boundary']
+      : 'unknown'
+    return [{
+      id: typeof record.id === 'string' ? record.id : `sample_shot_${index + 1}`,
+      ...ranges[0], boundary,
+      confidence: clamp(finiteNumber(record.confidence, 0), 0, 1),
+      description: typeof record.description === 'string' ? record.description : undefined,
+    }]
+  }).sort((a, b) => a.start_sec - b.start_sec).slice(0, 80)
   return {
     ...fallback,
     source: 'llm',
-    summary_zh: typeof value.summary_zh === 'string' ? value.summary_zh : fallback.summary_zh,
-    story_zh: typeof value.story_zh === 'string' ? value.story_zh : fallback.story_zh,
-    atmosphere_zh: typeof value.atmosphere_zh === 'string' ? value.atmosphere_zh : fallback.atmosphere_zh,
-    editing_zh: typeof value.editing_zh === 'string' ? value.editing_zh : fallback.editing_zh,
-    rhythm_zh: typeof value.rhythm_zh === 'string' ? value.rhythm_zh : fallback.rhythm_zh,
-    reusable_style_zh: typeof value.reusable_style_zh === 'string' ? value.reusable_style_zh : fallback.reusable_style_zh,
-    not_reusable_zh: typeof value.not_reusable_zh === 'string' ? value.not_reusable_zh : fallback.not_reusable_zh,
-    segments: segments.map((segment) => ({
-      ...segment,
-      start_sec: clamp(segment.start_sec, 0, fallback.sample.duration_sec),
-      end_sec: clamp(segment.end_sec, 0.01, fallback.sample.duration_sec),
-    })),
+    summary: typeof value.summary === 'string' && value.summary.trim() ? value.summary.trim() : fallback.summary,
+    content_observations: contentObservations,
+    method_observations: methodObservations,
+    transferable_knowledge: transferableKnowledge,
     shot_evidence: shotEvidence,
-    questions_for_user_zh: Array.isArray(value.questions_for_user_zh)
-      ? value.questions_for_user_zh.filter((item): item is string => typeof item === 'string').slice(0, 4)
-      : fallback.questions_for_user_zh,
-    warnings_zh: Array.isArray(value.warnings_zh)
-      ? value.warnings_zh.filter((item): item is string => typeof item === 'string').slice(0, 6)
-      : [],
+    questions: strings(value.questions, 6),
+    warnings: strings(value.warnings, 8),
   }
 }
 
+function jsonRepairPrompt(input: { invalidText: string; error: string; taskId: string }): string {
+  return [
+    'Repair JSON format only. Do not add, remove or reinterpret video observations.',
+    `schema_version must be "${V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION}" and task_id must be "${input.taskId}".`,
+    `Error: ${input.error}`,
+    `Schema: ${JSON.stringify(SampleUnderstandingJsonSchema)}`,
+    'Original final text:', input.invalidText,
+  ].join('\n')
+}
+
 async function maybeDeleteFile(fileId: string): Promise<void> {
-  await fetch(`${env.videoUnderstandingFilesUrl.replace(/\/+$/, '')}/${encodeURIComponent(fileId)}`, {
+  const response = await fetch(`${env.videoUnderstandingFilesUrl.replace(/\/+$/, '')}/${encodeURIComponent(fileId)}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${env.videoUnderstandingApiKey}` },
     signal: AbortSignal.timeout(env.videoUnderstandingTimeoutMs),
-  }).catch(() => undefined)
+  }).catch((error) => {
+    console.warn(`Failed to delete sample-understanding file ${fileId}: ${error instanceof Error ? error.message : String(error)}`)
+    return undefined
+  })
+  if (response && !response.ok) console.warn(`Failed to delete sample-understanding file ${fileId}: HTTP ${response.status}`)
 }
 
 export async function analyzeV2Sample(input: V2SampleAnalyzeInput): Promise<V2SampleAnalyzeResult> {
-  const trace = createV2TraceWriter({
-    taskId: input.taskId,
-    sessionId: input.traceContext?.sessionId,
-    operationId: input.traceContext?.operationId,
-  })
+  const trace = createV2TraceWriter({ taskId: input.taskId, sessionId: input.traceContext?.sessionId, operationId: input.traceContext?.operationId })
   await trace.writeJson('01-input', 'sample-understanding-input.json', input)
   const video = await resolveVideoInput(input.sampleVideoPath)
   const hints = await extractAudioVisualUnderstandingHints(video)
   await trace.writeJson('02-sample-understanding', 'audio-visual-hints.json', hints)
-  const fallback = heuristicUnderstanding({ taskId: input.taskId, prompt: input.prompt, video, hints })
-
+  const fallback = heuristicUnderstanding({ taskId: input.taskId, video, hints })
   let understanding = fallback
   if (env.videoUnderstandingApiKey) {
     let fileId: string | undefined
     try {
-      const prompt = buildPrompt({
-        taskId: input.taskId,
-        prompt: input.prompt,
-        video,
-        fallback,
-        agentSkillContext: input.agentSkillContext,
-        agentToolContext: input.agentToolContext,
-      })
+      const prompt = buildPrompt({ taskId: input.taskId, prompt: input.prompt, video, fallback, agentSkillContext: input.agentSkillContext, agentToolContext: input.agentToolContext })
       await trace.writeText('02-sample-understanding', 'sample-understanding-prompt.md', prompt)
       fileId = await uploadVideoFile(video)
-      await trace.writeJson('02-sample-understanding', 'ark-file.json', { file_id: fileId })
       await waitForFileReady(fileId)
       const response = await callUnderstandingModel({ fileId, prompt })
-      const raw = response.raw
-      await trace.writeJson('02-sample-understanding', 'sample-understanding-model-response.audit.json', responseAudit(raw))
-      let parsed: ReturnType<typeof parseUnderstandingCandidate>
+      await trace.writeJson('02-sample-understanding', 'sample-understanding-model-response.audit.json', responseAudit(response.raw))
+      let parsed
       try {
-        parsed = parseUnderstandingCandidate(raw)
-      } catch (firstError) {
-        const message = firstError instanceof Error ? firstError.message : String(firstError)
-        await trace.writeJson('02-sample-understanding', 'sample-understanding-protocol-diagnostic.json', {
-          kind: 'json_syntax_or_extraction', message, retry: 'format_only_without_video',
-          structured_output: response.structuredOutput,
-        })
-        const repairPrompt = jsonRepairPrompt({ invalidText: extractText(raw), error: message, taskId: input.taskId })
+        parsed = parseUnderstandingCandidate(response.raw)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const repairPrompt = jsonRepairPrompt({ invalidText: extractText(response.raw), error: message, taskId: input.taskId })
         await trace.writeText('02-sample-understanding', 'sample-understanding-json-repair-request.md', repairPrompt)
-        const repairedResponse = await callUnderstandingModel({
-          fileId, prompt: repairPrompt, includeVideo: false, allowStructuredOutput: false,
-        })
-        const repairedRaw = repairedResponse.raw
-        await trace.writeJson('02-sample-understanding', 'sample-understanding-json-repair-response.audit.json', responseAudit(repairedRaw))
-        parsed = parseUnderstandingCandidate(repairedRaw)
+        const repaired = await callUnderstandingModel({ fileId, prompt: repairPrompt, includeVideo: false, allowStructuredOutput: false })
+        parsed = parseUnderstandingCandidate(repaired.raw)
       }
       await trace.writeJson('02-sample-understanding', 'sample-understanding-extraction-report.json', parsed.report)
-      const candidate = parsed.candidate
-      understanding = normalizeUnderstanding(candidate, fallback)
+      understanding = normalizeUnderstanding(parsed.candidate, fallback)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      const protocolFailure = /JSON|schema_version|extraction|Unexpected token/i.test(message)
-      understanding = heuristicUnderstanding({
-        taskId: input.taskId,
-        prompt: input.prompt,
-        video,
-        hints,
-        warning: `${protocolFailure ? '理解模型输出协议失败' : '理解模型调用失败'}，已使用本地兜底结构：${message}`,
-      })
-      await trace.writeJson('02-sample-understanding', 'sample-understanding-error.json', {
-        kind: protocolFailure ? 'output_protocol_failure' : 'provider_request_failure', message,
-      })
+      understanding = heuristicUnderstanding({ taskId: input.taskId, video, hints, warning: message })
+      await trace.writeJson('02-sample-understanding', 'sample-understanding-error.json', { message })
     } finally {
       if (fileId) await maybeDeleteFile(fileId)
     }
   }
-
   await trace.writeJson('02-sample-understanding', 'sample-understanding.json', understanding)
-  await trace.writeText(
-    '02-sample-understanding',
-    'sample-understanding.zh.md',
-    [
-      '# V2 样例理解',
-      '',
-      understanding.summary_zh,
-      '',
-      `- 来源：${understanding.source}`,
-      `- 时长：${understanding.sample.duration_sec}s`,
-      `- 段落：${understanding.segments.length}`,
-      '',
-      '## 段落',
-      '',
-      ...understanding.segments.map(
-        (segment, index) =>
-          `${index + 1}. ${segment.title_zh}（${segment.start_sec}-${segment.end_sec}s）：${segment.visual_content_zh}；镜头：${segment.camera_zh}；转场：${segment.transition_after_zh ?? '无后续转场'}`,
-      ),
-    ].join('\n'),
-  )
+  await trace.writeText('02-sample-understanding', 'sample-understanding.md', [
+    '# V2 Sample Understanding', '', understanding.summary, '',
+    `- Source: ${understanding.source}`,
+    `- Duration: ${understanding.sample.duration_sec}s`,
+    `- Content observations: ${understanding.content_observations.length}`,
+    `- Method observations: ${understanding.method_observations.length}`,
+    '',
+    ...understanding.method_observations.map((item) => `- ${item.expression} — ${item.purpose} (${item.timing_rationale})`),
+  ].join('\n'))
   await trace.writeSummary([
-    '# V2 样例理解',
-    '',
-    `- 任务 ID：${input.taskId}`,
-    `- 理解来源：${understanding.source}`,
-    `- 样例时长：${understanding.sample.duration_sec}s`,
-    `- 段落数量：${understanding.segments.length}`,
-    `- 样例概括：${understanding.summary_zh}`,
-    '',
-    '本步骤只理解样例视频，不生成 V2 时间线方案，也不渲染成片。',
+    '# V2 Sample Understanding', '', `- Task: ${input.taskId}`, `- Source: ${understanding.source}`,
+    `- Duration: ${understanding.sample.duration_sec}s`, `- Methods: ${understanding.method_observations.length}`,
   ])
   await trace.appendSessionEvent({
-    type: 'sample_understanding_completed',
-    source: understanding.source,
+    type: 'sample_understanding_completed', source: understanding.source,
     duration_sec: understanding.sample.duration_sec,
-    segment_count: understanding.segments.length,
+    method_count: understanding.method_observations.length,
+    shot_count: understanding.shot_evidence.length,
     artifact_dir: trace.rootDir,
   })
-  return {
-    taskId: input.taskId,
-    understanding,
-    traceDir: trace.rootDir,
-  }
+  return { taskId: input.taskId, understanding, traceDir: trace.rootDir }
 }

@@ -53,16 +53,24 @@ const adapter = createArkSeedanceMaterialGenerationAdapter({
   fetchImpl: mockFetch,
 })
 
+const submissionEvents: string[] = []
 const result = await adapter.generate({
   jobId: 'job_001',
   shotId: 'shot_001',
   type: 'generate_video',
   prompt: 'mock seedance prompt --duration 5 --camerafixed false --watermark true',
   outputAssetId: 'generated_video_asset',
+}, {
+  onProviderTaskSubmitted: async (providerTaskId) => {
+    submissionEvents.push(providerTaskId)
+    assert.equal(calls.some((call) => call.includes('/tasks/task_mock_001')), false)
+  },
 })
 
 assert.equal(result.ok, true, result.error)
 assert.equal(result.providerTaskId, 'task_mock_001')
+assert.equal(result.submissionState, 'submitted')
+assert.deepEqual(submissionEvents, ['task_mock_001'])
 assert.equal(result.asset?.type, 'video')
 assert.equal(existsSync(result.asset?.src ?? ''), true)
 assert.deepEqual(calls, [
@@ -70,5 +78,25 @@ assert.deepEqual(calls, [
   'GET https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks/task_mock_001',
   'GET https://example.com/generated.mp4',
 ])
+
+const unknownSubmission = await createArkSeedanceMaterialGenerationAdapter({
+  apiKey: 'ark-mock-key',
+  model: 'mock-model',
+  submitUrl: 'https://example.com/tasks',
+  statusUrlTemplate: 'https://example.com/tasks/{id}',
+  outputDir,
+  fetchImpl: async () => {
+    throw new Error('connection reset after request dispatch')
+  },
+}).generate({
+  jobId: 'job_unknown',
+  shotId: 'shot_unknown',
+  type: 'generate_video',
+  prompt: 'unknown submit state',
+  outputAssetId: 'generated_unknown',
+})
+assert.equal(unknownSubmission.ok, false)
+assert.equal(unknownSubmission.submissionState, 'unknown')
+assert.equal(unknownSubmission.failureCode, 'provider_submit_state_unknown')
 
 console.info('[smoke-v2-ark-seedance-adapter] OK')

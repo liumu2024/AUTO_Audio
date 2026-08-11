@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import path from 'node:path'
 
 import { runV2RemotionTimeline } from '../src/pipeline-v2/remotion-timeline-service.js'
@@ -12,20 +13,22 @@ const sampleImage = path.join(repoRoot, 'example_videos', 'img', '1.png')
 if (!existsSync(sampleVideo)) throw new Error(`Missing sample video: ${sampleVideo}`)
 if (!existsSync(sampleImage)) throw new Error(`Missing sample image: ${sampleImage}`)
 
-const result = await runV2RemotionTimeline({
-  taskId,
-  prompt: '用参考素材做一条节奏清楚的产品展示短片，突出开场、卖点和收束。',
-  mainVideoPath: sampleVideo,
-  imageSrc: sampleImage,
-  durationSec: 3,
-  plannerMode: 'deterministic',
-  allowPlannerFallback: true,
-  canvas: {
-    width: 360,
-    height: 640,
-    fps: 12,
-  },
-})
+let result: Awaited<ReturnType<typeof runV2RemotionTimeline>> | undefined
+try {
+  result = await runV2RemotionTimeline({
+    taskId,
+    prompt: '用参考素材做一条节奏清楚的产品展示短片，突出开场、卖点和收束。',
+    mainVideoPath: sampleVideo,
+    imageSrc: sampleImage,
+    durationSec: 3,
+    plannerMode: 'deterministic',
+    allowPlannerFallback: true,
+    canvas: {
+      width: 360,
+      height: 640,
+      fps: 12,
+    },
+  })
 
 assert.equal(result.ok, true, JSON.stringify(result.evaluation, null, 2))
 assert.equal(existsSync(result.outputPath), true)
@@ -44,3 +47,19 @@ console.info(JSON.stringify({
   standardizedAssets: result.standardizedAssets.length,
   fileSizeBytes: result.render.fileSizeBytes,
 }, null, 2))
+} finally {
+  await Promise.all([
+    rm(path.resolve(process.cwd(), 'v2-renders', taskId), {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    }),
+    rm(path.resolve(process.cwd(), 'tmp', 'v2-traces', 'tasks', taskId), {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    }),
+  ])
+}

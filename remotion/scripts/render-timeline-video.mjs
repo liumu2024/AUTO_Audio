@@ -31,25 +31,34 @@ const inputProps = JSON.parse(await readFile(path.resolve(propsPath), 'utf8'))
 const resolvedOutputPath = path.resolve(outputPath)
 const outputDir = path.dirname(resolvedOutputPath)
 const bundleDir = path.join(outputDir, '.remotion-timeline-bundle')
+const removeBundle = () => rm(bundleDir, {
+  recursive: true,
+  force: true,
+  maxRetries: 10,
+  retryDelay: 100,
+})
 
 await mkdir(outputDir, { recursive: true })
-await rm(bundleDir, { recursive: true, force: true })
+await removeBundle()
 
+let renderError
+try {
 const serveUrl = await bundle({
   entryPoint: path.join(remotionRoot, 'src', 'index.ts'),
+  enableCaching: false,
   outDir: bundleDir,
-  webpackOverride: customComponentsRegistry
-    ? (config) => ({
-        ...config,
-        plugins: [
+  webpackOverride: (config) => ({
+    ...config,
+    plugins: customComponentsRegistry
+      ? [
           ...(config.plugins ?? []),
           new webpack.NormalModuleReplacementPlugin(
             /custom-components[\\/]index$/,
             path.resolve(customComponentsRegistry),
           ),
-        ],
-      })
-    : undefined,
+        ]
+      : config.plugins,
+  }),
   onProgress: (progress) => {
     if (progress === 1) console.log('[v2-timeline-render] bundle complete')
   },
@@ -102,7 +111,16 @@ await writeFile(
   'utf8',
 )
 console.log(JSON.stringify(summary))
-
-if (!keepBundle) {
-  await rm(bundleDir, { recursive: true, force: true })
+} catch (error) {
+  renderError = error
+  throw error
+} finally {
+  if (!keepBundle) {
+    try {
+      await removeBundle()
+    } catch (cleanupError) {
+      if (!renderError) throw cleanupError
+      console.error(`[v2-timeline-render] bundle cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`)
+    }
+  }
 }

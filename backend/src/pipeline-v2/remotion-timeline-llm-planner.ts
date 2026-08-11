@@ -30,10 +30,32 @@ import {
 const MAX_V2_PLANNER_IMAGE_INPUTS = 12
 const TimelineJsonSchema = {
   type: 'object',
-  required: ['schema_version', 'task_id', 'canvas', 'scenes', 'assets', 'transitions', 'caption_tracks', 'overlays', 'audio', 'material_jobs', 'render_policy'],
+  required: ['schema_version', 'task_id', 'creative_brief', 'canvas', 'scenes', 'assets', 'transitions', 'caption_tracks', 'overlays', 'audio', 'material_jobs', 'render_policy'],
   properties: {
     schema_version: { type: 'string', const: REMOTION_TIMELINE_SPEC_SCHEMA_VERSION },
     task_id: { type: 'string' },
+    creative_brief: {
+      type: 'object',
+      required: ['direction', 'image_references', 'sample_methods'],
+      additionalProperties: false,
+      properties: {
+        direction: { type: 'string', minLength: 1 },
+        image_references: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['asset_id', 'observed_facts', 'intended_use'],
+            additionalProperties: false,
+            properties: {
+              asset_id: { type: 'string', minLength: 1 },
+              observed_facts: { type: 'array', items: { type: 'string', minLength: 1 } },
+              intended_use: { type: 'string', minLength: 1 },
+            },
+          },
+        },
+        sample_methods: { type: 'array', items: { type: 'string', minLength: 1 } },
+      },
+    },
     canvas: {
       type: 'object', required: ['width', 'height', 'fps', 'duration_sec'],
       properties: { width: { type: 'number' }, height: { type: 'number' }, fps: { type: 'number' }, duration_sec: { type: 'number' }, background: { type: 'string' } },
@@ -215,29 +237,13 @@ function compactSampleUnderstanding(input: V2RemotionTimelinePlannerInput) {
   return {
     source: understanding.source,
     sample: understanding.sample,
-    summary_zh: understanding.summary_zh,
-    story_zh: understanding.story_zh,
-    atmosphere_zh: understanding.atmosphere_zh,
-    editing_zh: understanding.editing_zh,
-    rhythm_zh: understanding.rhythm_zh,
-    reusable_style_zh: understanding.reusable_style_zh,
-    not_reusable_zh: understanding.not_reusable_zh,
-    segments: understanding.segments.slice(0, 8).map((segment) => ({
-      title_zh: segment.title_zh,
-      start_sec: segment.start_sec,
-      end_sec: segment.end_sec,
-      visual_content_zh: segment.visual_content_zh,
-      characters_objects_zh: segment.characters_objects_zh,
-      atmosphere_zh: segment.atmosphere_zh,
-      camera_zh: segment.camera_zh,
-      motion_zh: segment.motion_zh,
-      editing_zh: segment.editing_zh,
-      rhythm_zh: segment.rhythm_zh,
-      transition_after_zh: segment.transition_after_zh,
-      reusable_style_zh: segment.reusable_style_zh,
-      material_hint_zh: segment.material_hint_zh,
-    })),
+    summary: understanding.summary,
+    content_observations: understanding.content_observations.slice(0, 12),
+    method_observations: understanding.method_observations.slice(0, 12),
+    transferable_knowledge: understanding.transferable_knowledge.slice(0, 12),
     shot_evidence: (understanding.shot_evidence ?? []).slice(0, 40),
+    questions: understanding.questions.slice(0, 8),
+    warnings: understanding.warnings.slice(0, 8),
   }
 }
 
@@ -266,15 +272,19 @@ export function buildV2TimelinePlannerPrompt(
     '- image_motion cannot invent new visual elements; it only pans, zooms, or crops pixels from its bound image asset. If the requested shot adds a person, animal, vehicle, weather event, or other content absent from the source image, use ai_video with a generate_video job.',
     '- remotion_card is an intentional typography or motion-graphics scene, not a placeholder for missing photographic footage. Use it only when a card or graphic is part of the creative design; use ai_video with generate_video for a requested realistic moving shot.',
     '- The planner does not own execution status. New generate_video jobs must use status "planned"; only the backend may mark them fulfilled after a real output asset exists.',
+    '- creative_brief.direction is the single whole-video creative direction. material_job.prompt contains only scene-specific semantics.',
+    '- For every attached image actually used, record only visible facts in creative_brief.image_references.observed_facts and explain its intended use. Do not invent unseen facts.',
+    '- creative_brief.sample_methods contains only sample methods selected because they help this task; it must not mechanically copy sample chapter boundaries.',
+    '- Never output creative_brief.planning_gaps. Only the server records unresolved planning work.',
     '- assets contains only already-resolved, renderable assets and every asset src must be non-empty. Do not add an empty placeholder asset for a planned generation; reference its material_job output_asset_id from the scene instead.',
     '- This V2 plan has no audio-generation tool. When the user requests a BGM strategy but provides no audio asset, describe it in notes only; do not create audio clips, empty audio assets, or generate_video jobs for music.',
     '- For image-conditioned video generation, set input_asset_id to an existing image asset. Never output input_image_url; the backend binds the provider URL at execution time.',
     '- When input_asset_id is used, the target scene creative_intent.description must explain which visible source-image facts are retained and which requested moving or new elements are added.',
     '- If main_video_asset_id is null, do not create user_video scenes unless another video asset exists in assets.',
     '- If reference_video_path is provided, treat it as style/structure context only; do not include it as an output asset unless it is also listed as main_video_path.',
-    '- If sample_understanding is provided, use it as the source for sample content, rhythm, pacing, shot structure, and transition cues. Do not ignore it and do not infer sample details only from the filename.',
+    '- If sample_understanding is provided, distinguish visible content from transferable directing methods. Select only methods relevant to the current goal; do not copy chapter boundaries, shot count, or sample content mechanically.',
     '- creation_mode controls the task branch:',
-    '  - sample_replicate: learn structure, pacing, atmosphere, and transitions from sample_understanding; user materials or generated assets provide final visuals.',
+    '  - sample_replicate: adapt attention, reveal order, camera language, motion, pacing, beat timing, transition logic, and narrative purpose from sample_understanding; user materials or generated assets provide final visuals.',
     '  - material_brief: no sample video is available; infer structure from user_prompt and material_assets only. Do not mention sample rhythm or sample style.',
     '  - text_to_video: no sample and no visual material are available; plan AI video scenes for realistic visuals. Remotion captions remain overlays, while cards are allowed only when the creative design intentionally calls for typography or motion graphics—not as fallback footage.',
     '- planning_context contains stable draft/version facts and activeRequirements.',
@@ -289,7 +299,6 @@ export function buildV2TimelinePlannerPrompt(
     '- caption_tracks defines reusable defaults for caption overlays. Each caption overlay may reference track_id and can override a track default. When the user asks for multiple lines of narration in one shot, create multiple timed caption overlays on one track rather than merging planning notes into one caption.',
     '- When the user asks for original subtitles from themes or keywords, create audience-facing copy yourself; do not repeat the instruction text. If the user asks for a line limit or placement, express it with caption track defaults and overlay geometry/max_lines while preserving or creating appropriate copy.',
     '- A narrow revision such as audio strategy, transition, subtitle layout, or one selected scene must not replace unrelated subject matter, visual intent, confirmed captions, or sample-use boundaries.',
-    '- The selected revision item identifies the user\'s current focus, not an instruction to ignore the rest of the timeline.',
     '- revision_scope is the tool-authorized boundary: subtitle changes captions only; scene changes only the scene with revision_scene_id plus its caption overlays/track and transitions adjacent to it; structure may split, merge, insert, or remove only the contiguous revision_scene_ids range while preserving its total duration and all surrounding scenes; visual_strategy changes only the visual strategy fields (type/fit/motion/background/asset binding) of the scene with revision_scene_id and that scene\'s material jobs; transition changes only revision_transition_ids; global allows a full rewrite only when the user explicitly requests a broader change.',
     '- When the user requests an effect (filter, compositing, animation, transition) outside the preset set and the instruction explicitly names a sedimented component id, reference it with custom_render { component_id, params } on the target scene or transition. Do not invent component ids that are not explicitly given; do not output React/Remotion code here (components are authored separately through render.author).',
     ...(input.availableComponents?.length
@@ -340,6 +349,7 @@ export function buildV2TimelinePlannerPrompt(
         planning_context: input.planningContext ?? null,
         revision_context: input.revisionContext ?? null,
         revision_scope: input.revisionScope ?? null,
+        revision_global_mode: input.revisionGlobalMode ?? null,
         revision_scene_id: input.revisionSceneId ?? null,
         revision_scene_ids: input.revisionSceneIds ?? null,
         revision_transition_ids: input.revisionTransitionIds ?? null,
@@ -348,19 +358,12 @@ export function buildV2TimelinePlannerPrompt(
         main_video_asset_id: example.assets.find((asset) => asset.id === 'main_video_asset')?.id ?? null,
         main_video_path: example.assets.find((asset) => asset.id === 'main_video_asset')?.src ?? null,
         reference_video_path: input.referenceVideoPath ?? null,
-        optional_image_asset_id: example.assets.find((asset) => asset.id === 'planner_image_asset')?.id ?? null,
-        optional_image_src: example.assets.find((asset) => asset.id === 'planner_image_asset')?.src ?? null,
+        optional_image_asset_id: example.assets.find((asset) => asset.type === 'image')?.id ?? null,
         material_assets: example.assets.map((asset) => ({
           id: asset.id,
           type: asset.type,
           label: asset.label,
           source: asset.source,
-        })),
-        user_materials: (input.materials ?? []).map((material) => ({
-          id: material.id,
-          name: material.name,
-          type: material.type,
-          tags: material.tags,
         })),
         sample_understanding: compactSampleUnderstanding(input),
         hard_requirements: hardRequirements,
@@ -445,6 +448,15 @@ function assertLlmMainSceneMaterialCoverage(input: V2RemotionTimelinePlannerInpu
   }
 }
 
+function authoritativePlannerAssets(input: V2RemotionTimelinePlannerInput) {
+  return new Map(
+    [
+      ...buildDeterministicRemotionTimelineSpec(input).assets,
+      ...(input.revisionBaseSpec?.assets ?? []),
+    ].map((asset) => [asset.id, asset]),
+  )
+}
+
 async function bindAuthoritativePlannerAssets(
   input: V2RemotionTimelinePlannerInput,
   spec: RemotionTimelineSpecV1,
@@ -452,14 +464,15 @@ async function bindAuthoritativePlannerAssets(
   if (spec.material_jobs.some((job) => job.input_image_url)) {
     throw new Error('input_image_url is reserved for historical persisted jobs; model output must use input_asset_id.')
   }
-  const authoritativeAssets = new Map(
-    [
-      ...buildDeterministicRemotionTimelineSpec(input).assets,
-      ...(input.revisionBaseSpec?.assets ?? []),
-    ].map((asset) => [asset.id, asset]),
-  )
+  if (spec.creative_brief?.planning_gaps?.length) {
+    throw new Error('planning_gaps are server-maintained and cannot be returned by the planner model.')
+  }
+  const authoritativeAssets = authoritativePlannerAssets(input)
   const conditionedAssetIds = new Set(
     spec.material_jobs.flatMap((job) => job.input_asset_id ? [job.input_asset_id] : []),
+  )
+  const imageReferences = new Map(
+    (spec.creative_brief?.image_references ?? []).map((reference) => [reference.asset_id, reference]),
   )
 
   for (const assetId of conditionedAssetIds) {
@@ -473,17 +486,26 @@ async function bindAuthoritativePlannerAssets(
     if (!spec.assets.some((asset) => asset.id === assetId)) {
       throw new Error(`input_asset_id is missing from the candidate asset list: ${assetId}`)
     }
+    const reference = imageReferences.get(assetId)
+    if (!reference) {
+      throw new Error(`image-conditioned generation is missing creative_brief image facts for: ${assetId}`)
+    }
+    if (!reference.observed_facts.some((fact) => fact.trim()) || !reference.intended_use.trim()) {
+      throw new Error(`image-conditioned generation has incomplete creative_brief image facts for: ${assetId}`)
+    }
+  }
+  for (const reference of spec.creative_brief?.image_references ?? []) {
+    const authoritative = authoritativeAssets.get(reference.asset_id)
+    if (!authoritative || authoritative.type !== 'image') {
+      throw new Error(`creative_brief image reference is not a server-owned image asset: ${reference.asset_id}`)
+    }
   }
 
   return {
     ...spec,
     assets: spec.assets.map((asset) => {
       const authoritative = authoritativeAssets.get(asset.id)
-      if (conditionedAssetIds.has(asset.id)) return { ...authoritative! }
-      if (asset.source !== 'user_asset') return asset
-      if (!authoritative || authoritative.source !== 'user_asset') {
-        throw new Error(`model returned an unknown user_asset: ${asset.id}`)
-      }
+      if (!authoritative) throw new Error(`model returned an asset not owned by the server: ${asset.id}`)
       return { ...authoritative }
     }),
   }
@@ -575,7 +597,7 @@ function responseAudit(raw: unknown) {
   }
 }
 
-function timelineJsonRepairPrompt(input: { invalidText: string; error: string }) {
+function timelineJsonSyntaxRepairPrompt(input: { invalidText: string; error: string }) {
   return [
     'Repair only the JSON format below. Do not change its business meaning, timeline choices, assets, or captions.',
     `Return JSON only following this schema: ${JSON.stringify(TimelineJsonSchema)}`,
@@ -585,25 +607,39 @@ function timelineJsonRepairPrompt(input: { invalidText: string; error: string })
   ].join('\n')
 }
 
+function timelineFieldRepairPrompt(input: {
+  invalidText: string
+  error: string
+  assets: Array<{ id: string; type: string }>
+}) {
+  return [
+    'Correct only the fields implicated by the validation error below.',
+    'Use only server-provided asset IDs and remove or replace rejected references when the error requires it.',
+    `Server-owned asset catalog (IDs and types only): ${JSON.stringify(input.assets)}`,
+    'Preserve unrelated timeline choices, captions, timing, and valid assets.',
+    `Return JSON only following this schema: ${JSON.stringify(TimelineJsonSchema)}`,
+    `Validation error: ${input.error}`,
+    'Original final answer:',
+    input.invalidText,
+  ].join('\n')
+}
+
 export async function runV2TimelineLlmPlanner(
   input: V2RemotionTimelinePlannerInput,
-  options: { promptText?: string } = {},
+  options: { promptText?: string; allowJsonRepair?: boolean } = {},
 ): Promise<V2TimelineLlmPlannerResult> {
   const preparedImages = await preparePlannerImageInputs(input)
-  const promptText = options.promptText ?? buildV2TimelinePlannerPrompt(input, preparedImages.report)
-  let rawResponse: unknown
-  let initialResponseAudit: unknown
-  let structuredOutput: V2TimelineLlmPlannerResult['structuredOutput']
-  let jsonRepair: V2TimelineLlmPlannerResult['jsonRepair']
   try {
+    const promptText = options.promptText ?? buildV2TimelinePlannerPrompt(input, preparedImages.report)
+    let rawResponse: unknown
+    let initialResponseAudit: unknown
+    let structuredOutput: V2TimelineLlmPlannerResult['structuredOutput']
+    let jsonRepair: V2TimelineLlmPlannerResult['jsonRepair']
     const response = await callResponsesApi(promptText, preparedImages.content)
     rawResponse = response.raw
     initialResponseAudit = responseAudit(rawResponse)
     structuredOutput = response.structuredOutput
-  } finally {
-    await releaseArkImageInputs(preparedImages)
-  }
-  let extracted = extractStructuredJsonCandidate(
+    let extracted = extractStructuredJsonCandidate(
     rawResponse,
     (value): value is RemotionTimelineSpecV1 =>
       typeof value === 'object' &&
@@ -611,11 +647,11 @@ export async function runV2TimelineLlmPlanner(
       !Array.isArray(value) &&
       (value as { schema_version?: unknown }).schema_version === REMOTION_TIMELINE_SPEC_SCHEMA_VERSION,
   )
-  if (!extracted.candidate) {
+  if (!extracted.candidate && options.allowJsonRepair !== false) {
     const error = `LLM timeline planner did not return ${REMOTION_TIMELINE_SPEC_SCHEMA_VERSION}: ${JSON.stringify(extracted.report)}`
-    const repairPrompt = timelineJsonRepairPrompt({ invalidText: extractTextCandidate(rawResponse), error })
+    const repairPrompt = timelineJsonSyntaxRepairPrompt({ invalidText: extractTextCandidate(rawResponse), error })
     try {
-      const repaired = await callResponsesApi(repairPrompt, [], { allowStructuredOutput: false })
+      const repaired = await callResponsesApi(repairPrompt, preparedImages.content, { allowStructuredOutput: false })
       jsonRepair = { request: repairPrompt, responseAudit: responseAudit(repaired.raw) }
       rawResponse = repaired.raw
       extracted = extractStructuredJsonCandidate(
@@ -635,18 +671,47 @@ export async function runV2TimelineLlmPlanner(
       })
     }
   }
+  if (!extracted.candidate) {
+    throw new V2TimelinePlannerProtocolError(
+      `LLM timeline planner did not return ${REMOTION_TIMELINE_SPEC_SCHEMA_VERSION}: ${JSON.stringify(extracted.report)}`,
+      {
+        initialResponseAudit: initialResponseAudit!,
+        rawResponse: responseAudit(rawResponse),
+        extractionReport: extracted.report,
+        structuredOutput: structuredOutput!,
+        jsonRepair,
+      },
+    )
+  }
 
-  let normalizedCandidate = await bindAuthoritativePlannerAssets(
-    input,
-    normalizeV2TimelineTextOwnership(extracted.candidate as RemotionTimelineSpecV1),
-  )
-  let repairedCandidate = repairV2LlmGeneratedMaterialPrompts(normalizedCandidate)
-  let validation = validateRemotionTimelineSpec(repairedCandidate.spec)
-  if (!validation.ok && !jsonRepair) {
-    const error = `LLM timeline spec field validation failed: ${JSON.stringify(validation.issues)}`
-    const repairPrompt = timelineJsonRepairPrompt({ invalidText: extractTextCandidate(rawResponse), error })
+  const prepareCandidate = async (candidate: RemotionTimelineSpecV1) => {
+    const normalized = await bindAuthoritativePlannerAssets(
+      input,
+      normalizeV2TimelineTextOwnership(candidate),
+    )
+    const repaired = repairV2LlmGeneratedMaterialPrompts(normalized)
+    return { repaired, validation: validateRemotionTimelineSpec(repaired.spec) }
+  }
+  let preparedCandidate: Awaited<ReturnType<typeof prepareCandidate>> | undefined
+  let preparationError: Error | undefined
+  try {
+    preparedCandidate = await prepareCandidate(extracted.candidate as RemotionTimelineSpecV1)
+  } catch (error) {
+    preparationError = error instanceof Error ? error : new Error(String(error))
+  }
+  if ((preparationError || !preparedCandidate?.validation.ok) && !jsonRepair && options.allowJsonRepair !== false) {
+    const error = preparationError?.message
+      ?? `LLM timeline spec field validation failed: ${JSON.stringify(preparedCandidate?.validation.issues)}`
+    const repairPrompt = timelineFieldRepairPrompt({
+      invalidText: extractTextCandidate(rawResponse),
+      error,
+      assets: [...authoritativePlannerAssets(input).values()].map((asset) => ({
+        id: asset.id,
+        type: asset.type,
+      })),
+    })
     try {
-      const repaired = await callResponsesApi(repairPrompt, [], { allowStructuredOutput: false })
+      const repaired = await callResponsesApi(repairPrompt, preparedImages.content, { allowStructuredOutput: false })
       jsonRepair = { request: repairPrompt, responseAudit: responseAudit(repaired.raw) }
       rawResponse = repaired.raw
       extracted = extractStructuredJsonCandidate(
@@ -656,40 +721,50 @@ export async function runV2TimelineLlmPlanner(
           (value as { schema_version?: unknown }).schema_version === REMOTION_TIMELINE_SPEC_SCHEMA_VERSION,
       )
       if (extracted.candidate) {
-        normalizedCandidate = await bindAuthoritativePlannerAssets(
-          input,
-          normalizeV2TimelineTextOwnership(extracted.candidate as RemotionTimelineSpecV1),
-        )
-        repairedCandidate = repairV2LlmGeneratedMaterialPrompts(normalizedCandidate)
-        validation = validateRemotionTimelineSpec(repairedCandidate.spec)
+        preparedCandidate = await prepareCandidate(extracted.candidate as RemotionTimelineSpecV1)
+        preparationError = undefined
       }
     } catch (repairError) {
+      preparationError = repairError instanceof Error ? repairError : new Error(String(repairError))
       jsonRepair = { request: repairPrompt, error: repairError instanceof Error ? repairError.message : String(repairError) }
     }
   }
-  if (!validation.ok) {
+  if (preparationError || !preparedCandidate) {
     throw new V2TimelinePlannerProtocolError(
-      `LLM timeline spec is invalid: ${JSON.stringify(validation.issues, null, 2)}`,
+      `LLM timeline spec ownership validation failed: ${preparationError?.message ?? 'candidate was not prepared'}`,
       {
         initialResponseAudit: initialResponseAudit!,
         rawResponse: responseAudit(rawResponse), extractionReport: extracted.report,
-        structuredOutput: structuredOutput!, jsonRepair, validationIssues: validation.issues,
+        structuredOutput: structuredOutput!, jsonRepair,
+      },
+    )
+  }
+  if (!preparedCandidate.validation.ok) {
+    throw new V2TimelinePlannerProtocolError(
+      `LLM timeline spec is invalid: ${JSON.stringify(preparedCandidate.validation.issues, null, 2)}`,
+      {
+        initialResponseAudit: initialResponseAudit!,
+        rawResponse: responseAudit(rawResponse), extractionReport: extracted.report,
+        structuredOutput: structuredOutput!, jsonRepair, validationIssues: preparedCandidate.validation.issues,
       },
     )
   }
 
-  const spec = assertValidRemotionTimelineSpec(repairedCandidate.spec)
+  const spec = assertValidRemotionTimelineSpec(preparedCandidate.repaired.spec)
   assertLlmMainSceneMaterialCoverage(input, spec)
 
-  return {
-    spec,
-    initialResponseAudit: initialResponseAudit!,
-    rawResponse: responseAudit(rawResponse),
-    extractionReport: extracted.report,
-    promptText,
-    visualInputReport: preparedImages.report,
-    repairs: repairedCandidate.repairs,
-    structuredOutput: structuredOutput!,
-    ...(jsonRepair ? { jsonRepair } : {}),
+    return {
+      spec,
+      initialResponseAudit: initialResponseAudit!,
+      rawResponse: responseAudit(rawResponse),
+      extractionReport: extracted.report,
+      promptText,
+      visualInputReport: preparedImages.report,
+      repairs: preparedCandidate.repaired.repairs,
+      structuredOutput: structuredOutput!,
+      ...(jsonRepair ? { jsonRepair } : {}),
+    }
+  } finally {
+    await releaseArkImageInputs(preparedImages)
   }
 }

@@ -3,10 +3,6 @@ import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-time
 export interface V2TimelineRevisionContext {
   draft_id: string
   base_revision: number
-  selected_item?: {
-    id: string
-    kind: 'scene' | 'overlay' | 'transition'
-  }
   timeline: {
     canvas: RemotionTimelineSpecV1['canvas']
     assets: Array<Pick<RemotionTimelineSpecV1['assets'][number], 'id' | 'type' | 'source' | 'label'>>
@@ -35,13 +31,6 @@ export interface V2TimelineRevisionAudit {
   warnings: string[]
 }
 
-function itemId(value: string | undefined): { id: string; kind: 'scene' | 'overlay' | 'transition' } | undefined {
-  if (!value) return undefined
-  const match = value.match(/^v2-(scene|overlay|transition)-(.+)$/)
-  if (!match?.[2]) return undefined
-  return { kind: match[1] as 'scene' | 'overlay' | 'transition', id: match[2] }
-}
-
 /**
  * The persisted revision is the only authoritative source for a revision.
  * This compact projection intentionally excludes trace/chat history while
@@ -52,13 +41,11 @@ export function buildV2TimelineRevisionContext(input: {
   draftId: string
   baseRevision: number
   spec: RemotionTimelineSpecV1
-  selectedClipId?: string
 }): V2TimelineRevisionContext {
   const { spec } = input
   return {
     draft_id: input.draftId,
     base_revision: input.baseRevision,
-    selected_item: itemId(input.selectedClipId),
     timeline: {
       canvas: spec.canvas,
       assets: spec.assets.map((asset) => ({

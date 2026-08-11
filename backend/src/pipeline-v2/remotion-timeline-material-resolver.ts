@@ -1,4 +1,8 @@
+import { createHash } from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { copyFile, mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { promisify } from 'node:util'
 
 import { assertValidRemotionTimelineSpec } from '../../../shared/lib/remotion-timeline-validator.js'
 import type {
@@ -7,12 +11,19 @@ import type {
   RemotionTimelineSpecV1,
 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import { ensureExternallyReachableUploadUrl } from '../modules/upload/asset-publisher.js'
+import { findV2FfprobeBinary } from './ffmpeg-binary.js'
+import {
+  v2IdempotencyRequestHash,
+  type V2IdempotencyRepository,
+  type V2IdempotencyReceiptRecord,
+} from './idempotency-repository.js'
 import { standardizeGeneratedVideoAsset } from './media-standardizer.js'
 import {
   createNoopMaterialGenerationAdapter,
   type V2MaterialGenerationResult,
   type V2MaterialGenerationAdapter,
 } from './material-generation-adapter.js'
+import { prepareV2MaterialGenerationRequest } from './material-generation-request.js'
 
 export interface V2TimelineMaterialResolutionReport {
   schema_version: 'v2_timeline_material_resolution.v1'
@@ -32,6 +43,9 @@ export interface V2TimelineMaterialResolutionReport {
     input_image_url?: string
     output_asset_id?: string
     provider_task_id?: string
+    request_fingerprint?: string
+    output_sha256?: string
+    reused_from_run_id?: string
     status: 'fulfilled' | 'fallback' | 'failed'
     elapsed_ms: number
     standardized_src?: string
@@ -44,6 +58,149 @@ export interface V2TimelineMaterialResolutionReport {
     fallback_scene_count: number
     missing_generated_scene_ids: string[]
   }
+}
+
+const execFileAsync = promisify(execFile)
+
+async function sha256File(filePath: string): Promise<string> {
+  return createHash('sha256').update(await readFile(filePath)).digest('hex')
+}
+
+async function isReadableVideo(filePath: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(findV2FfprobeBinary(path.resolve(process.cwd(), '..')), [
+      '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_type', '-of', 'default=nw=1:nk=1', filePath,
+    ])
+    return stdout.trim() === 'video'
+  } catch {
+    return false
+  }
+}
+
+async function copyReusableGeneratedAsset(input: {
+  runId: string
+  spec: RemotionTimelineSpecV1
+  report: V2TimelineMaterialResolutionReport
+  requestFingerprint: string
+  outputAssetId: string
+  outputDir?: string
+}): Promise<{ asset: RemotionTimelineAsset; sha256: string } | undefined> {
+  if (!input.outputDir) return undefined
+  const priorTrace = input.report.generation_trace.find((trace) =>
+    trace.status === 'fulfilled' &&
+    trace.request_fingerprint === input.requestFingerprint &&
+    Boolean(trace.output_asset_id) &&
+    Boolean(trace.output_sha256),
+  )
+  const priorAsset = assetById(input.spec.assets, priorTrace?.output_asset_id)
+  if (!priorTrace?.output_sha256 || priorAsset?.type !== 'video' || !path.isAbsolute(priorAsset.src)) return undefined
+  try {
+    if (await sha256File(priorAsset.src) !== priorTrace.output_sha256) return undefined
+    if (!await isReadableVideo(priorAsset.src)) return undefined
+    const targetDir = path.join(input.outputDir, 'timeline-reused-materials')
+    await mkdir(targetDir, { recursive: true })
+    const target = path.join(targetDir, `${input.outputAssetId.replace(/[^a-zA-Z0-9_.-]/g, '_')}.mp4`)
+    await copyFile(priorAsset.src, target)
+    return {
+      asset: convertGeneratedAsset({ id: input.outputAssetId, type: 'video', src: target, label: `Reused from ${input.runId}` }),
+      sha256: priorTrace.output_sha256,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+async function generateWithIdempotency(input: {
+  adapter: V2MaterialGenerationAdapter
+  request: Parameters<V2MaterialGenerationAdapter['generate']>[0]
+  requestFingerprint: string
+  jobId: string
+  outputAssetId: string
+  outputDir?: string
+  context?: {
+    repository: V2IdempotencyRepository
+    userId: number
+    draftId: string
+    renderRunId: string
+    renderKey: string
+  }
+}): Promise<{ generated: V2MaterialGenerationResult; receipt?: V2IdempotencyReceiptRecord }> {
+  if (!input.context) {
+    return {
+      generated: await input.adapter.generate(input.request).catch((error: unknown) => ({
+        ok: false,
+        submissionState: 'not_submitted' as const,
+        error: error instanceof Error ? error.message : String(error),
+      })),
+    }
+  }
+  const idempotencyKey = v2IdempotencyRequestHash({ renderKey: input.context.renderKey, jobId: input.jobId })
+  const reservation = await input.context.repository.reserve({
+    userId: input.context.userId,
+    draftId: input.context.draftId,
+    operation: 'material.generate',
+    idempotencyKey,
+    resourceKey: `${input.context.renderRunId}:${input.jobId}`,
+    requestHash: input.requestFingerprint,
+  })
+  if (reservation.kind === 'replay') {
+    const receipt = reservation.receipt
+    if (receipt.status === 'completed' && receipt.resultRef) {
+      let replaySource = receipt.resultRef
+      if (input.outputDir && path.isAbsolute(receipt.resultRef)) {
+        const replayDir = path.join(input.outputDir, 'timeline-idempotent-replay')
+        await mkdir(replayDir, { recursive: true })
+        replaySource = path.join(replayDir, `${input.outputAssetId.replace(/[^a-zA-Z0-9_.-]/g, '_')}.mp4`)
+        if (path.resolve(receipt.resultRef) !== path.resolve(replaySource)) {
+          await copyFile(receipt.resultRef, replaySource)
+        }
+      }
+      return {
+        receipt,
+        generated: {
+          ok: true,
+          submissionState: receipt.providerTaskId ? 'submitted' : 'not_submitted',
+          providerTaskId: receipt.providerTaskId,
+          asset: { id: input.outputAssetId, type: 'video', src: replaySource, source: 'generated_asset' },
+        },
+      }
+    }
+    return {
+      receipt,
+      generated: {
+        ok: false,
+        providerTaskId: receipt.providerTaskId,
+        submissionState: receipt.providerTaskId ? 'submitted' : 'not_submitted',
+        error: receipt.failure?.message ?? `Material generation is ${receipt.status}.`,
+      },
+    }
+  }
+  await input.context.repository.update({ id: reservation.receipt.id, phase: 'submitting' })
+  const generated: V2MaterialGenerationResult = await input.adapter.generate(input.request, {
+    onProviderTaskSubmitted: async (providerTaskId) => {
+      await input.context!.repository.update({
+        id: reservation.receipt.id,
+        phase: 'polling',
+        providerTaskId,
+      })
+    },
+  }).catch((error: unknown) => ({
+    ok: false,
+    submissionState: 'not_submitted' as const,
+    error: error instanceof Error ? error.message : String(error),
+  }))
+  if (!generated.ok) {
+    await input.context.repository.update({
+      id: reservation.receipt.id,
+      status: 'failed',
+      providerTaskId: generated.providerTaskId,
+      failure: {
+        code: generated.failureCode ?? 'material_generation_failed',
+        message: generated.error ?? 'Material generation failed.',
+      },
+    })
+  }
+  return { generated, receipt: reservation.receipt }
 }
 
 export interface V2TimelineMaterialProgress {
@@ -139,6 +296,18 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
   outputDir?: string
   maxConcurrency?: number
   onProgress?: (event: V2TimelineMaterialProgress) => void | Promise<void>
+  reusableRun?: {
+    runId: string
+    spec: RemotionTimelineSpecV1
+    report: V2TimelineMaterialResolutionReport
+  }
+  idempotency?: {
+    repository: V2IdempotencyRepository
+    userId: number
+    draftId: string
+    renderRunId: string
+    renderKey: string
+  }
 }): Promise<{
   spec: RemotionTimelineSpecV1
   report: V2TimelineMaterialResolutionReport
@@ -286,19 +455,47 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
       }
     }
 
-    const generated: V2MaterialGenerationResult = inputBindingError
-      ? { ok: false, error: inputBindingError }
-      : await adapter.generate({
-          jobId: job.id,
-          shotId: job.scene_id,
-          type: 'generate_video',
-          prompt: job.prompt,
-          inputImageUrl,
+    const prepared = prepareV2MaterialGenerationRequest({ spec, job, inputImageUrl })
+    const reusable = input.reusableRun
+      ? await copyReusableGeneratedAsset({
+          ...input.reusableRun,
+          requestFingerprint: prepared.fingerprint,
           outputAssetId: job.output_asset_id,
-        }).catch((error: unknown) => ({
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-        }))
+          outputDir: input.outputDir,
+        })
+      : undefined
+    if (reusable) {
+      const trace: V2TimelineMaterialResolutionReport['generation_trace'][number] = {
+        id: job.id,
+        scene_id: job.scene_id,
+        type: job.type,
+        prompt: prepared.request.prompt,
+        input_asset_id: job.input_asset_id,
+        input_image_url: inputImageUrl,
+        output_asset_id: job.output_asset_id,
+        request_fingerprint: prepared.fingerprint,
+        output_sha256: reusable.sha256,
+        reused_from_run_id: input.reusableRun!.runId,
+        status: 'fulfilled',
+        elapsed_ms: Date.now() - startedAt,
+        standardized_src: reusable.asset.src,
+      }
+      await reportProgress(job, 'fulfilled')
+      return { fulfilledJob: job.id, resolvedAsset: reusable.asset, trace }
+    }
+
+    const execution = inputBindingError
+      ? { generated: { ok: false, submissionState: 'not_submitted' as const, error: inputBindingError } }
+      : await generateWithIdempotency({
+          adapter,
+          request: prepared.request,
+          requestFingerprint: prepared.fingerprint,
+          jobId: job.id,
+          outputAssetId: job.output_asset_id,
+          outputDir: input.outputDir,
+          context: input.idempotency,
+        })
+    const generated: V2MaterialGenerationResult = execution.generated
 
     if (generated.ok && generated.asset) {
       const normalized = await standardizeIfVideo({
@@ -317,30 +514,43 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
         id: job.id,
         scene_id: job.scene_id,
         type: job.type,
-        prompt: job.prompt,
+        prompt: prepared.request.prompt,
         input_asset_id: job.input_asset_id,
         input_image_url: inputImageUrl,
         output_asset_id: job.output_asset_id,
         provider_task_id: generated.providerTaskId,
+        request_fingerprint: prepared.fingerprint,
         status: 'fulfilled',
         elapsed_ms: Date.now() - startedAt,
         standardized_src: normalized.standardizedSrc,
+        output_sha256: path.isAbsolute(normalized.asset.src) ? await sha256File(normalized.asset.src) : undefined,
+      }
+      if (execution.receipt && input.idempotency && execution.receipt.status === 'running') {
+        await input.idempotency.repository.update({
+          id: execution.receipt.id,
+          status: 'completed',
+          resultRef: normalized.asset.src,
+          providerTaskId: generated.providerTaskId,
+        })
       }
       await reportProgress(job, 'fulfilled')
       return { fulfilledJob: job.id, resolvedAsset: normalized.asset, trace }
     }
 
-    const fallback = fallbackAsset({ job, currentAssets: spec.assets })
+    const mustFailRun = generated.failureCode === 'provider_submit_state_unknown' ||
+      generated.failureCode === 'provider_receipt_persist_failed'
+    const fallback = mustFailRun ? undefined : fallbackAsset({ job, currentAssets: spec.assets })
     if (fallback) {
       const trace: V2TimelineMaterialResolutionReport['generation_trace'][number] = {
         id: job.id,
         scene_id: job.scene_id,
         type: job.type,
-        prompt: job.prompt,
+        prompt: prepared.request.prompt,
         input_asset_id: job.input_asset_id,
         input_image_url: inputImageUrl,
         output_asset_id: job.output_asset_id,
         provider_task_id: generated.providerTaskId,
+        request_fingerprint: prepared.fingerprint,
         status: 'fallback',
         elapsed_ms: Date.now() - startedAt,
         error: generated.error ?? 'Generation failed; used fallback asset.',
@@ -349,17 +559,18 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
       return { fulfilledJob: job.id, resolvedAsset: fallback, trace }
     }
 
-    if (job.fallback_kind === 'blank_card') {
+    if (!mustFailRun && job.fallback_kind === 'blank_card') {
       const reason = generated.error ?? 'Generation failed; kept the existing Remotion fallback scene.'
       const trace: V2TimelineMaterialResolutionReport['generation_trace'][number] = {
         id: job.id,
         scene_id: job.scene_id,
         type: job.type,
-        prompt: job.prompt,
+        prompt: prepared.request.prompt,
         input_asset_id: job.input_asset_id,
         input_image_url: inputImageUrl,
         output_asset_id: job.output_asset_id,
         provider_task_id: generated.providerTaskId,
+        request_fingerprint: prepared.fingerprint,
         status: 'fallback',
         elapsed_ms: Date.now() - startedAt,
         error: reason,
@@ -377,11 +588,12 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
       id: job.id,
       scene_id: job.scene_id,
       type: job.type,
-      prompt: job.prompt,
+      prompt: prepared.request.prompt,
       input_asset_id: job.input_asset_id,
       input_image_url: inputImageUrl,
       output_asset_id: job.output_asset_id,
       provider_task_id: generated.providerTaskId,
+      request_fingerprint: prepared.fingerprint,
       status: 'failed',
       elapsed_ms: Date.now() - startedAt,
       error: reason,
@@ -465,7 +677,13 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
   )]
   const resolvedGeneratedSceneIds = new Set<string>()
   for (const job of spec.material_jobs.filter((item) => item.type === 'generate_video')) {
-    if (fulfilledJobs.includes(job.id) && job.output_asset_id && assetById(mergedAssets, job.output_asset_id)) {
+    const trace = generationTrace.find((item) => item.id === job.id)
+    if (
+      fulfilledJobs.includes(job.id)
+      && trace?.status === 'fulfilled'
+      && job.output_asset_id
+      && assetById(mergedAssets, job.output_asset_id)
+    ) {
       resolvedGeneratedSceneIds.add(job.scene_id)
     }
   }

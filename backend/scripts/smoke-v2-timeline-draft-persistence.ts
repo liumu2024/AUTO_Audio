@@ -90,6 +90,7 @@ const executed = await executeV2TimelineDraftRun({
   draftId: draft.id,
   revision: saved.revision,
   userId: 1,
+  idempotencyKey: `persistence-render-${Date.now()}`,
   runTimeline: async (input) => {
     receivedOverride = input.timelineSpecOverride
     return {

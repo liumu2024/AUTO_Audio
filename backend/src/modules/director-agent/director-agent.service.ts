@@ -36,12 +36,12 @@ import { createDirectorWorkspaceSessionRepository } from './director-workspace-s
 import { routeConversationSurface } from './surface-router.js'
 import type {
   DirectorAgentChatRequest,
-  DirectorAgentStreamEvent,
 } from './director-agent.types.js'
 import type {
   DirectorContextSlots,
   DirectorEffectiveCreativeConfig,
 } from '../../../../shared/types/director-context.js'
+import type { DirectorAgentStreamEvent } from '../../../../shared/types/director-stream.js'
 
 const workspaceSessions = createDirectorWorkspaceSessionRepository()
 const timelineDrafts = createV2TimelineDraftRepository()
@@ -292,6 +292,17 @@ function toolOutcomeConfirmation(
     if (result.ok) return target ? `${result.summary} 已按本轮指令处理：${target}` : result.summary
     return `未完成 ${target ?? result.toolId}：${friendlyError(result.summary)}${result.recovery ? `；恢复建议：${result.recovery}` : ''}`
   }).join('；')
+}
+
+function workspaceSaveFailureConfirmation(results: V2AgentToolResult[]) {
+  const savedDraft = [...results].reverse().find((result) => result.ok && result.draft)?.draft
+  if (savedDraft) {
+    return `草稿 v${savedDraft.revision} 已保存，但会话状态同步失败；重新打开该草稿可恢复结果。`
+  }
+  if (results.some((result) => result.ok)) {
+    return '工具执行已返回成功，但依赖工作区的状态未保存，请重试。'
+  }
+  return '工作区保存失败，本轮要求和状态均不能确认为已保存，请稍后重试。'
 }
 
 function traceRequirementChanges(changes: RequirementChanges) {
@@ -862,14 +873,18 @@ export async function* streamDirectorAgentChat(
         })
       }
       if (result.draft && facts) {
+        const selectedItemId = typeof result.output?.selectedItemId === 'string'
+          ? result.output.selectedItemId
+          : null
         workspaceState = applyDirectorWorkspacePatch(workspaceState, {
           draftId: result.draft.id,
           baseRevision: result.draft.revision,
+          selectedItemId,
           context: {
             currentTimeline: {
               kind: 'v2_timeline', status: 'saved', draftId: result.draft.id,
               currentRevision: result.draft.revision, savedRevision: result.draft.revision,
-              selectedClipId: workspaceState.selectedItemId,
+              selectedClipId: selectedItemId ?? undefined,
               lastChangeSummary: result.summary,
               sceneCount: result.draft.spec.scenes.length,
             },
@@ -952,12 +967,11 @@ export async function* streamDirectorAgentChat(
   try {
     saved = await (dependencies.saveWorkspace ?? workspaceSessions.save)({ id, userId, state: workspaceState })
   } catch (error) {
-    const safeMessage = '工作区保存失败，本轮要求和状态均不能确认为已保存，请稍后重试。'
     await trace.writeJson('00-director-turn', 'workspace-save-failure.json', {
       error: error instanceof Error ? error.message : String(error),
     })
-    yield { type: 'assistant_reply', message: safeMessage }
-    yield { type: 'done', message: safeMessage }
+    yield { type: 'assistant_reply', message: workspaceSaveFailureConfirmation(toolResults) }
+    yield { type: 'done' }
     return
   }
   await trace.writeJson('00-director-turn', 'turn-result.json', {
@@ -1028,7 +1042,6 @@ export async function* streamDirectorAgentChat(
   ])
 
   yield { type: 'assistant_reply', message: assistantMessage }
-  yield { type: 'workspace_snapshot', workspaceSessionId: id, state: saved.state }
   yield {
     type: 'workspace_session',
     workspaceSessionId: id,
@@ -1058,8 +1071,5 @@ export async function* streamDirectorAgentChat(
   yield { type: 'constraint_resolution', config: effectiveCreativeConfig }
   await wait(15)
 
-  yield {
-    type: 'done',
-    message: assistantMessage,
-  }
+  yield { type: 'done' }
 }

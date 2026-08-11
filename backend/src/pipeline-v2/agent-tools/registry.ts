@@ -65,7 +65,11 @@ const timelinePatchArgumentsSchema = z.discriminatedUnion('scope', [
       .refine((ids) => new Set(ids).size === ids.length, 'transitionIds must be unique.'),
     instruction: patchInstructionSchema,
   }).strict(),
-  z.object({ scope: z.literal('global'), instruction: patchInstructionSchema }).strict(),
+  z.object({
+    scope: z.literal('global'),
+    mode: z.enum(['brief_update', 'full_replan']),
+    instruction: patchInstructionSchema,
+  }).strict(),
 ])
 const timelineRenderArgumentsSchema = emptyArgumentsSchema
 const renderAuthorArgumentsSchema = z.object({
@@ -168,9 +172,6 @@ export function evaluateV2AgentToolReadiness(input: {
         continue
       }
       if (job.type !== 'generate_video') continue
-      const fallbackAsset = job.fallback_asset_id ? assetById.get(job.fallback_asset_id) : undefined
-      const hasFallback = fallbackAsset?.type === 'video' || fallbackAsset?.type === 'image'
-      if (hasFallback) continue
       if (env.v2VideoGenerationProvider !== 'ark-seedance') {
         missing.push({ code: 'generation_provider_unavailable', description: `镜头 ${job.scene_id} 需要生成视频，但当前未配置视频生成 Provider。` })
       }
@@ -203,7 +204,7 @@ export function evaluateV2AgentToolReadiness(input: {
 export function bindV2AgentToolArguments(input: {
   modelArguments: Record<string, unknown>
   context: DirectorContext
-  workspace: Pick<DirectorWorkspaceState, 'draftId' | 'baseRevision' | 'selectedItemId'>
+  workspace: Pick<DirectorWorkspaceState, 'draftId' | 'baseRevision'>
   userId: number
 }) {
   return {
@@ -214,7 +215,6 @@ export function bindV2AgentToolArguments(input: {
       materialIds: input.context.materials.map((item) => item.id),
       draftId: input.workspace.draftId,
       revision: input.workspace.baseRevision,
-      selectedTimelineItemId: input.workspace.selectedItemId,
     },
   }
 }

@@ -68,7 +68,8 @@ assert.equal(validateV2AgentToolRequest({ callId: 'render_bad_002', toolId: 'tim
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_bad_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'subtitle', targetIds: ['caption_1'] }, requestedMode: 'preview' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_scene_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'scene', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, true)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_scene_002', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'scene' }, requestedMode: 'preview' }).ok, true)
-assert.equal(validateV2AgentToolRequest({ callId: 'patch_global_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'global' }, requestedMode: 'preview' }).ok, true)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_global_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'global', mode: 'brief_update' }, requestedMode: 'preview' }).ok, true)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_global_missing_mode', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'global' }, requestedMode: 'preview' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_bad_002', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'subtitle', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, true)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_vs_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'visual_strategy', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, true)
 assert.equal(validateV2AgentToolRequest({
@@ -115,7 +116,7 @@ assert.equal(validateV2AgentToolRequest({
   requestedMode: 'preview',
 }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_vs_002', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'visual_strategy' }, requestedMode: 'preview' }).ok, true)
-assert.equal(validateV2AgentToolRequest({ callId: 'patch_bad_003', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'global', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, false)
+assert.equal(validateV2AgentToolRequest({ callId: 'patch_bad_003', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'global', mode: 'full_replan', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_transition_001', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring', arguments: { scope: 'transition', transitionIds: ['transition_random_a', 'transition_random_b'], instruction: '只修改这两个转场' }, requestedMode: 'preview' }).ok, true)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_transition_002', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring', arguments: { scope: 'transition', transitionIds: [] }, requestedMode: 'preview' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_structure_001', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring', arguments: { scope: 'structure', sceneIds: ['scene_random_a', 'scene_random_b'], instruction: '把这段连续镜头拆得更细' }, requestedMode: 'preview' }).ok, true)
@@ -301,7 +302,7 @@ assert.deepEqual(bindV2AgentToolArguments({
   workspace: { ...createDirectorWorkspaceState({ context: duplicateContext }), draftId: 'draft_server', baseRevision: 3 },
   userId: 7,
 }).system, {
-  userId: 7, sampleId: undefined, materialIds: [], draftId: 'draft_server', revision: 3, selectedTimelineItemId: undefined,
+  userId: 7, sampleId: undefined, materialIds: [], draftId: 'draft_server', revision: 3,
 })
 
 const plannerPrompt = buildV2TimelinePlannerPrompt({
@@ -386,9 +387,10 @@ const localImageFallbackReadiness = evaluateV2AgentToolReadiness({
 })
 assert.equal(
   localImageFallbackReadiness.status,
-  'ready',
-  'a valid visual fallback must keep rendering ready when the generation input is not externally reachable',
+  'blocked',
+  'a visual fallback may keep a draft reviewable, but it cannot satisfy formal generated-video delivery readiness',
 )
+assert.ok(localImageFallbackReadiness.missing.some((item) => item.code === 'generation_input_unreachable'))
 const fallbackWithoutOutputSpec: RemotionTimelineSpecV1 = {
   ...localImageFallbackSpec,
   material_jobs: localImageFallbackSpec.material_jobs.map((job) => ({

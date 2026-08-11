@@ -29,12 +29,16 @@ try {
     schema_version: 'remotion_timeline_spec.v1',
     task_id: 'sci_fi_base',
     canvas: { width: 1920, height: 1080, fps: 30, duration_sec: 20 },
-    assets: [],
+    assets: [
+      { id: 'asset_generated', type: 'video', src: 'https://example.com/generated.mp4', source: 'generated_asset' },
+      { id: 'mat_station', type: 'video', src: 'https://example.com/station.mp4', source: 'user_asset' },
+    ],
     scenes: [1, 2, 3, 4, 5].map((index) => ({
       id: `scene_${index}`,
       type: index === 2 ? 'ai_video' : index === 4 ? 'user_video' : 'remotion_card',
       start_sec: (index - 1) * 4,
-      end_sec: index * 4,
+      duration_sec: 4,
+      ...(index === 2 ? { asset_id: 'asset_generated' } : index === 4 ? { asset_id: 'mat_station' } : {}),
       creative_intent: `scene ${index} narrative`,
     })),
     transitions: [1, 2, 3, 4].map((index) => ({
@@ -42,23 +46,24 @@ try {
       from_scene_id: `scene_${index}`,
       to_scene_id: `scene_${index + 1}`,
       type: 'fade',
+      duration_sec: 0.35,
     })),
     overlays: [
       { id: 'cap_1', type: 'caption', scene_id: 'scene_1', text: '曙光号进入静默区', start_sec: 0, end_sec: 4 },
       { id: 'cap_2', type: 'caption', scene_id: 'scene_2', text: '注意：气闸舱气压异常', start_sec: 4, end_sec: 8 },
       { id: 'cap_3', type: 'caption', scene_id: 'scene_4', text: '引力波读数正在衰减', start_sec: 12, end_sec: 16 },
-    ],
+    ].map((overlay) => ({ ...overlay, x_pct: 50, y_pct: 86 })),
     caption_tracks: [
       { scene_id: 'scene_1', lines: ['曙光号进入静默区'] },
       { scene_id: 'scene_2', lines: ['注意：气闸舱气压异常'] },
       { scene_id: 'scene_4', lines: ['引力波读数正在衰减'] },
-    ],
+    ].map((track, index) => ({ ...track, id: `track_${index + 1}`, x_pct: 50, y_pct: 86 })),
     material_jobs: [
-      { id: 'job_1', scene_id: 'scene_2', type: 'generate_video', status: 'planned', prompt: 'space station airlock' },
-      { id: 'job_2', scene_id: 'scene_4', type: 'use_user_material', status: 'planned', material_id: 'mat_station' },
+      { id: 'job_1', scene_id: 'scene_2', type: 'generate_video', status: 'planned', prompt: 'space station airlock', output_asset_id: 'asset_generated' },
+      { id: 'job_2', scene_id: 'scene_4', type: 'reuse_asset', status: 'fulfilled', output_asset_id: 'mat_station' },
     ],
     audio: [],
-    render_policy: { type: 'remotion_timeline' },
+    render_policy: { renderer: 'remotion_timeline' },
     notes: ['sci-fi draft'],
   }
 
@@ -77,6 +82,9 @@ try {
 
   const { applyV2TimelineRevisionScope } = await import(
     '../src/pipeline-v2/timeline-revision-scope.js'
+  )
+  const { normalizeV2TimelineSelection } = await import(
+    '../src/pipeline-v2/timeline-selection.js'
   )
   const { applyV2TimelineHardRequirements } = await import(
     '../src/pipeline-v2/hard-requirements.js'
@@ -304,22 +312,22 @@ try {
   structureCandidate.scenes = [
     { ...base.scenes[0]!, creative_intent: 'UNRELATED prefix rewrite' },
     base.scenes[1]!,
-    { ...base.scenes[2]!, id: replacementSceneIds[0], start_sec: 8, asset_id: usedStructureAssetId, creative_intent: 'split first half' },
-    { ...base.scenes[2]!, id: replacementSceneIds[1], start_sec: 10, creative_intent: 'split second half' },
+    { ...base.scenes[2]!, id: replacementSceneIds[0], start_sec: 8, duration_sec: 2, asset_id: usedStructureAssetId, creative_intent: 'split first half' },
+    { ...base.scenes[2]!, id: replacementSceneIds[1], start_sec: 10, duration_sec: 2, creative_intent: 'split second half' },
     base.scenes[3]!,
     { ...base.scenes[4]!, creative_intent: 'UNRELATED suffix rewrite' },
   ]
   structureCandidate.transitions = [
     base.transitions[0]!,
-    { id: `transition_${randomUUID()}`, from_scene_id: 'scene_2', to_scene_id: replacementSceneIds[0], type: 'cut' },
-    { id: `transition_${randomUUID()}`, from_scene_id: replacementSceneIds[0], to_scene_id: replacementSceneIds[1], type: 'cut' },
-    { id: `transition_${randomUUID()}`, from_scene_id: replacementSceneIds[1], to_scene_id: 'scene_4', type: 'fade' },
+    { id: `transition_${randomUUID()}`, from_scene_id: 'scene_2', to_scene_id: replacementSceneIds[0], type: 'cut', duration_sec: 0 },
+    { id: `transition_${randomUUID()}`, from_scene_id: replacementSceneIds[0], to_scene_id: replacementSceneIds[1], type: 'cut', duration_sec: 0 },
+    { id: `transition_${randomUUID()}`, from_scene_id: replacementSceneIds[1], to_scene_id: 'scene_4', type: 'fade', duration_sec: 0.35 },
     base.transitions[3]!,
   ]
   structureCandidate.overlays = [
     { ...base.overlays[0]!, text: 'UNRELATED caption rewrite' },
     ...base.overlays.slice(1),
-    { id: `caption_${randomUUID()}`, type: 'caption', scene_id: replacementSceneIds[0], text: 'split caption', start_sec: 8, end_sec: 10 },
+    { id: `caption_${randomUUID()}`, type: 'caption', scene_id: replacementSceneIds[0], text: 'split caption', start_sec: 8, end_sec: 10, x_pct: 50, y_pct: 86 },
   ]
   structureCandidate.material_jobs = [
     ...base.material_jobs,
@@ -348,6 +356,61 @@ try {
   assert.equal(structureScoped.assets.some((asset) => asset.id === unrelatedStructureAssetId), false)
   assert.deepEqual(structureScoped.transitions[0], base.transitions[0])
   assert.deepEqual(structureScoped.transitions.at(-1), base.transitions.at(-1))
+  assert.equal(
+    normalizeV2TimelineSelection({
+      selectedItemId: 'v2-scene-scene_3',
+      nextSpec: structureScoped,
+    }),
+    null,
+    'A split with multiple replacements must clear selection instead of guessing by position.',
+  )
+  const singleReplacement = {
+    ...structureScoped,
+    scenes: structureScoped.scenes.filter((scene) => scene.id !== replacementSceneIds[1]),
+  }
+  assert.equal(
+    normalizeV2TimelineSelection({
+      selectedItemId: 'v2-scene-scene_3',
+      nextSpec: singleReplacement,
+    }),
+    null,
+    'A removed selection must stay cleared until an explicit replacement receipt exists.',
+  )
+  assert.equal(
+    normalizeV2TimelineSelection({
+      selectedItemId: 'v2-scene-scene_2',
+      nextSpec: structureScoped,
+    }),
+    'v2-scene-scene_2',
+  )
+
+  const briefOnlyAssetId = `mat_${randomUUID()}`
+  const briefCandidate = structuredClone(base)
+  briefCandidate.assets.push({
+    id: briefOnlyAssetId,
+    type: 'image',
+    src: 'https://example.invalid/brief-reference.png',
+    source: 'user_asset',
+  })
+  briefCandidate.creative_brief = {
+    direction: 'Use the supplied image as a global character reference.',
+    sample_methods: [],
+    image_references: [{
+      asset_id: briefOnlyAssetId,
+      observed_facts: ['distinctive reference subject'],
+      intended_use: 'Keep the subject identity consistent across generated scenes.',
+    }],
+  }
+  const briefScoped = applyV2TimelineRevisionScope({
+    baseSpec: base,
+    candidateSpec: briefCandidate,
+    scope: 'global',
+    globalMode: 'brief_update',
+  })
+  assert.ok(
+    briefScoped.assets.some((asset) => asset.id === briefOnlyAssetId),
+    'A creative-brief image reference must keep its authoritative asset in the resource closure.',
+  )
 
   assert.equal(evaluateV2TimelineRevisionCommit({
     baseSpec: base,
@@ -405,8 +468,14 @@ try {
   // material jobs may change; captions, audio, transitions and other scenes
   // stay untouched.
   const vsCandidate = structuredClone(base)
+  const visualAssetId = `mat_${randomUUID()}`
+  const orphanVisualAssetId = `mat_${randomUUID()}`
+  vsCandidate.assets.push(
+    { id: visualAssetId, type: 'image', src: 'https://example.invalid/visual.png', source: 'user_asset' },
+    { id: orphanVisualAssetId, type: 'image', src: 'https://example.invalid/orphan.png', source: 'user_asset' },
+  )
   vsCandidate.scenes = vsCandidate.scenes.map((scene) => scene.id === 'scene_2'
-    ? { ...scene, type: 'image_motion', motion: 'slow_zoom_in', creative_intent: 'SHOULD NOT SURVIVE' }
+    ? { ...scene, type: 'image_motion', asset_id: visualAssetId, motion: 'slow_zoom_in', creative_intent: 'SHOULD NOT SURVIVE' }
     : scene)
   vsCandidate.overlays = vsCandidate.overlays.map((overlay) => overlay.id === 'cap_2'
     ? { ...overlay, text: 'SHOULD NOT SURVIVE' }
@@ -422,6 +491,8 @@ try {
   })
   assert.equal(vsScoped.scenes.find((scene) => scene.id === 'scene_2')?.type, 'image_motion')
   assert.equal(vsScoped.scenes.find((scene) => scene.id === 'scene_2')?.motion, 'slow_zoom_in')
+  assert.ok(vsScoped.assets.some((asset) => asset.id === visualAssetId))
+  assert.equal(vsScoped.assets.some((asset) => asset.id === orphanVisualAssetId), false)
   assert.equal(
     vsScoped.scenes.find((scene) => scene.id === 'scene_2')?.creative_intent,
     base.scenes.find((scene) => scene.id === 'scene_2')?.creative_intent,
@@ -683,7 +754,10 @@ try {
   }
   const revision1 = await drafts.getRevision(created.id, 1, 7)
   assert.ok(revision1, 'revision 1 must exist')
-  assert.deepEqual(revision1.spec, base)
+  const { creative_brief: createdBrief, ...createdWithoutBrief } = created.spec
+  assert.equal(createdBrief?.direction, 'sci-fi')
+  assert.deepEqual(createdWithoutBrief, base)
+  assert.deepEqual(revision1.spec, created.spec)
 
   const saved = await drafts.saveDraft({
     draftId: created.id,
@@ -695,8 +769,15 @@ try {
     review: {},
   })
   assert.equal(saved.revision, 2, 'saving a scoped edit must advance to revision 2')
-  assert.deepEqual((await drafts.getRevision(created.id, 1, 7))?.spec, base, 'revision 1 must remain immutable')
-  assert.deepEqual((await drafts.getRevision(created.id, 2, 7))?.spec, scoped)
+  const { creative_brief: savedBrief, ...savedWithoutBrief } = saved.spec
+  assert.equal(savedBrief?.direction, 'sci-fi')
+  assert.deepEqual(savedWithoutBrief, scoped)
+  assert.deepEqual(
+    (await drafts.getRevision(created.id, 1, 7))?.spec,
+    created.spec,
+    'revision 1 must remain immutable',
+  )
+  assert.deepEqual((await drafts.getRevision(created.id, 2, 7))?.spec, saved.spec)
 
   await drafts.createRenderRun({ id: 'run_1', draftId: created.id, sourceRevision: 1, sourceSpec: base })
   await drafts.completeRenderRun({

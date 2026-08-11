@@ -6,7 +6,12 @@ import { validateRemotionTimelineSpec } from '../../../shared/lib/remotion-timel
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import { v2PlannerInputFromRequest } from './controller.js'
 import { previewV2RemotionTimeline } from './remotion-timeline-service.js'
-import { executeV2TimelineDraftRun } from './timeline-draft-runner.js'
+import {
+  executeV2TimelineDraftRun,
+  V2TimelineIdempotencyFailedError,
+  V2TimelineIdempotencyRunningError,
+} from './timeline-draft-runner.js'
+import { V2IdempotencyConflictError } from './idempotency-repository.js'
 import { ensureTimelineRenderComponentVisualEvidence } from '../modules/render-components/component-authoring-agent.js'
 import { buildV2TimelineRevisionContext } from './timeline-revision-context.js'
 import {
@@ -171,14 +176,12 @@ export async function postV2TimelineDraftPreview(req: Request, res: Response): P
         activeRequirements: plannerInput.planningContext?.activeRequirements ?? [],
         draftId,
         baseRevision,
-        selectedClipId: plannerInput.planningContext?.selectedClipId,
         authorizationEvidence: plannerInput.planningContext?.authorizationEvidence,
       },
       revisionContext: buildV2TimelineRevisionContext({
         draftId,
         baseRevision,
         spec: base.spec,
-        selectedClipId: plannerInput.planningContext?.selectedClipId,
       }),
       revisionBaseSpec: base.spec,
     }
@@ -293,13 +296,46 @@ export async function postV2TimelineDraftRun(req: Request, res: Response): Promi
     return
   }
   const userId = userIdFrom(req)
+  const idempotencyKey = String(req.headers['idempotency-key'] ?? '').trim()
+  if (!idempotencyKey || idempotencyKey.length > 200) {
+    res.status(400).json({ error: 'A valid Idempotency-Key header is required.' })
+    return
+  }
   try {
-    res.json(await executeV2TimelineDraftRun({ repository, draftId, revision, userId }))
+    res.json(await executeV2TimelineDraftRun({ repository, draftId, revision, userId, idempotencyKey }))
   } catch (error) {
     if (error instanceof Error && error.message === 'V2 timeline draft revision not found.') {
       res.status(404).json({ error: error.message })
       return
     }
+    if (error instanceof V2IdempotencyConflictError) {
+      res.status(409).json({ error: error.message })
+      return
+    }
+    if (error instanceof V2TimelineIdempotencyRunningError) {
+      res.status(202).json({ status: 'running', renderRunId: error.renderRunId })
+      return
+    }
+    if (error instanceof V2TimelineIdempotencyFailedError) {
+      res.status(422).json({ status: 'failed', renderRunId: error.renderRunId, error: error.message })
+      return
+    }
     throw error
   }
+}
+
+export async function getV2TimelineDraftRun(req: Request, res: Response): Promise<void> {
+  const run = await repository.getRenderRun(String(req.params.runId), userIdFrom(req))
+  if (!run || run.draftId !== String(req.params.draftId)) {
+    res.status(404).json({ error: 'V2 timeline RenderRun not found.' })
+    return
+  }
+  res.json({
+    renderRunId: run.id,
+    draftId: run.draftId,
+    draftRevision: run.sourceRevision,
+    status: run.status,
+    outputUrl: run.outputUrl,
+    traceDir: run.traceDir,
+  })
 }

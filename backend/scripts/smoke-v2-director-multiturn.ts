@@ -82,6 +82,32 @@ const replies = [
     }),
   },
   {
+    id: 'resp_save_failure_after_tool',
+    output_text: JSON.stringify({
+      replyDraft: '我会渲染当前已保存版本。', intent: 'execute', creativeConfigDelta: {},
+      stateActions: [], memoryActions: [],
+      skillRequests: [{ skillId: 'v2-render-delivery', purpose: '渲染当前版本' }],
+      toolRequests: [{
+        ref: 'render_saved_draft', toolId: 'timeline.render', skillId: 'v2-render-delivery',
+        arguments: {}, requestedMode: 'execute', dependsOn: [],
+      }],
+      missingInformation: [],
+    }),
+  },
+  {
+    id: 'resp_save_failure_after_ephemeral_tool',
+    output_text: JSON.stringify({
+      replyDraft: '我会检查当前素材。', intent: 'create', creativeConfigDelta: {},
+      stateActions: [], memoryActions: [],
+      skillRequests: [{ skillId: 'v2-timeline-authoring', purpose: '检查当前素材' }],
+      toolRequests: [{
+        ref: 'inspect_materials', toolId: 'material.inspect', skillId: 'v2-timeline-authoring',
+        arguments: {}, requestedMode: 'preview', dependsOn: [],
+      }],
+      missingInformation: [],
+    }),
+  },
+  {
     id: 'resp_8',
     output_text: JSON.stringify({
       replyDraft: '当前草稿已完成修订。', intent: 'create', creativeConfigDelta: {},
@@ -198,12 +224,14 @@ async function turn(
           summary: '样例理解已完成。',
           sampleSelection: candidate,
           sampleUnderstanding: {
-            schema_version: 'v2_sample_understanding.v1' as const,
+            schema_version: 'v2_sample_understanding.v2' as const,
             task_id: 'sample_candidate_smoke', source: 'llm' as const,
             sample: { name: candidate.name, duration_sec: 8 },
-            summary_zh: '四个清晰镜头', story_zh: '开篇到收束', atmosphere_zh: '克制',
-            editing_zh: '清晰切换', rhythm_zh: '逐步加快', reusable_style_zh: '四段结构',
-            not_reusable_zh: '具体人物', segments: [], questions_for_user_zh: [], warnings_zh: [],
+            summary: '通过逐步加快的切换从开篇推进到收束',
+            content_observations: [],
+            method_observations: [{ id: 'method_1', expression: '逐步加快切换', purpose: '推进叙事', timing_rationale: '临近收束时加快', evidence_ranges: [{ start_sec: 0, end_sec: 8 }] }],
+            transferable_knowledge: [{ statement: '临近收束时逐步加快切换', applicability: '短片收束', evidence_method_ids: ['method_1'] }],
+            shot_evidence: [], questions: [], warnings: [],
           },
         }
       }
@@ -270,6 +298,13 @@ try {
   const created = await turn('请生成一版 15 秒的校园介绍方案')
   assert.equal(created.some((event) => event.type === 'tool_started'), false)
   const createdSession = created.find((event) => event.type === 'workspace_session')!
+  assert.equal(created.filter((event) => event.type === 'workspace_session').length, 1)
+  assert.equal(created.some((event) => event.type === 'workspace_snapshot'), false)
+  assert.equal(
+    Object.hasOwn(created.find((event) => event.type === 'done') ?? {}, 'message'),
+    false,
+    'done must be a marker and must not duplicate the assistant reply',
+  )
   assert.equal((createdSession.state as { context: typeof baseContext }).context.slots.durationSec, 15)
   assert.equal('generationMode' in (createdSession.state as { context: { slots: object } }).context.slots, false)
   assert.deepEqual(
@@ -313,7 +348,7 @@ try {
 
   const recovered = await turn('继续讨论这一版的节奏')
   assert.equal(
-    String((recovered.find((event) => event.type === 'done') as { message: string }).message),
+    String((recovered.find((event) => event.type === 'assistant_reply') as { message: string }).message),
     '已作废的颜色偏好是暖色，仍有效的是中性低饱和。',
   )
   assert.equal((recovered.find((event) => event.type === 'workspace_session') as { state: { pendingQuestion?: unknown } }).state.pendingQuestion, undefined)
@@ -352,11 +387,78 @@ try {
   }, {
     saveWorkspace: async () => { throw new Error('mock save failure') },
   })) unsaved.push(event)
-  assert.equal(unsaved.some((event) => event.type === 'workspace_snapshot'), false)
+  assert.equal(unsaved.some((event) => event.type === 'workspace_session'), false)
+  assert.equal(Object.hasOwn(unsaved.find((event) => event.type === 'done') ?? {}, 'message'), false)
   assert.equal(
     (unsaved.find((event) => event.type === 'assistant_reply') as { message: string }).message,
     '工作区保存失败，本轮要求和状态均不能确认为已保存，请稍后重试。',
   )
+  const partiallySaved = [] as Array<{ type: string; [key: string]: unknown }>
+  for await (const event of streamDirectorAgentChat({
+    prompt: '渲染当前草稿',
+    context: {
+      ...baseContext,
+      currentTimeline: {
+        kind: 'v2_timeline' as const,
+        status: 'saved' as const,
+        draftId: restoredDraft.id,
+        currentRevision: restoredDraft.revision,
+      },
+    },
+    runtime: { ...runtime, hasV2Timeline: true, v2SceneCount: 2 },
+    workspaceSessionId: `${sessionId}_partial_save_failure`,
+    userId: 1,
+  }, {
+    dispatchTool: async (dispatchInput) => ({
+      callId: dispatchInput.stage.toolRequest.callId,
+      toolId: dispatchInput.stage.toolRequest.toolId,
+      ok: true,
+      summary: '草稿渲染已完成。',
+      draft: {
+        id: restoredDraft.id,
+        revision: restoredDraft.revision,
+        spec: restoredDraft.spec,
+        traceDir: restoredDraft.traceDir,
+      },
+    }),
+    saveWorkspace: async () => { throw new Error('mock save failure after tool') },
+  })) partiallySaved.push(event)
+  assert.equal(
+    (partiallySaved.find((event) => event.type === 'assistant_reply') as { message: string }).message,
+    `草稿 v${restoredDraft.revision} 已保存，但会话状态同步失败；重新打开该草稿可恢复结果。`,
+  )
+  assert.equal(partiallySaved.some((event) => event.type === 'workspace_session'), false)
+  assert.equal(Object.hasOwn(partiallySaved.find((event) => event.type === 'done') ?? {}, 'message'), false)
+
+  const ephemeralResult = [] as Array<{ type: string; [key: string]: unknown }>
+  for await (const event of streamDirectorAgentChat({
+    prompt: '检查当前素材',
+    context: {
+      ...baseContext,
+      materials: [{
+        id: 'material_ephemeral', type: 'image' as const,
+        url: 'https://cdn.example.com/ephemeral.png', name: 'ephemeral.png', tags: [],
+      }],
+    },
+    runtime: { ...runtime, hasVisualMaterial: true, materialCount: 1 },
+    workspaceSessionId: `${sessionId}_ephemeral_save_failure`,
+    userId: 1,
+  }, {
+    dispatchTool: async (dispatchInput) => ({
+      callId: dispatchInput.stage.toolRequest.callId,
+      toolId: dispatchInput.stage.toolRequest.toolId,
+      ok: true,
+      summary: '素材检查已完成。',
+      output: { materials: [{ id: 'material_ephemeral', type: 'image' }] },
+    }),
+    saveWorkspace: async () => { throw new Error('mock save failure after ephemeral tool') },
+  })) ephemeralResult.push(event)
+  assert.equal(
+    (ephemeralResult.find((event) => event.type === 'assistant_reply') as { message: string }).message,
+    '工具执行已返回成功，但依赖工作区的状态未保存，请重试。',
+  )
+  assert.equal(ephemeralResult.some((event) => event.type === 'workspace_session'), false)
+
   const isolated = await turn(
     'apply independent and dependent actions',
     baseContext,
@@ -453,14 +555,14 @@ try {
     state: { context: { sampleVideo?: { id: string; reference?: { summary: string } }; materials: unknown[] } }
   }).state
   assert.equal(analyzedSampleState.context.sampleVideo?.id, 'material_sample_video')
-  assert.equal(analyzedSampleState.context.sampleVideo?.reference?.summary, '四个清晰镜头')
+  assert.equal(analyzedSampleState.context.sampleVideo?.reference?.summary, '通过逐步加快的切换从开篇推进到收束')
   assert.deepEqual(analyzedSampleState.context.materials, [], 'a selected sample must not remain a final-video material')
   const clearedSample = await turn('Remove the current sample.', baseContext, {}, new Set(), false, true)
   const clearedSampleState = (clearedSample.find((event) => event.type === 'workspace_session') as {
     state: { context: { sampleVideo?: unknown } }
   }).state
   assert.equal(clearedSampleState.context.sampleVideo, undefined, 'an explicit sample clear must persist')
-  assert.equal(requests.length, 15)
+  assert.equal(requests.length, 17)
 } finally {
   globalThis.fetch = originalFetch
   await restoredDraftRepository.deleteDraft(restoredDraft.id, 1)

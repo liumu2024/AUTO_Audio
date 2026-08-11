@@ -63,8 +63,8 @@ function materialInputsValue(value: unknown): V2PlannerMaterialInput[] | undefin
 function sampleUnderstandingValue(value: unknown): V2PlannerInput['sampleUnderstanding'] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
-  if (record.schema_version !== 'v2_sample_understanding.v1') return undefined
-  if (!Array.isArray(record.segments)) return undefined
+  if (record.schema_version !== 'v2_sample_understanding.v2') return undefined
+  if (!Array.isArray(record.method_observations) || !Array.isArray(record.shot_evidence)) return undefined
   return value as V2PlannerInput['sampleUnderstanding']
 }
 
@@ -78,7 +78,6 @@ function planningContextValue(value: unknown): V2PlannerInput['planningContext']
     activeRequirements: [],
     draftId: stringValue(record.draftId) || undefined,
     baseRevision: numberValue(record.baseRevision),
-    selectedClipId: stringValue(record.selectedClipId) || undefined,
     authorizationEvidence: stringValue(record.authorizationEvidence) || undefined,
   }
 }

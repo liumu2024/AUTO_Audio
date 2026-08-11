@@ -7,6 +7,7 @@ import type {
   DirectorWorkspaceTurn,
   DirectorWorkspaceTurnRole,
 } from '../../../../shared/types/director-workspace-session.js'
+import { V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION } from '../../../../shared/types/v2-sample-understanding.js'
 
 export type { DirectorWorkspaceState, DirectorWorkspaceTurn, DirectorWorkspaceTurnRole }
 
@@ -81,6 +82,12 @@ function normalizedContext(input: DirectorContext): {
   delete legacyIntent.requestedStyle
   delete legacyIntent.rawText
   delete (context.slots as unknown as Record<string, unknown>).subtitlePolicy
+  const sampleUnderstanding = context.sampleVideo?.sampleUnderstanding as unknown as Record<string, unknown> | undefined
+  if (context.sampleVideo && sampleUnderstanding?.schema_version !== V2_SAMPLE_UNDERSTANDING_SCHEMA_VERSION) {
+    delete context.sampleVideo.sampleUnderstanding
+    delete context.sampleVideo.reference
+    delete (context.sampleVideo as unknown as Record<string, unknown>).styleRecipe
+  }
   return { context, legacyConstraints }
 }
 

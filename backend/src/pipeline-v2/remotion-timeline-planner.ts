@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 
 import { assertValidRemotionTimelineSpec } from '../../../shared/lib/remotion-timeline-validator.js'
@@ -71,12 +72,8 @@ function captionsForScene(captions: string[], index: number, sceneCount: number)
   return captions.slice(start, end)
 }
 
-function safeIdPart(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || 'asset'
-}
-
-function materialAssetId(id: string, index: number): string {
-  return `material_${String(index + 1).padStart(2, '0')}_${safeIdPart(id)}`
+function legacyImageAssetId(source: string): string {
+  return `mat_${createHash('sha256').update(source).digest('hex').slice(0, 16)}`
 }
 
 function materialLabel(input: { name?: string; id: string; type: string }): string {
@@ -85,8 +82,8 @@ function materialLabel(input: { name?: string; id: string; type: string }): stri
 
 function buildPlannerAssets(input: V2RemotionTimelinePlannerInput): RemotionTimelineAsset[] {
   if (input.materials?.length) {
-    return input.materials.map((material, index) => ({
-      id: materialAssetId(material.id, index),
+    return input.materials.map((material) => ({
+      id: material.id,
       type: material.type,
       src: resolveRepoPath(material.src),
       source: 'user_asset',
@@ -106,7 +103,7 @@ function buildPlannerAssets(input: V2RemotionTimelinePlannerInput): RemotionTime
   }
   if (input.imageSrc || input.inputImageUrl) {
     assets.push({
-      id: 'planner_image_asset',
+      id: legacyImageAssetId(input.imageSrc ?? input.inputImageUrl as string),
       type: 'image',
       src: input.imageSrc ? resolveRepoPath(input.imageSrc) : input.inputImageUrl as string,
       source: input.imageSrc ? 'user_asset' : 'stock_asset',
@@ -183,23 +180,15 @@ function sceneBodyForAsset(input: {
   return `主画面使用 ${label}，以${input.motion}呈现，承担“${input.title}”这一镜头功能。${input.copyBody}`
 }
 
-function sampleSegmentBody(input: V2RemotionTimelinePlannerInput, index: number, fallback: string): string {
-  const segments = input.sampleUnderstanding?.segments ?? []
-  const segment = segments[index % Math.max(segments.length, 1)]
-  if (!segment) return fallback
-  return [
-    `参考样例段落“${segment.title_zh}”的节奏和镜头关系。`,
-    `样例画面线索：${segment.visual_content_zh}`,
-    `镜头方式：${segment.camera_zh}；运动：${segment.motion_zh}`,
-    `节奏依据：${segment.rhythm_zh}`,
-    segment.transition_after_zh ? `后接转场参考：${segment.transition_after_zh}` : '',
-  ]
-    .filter(Boolean)
-    .join(' ')
-}
-
-function sampleSegmentTitle(input: V2RemotionTimelinePlannerInput, index: number): string | undefined {
-  return input.sampleUnderstanding?.segments[index]?.title_zh?.trim() || undefined
+function sampleMethodContext(input: V2RemotionTimelinePlannerInput): string {
+  const understanding = input.sampleUnderstanding
+  if (!understanding || understanding.source !== 'llm') return ''
+  const knowledge = understanding.transferable_knowledge.slice(0, 4).map((item) => item.statement)
+  const methods = understanding.method_observations.slice(0, 4).map((item) => (
+    `${item.expression}（目的：${item.purpose}；时机：${item.timing_rationale}）`
+  ))
+  const selected = knowledge.length ? knowledge : methods
+  return selected.length ? `可按当前任务适配的样例方法：${selected.join('；')}` : ''
 }
 
 function transitionTypeForIndex(index: number): 'cut' | 'fade' | 'slide' | 'wipe' | 'light_flash' {
@@ -217,19 +206,15 @@ export function buildDeterministicRemotionTimelineSpec(
   const requiredCaptions = extractV2TimelineHardRequirements(input.prompt).required_captions
   const assets = buildPlannerAssets(input)
   const visualAssets = assets.filter((asset) => asset.type === 'video' || asset.type === 'image')
+  const conditioningImageAssetId = assets.find((asset) => asset.type === 'image')?.id
   const requestedSceneCount = parseRequestedSceneCount(input.prompt)
   const segmentCount = structuredSegmentCount(input.prompt)
   const shouldCoverAll = wantsFullMaterialCoverage(input.prompt)
-  const sampleShotCount = creationMode === 'sample_replicate'
-    ? (input.sampleUnderstanding?.shot_evidence ?? []).filter((shot) => shot.confidence >= 0.6).length
-    : 0
   const neutralSampleSceneCount = Math.max(4, Math.min(
     8,
     Math.round((input.durationSec ?? input.sampleUnderstanding?.sample.duration_sec ?? 12) / 2.5),
   ))
-  const defaultSceneCount = sampleShotCount
-    ? Math.min(MAX_TIMELINE_SCENES, sampleShotCount)
-    : creationMode === 'sample_replicate'
+  const defaultSceneCount = creationMode === 'sample_replicate'
       ? neutralSampleSceneCount
       : visualAssets.length
         ? Math.min(MAX_TIMELINE_SCENES, Math.max(3, visualAssets.length))
@@ -252,6 +237,7 @@ export function buildDeterministicRemotionTimelineSpec(
   const overlays: RemotionTimelineOverlay[] = []
   const materialJobs: RemotionTimelineMaterialJob[] = []
   const mainSceneAssets = new Set<string>()
+  const sampleMethods = sampleMethodContext(input)
   let cursor = 0
 
   for (let index = 0; index < sceneCount; index += 1) {
@@ -265,13 +251,11 @@ export function buildDeterministicRemotionTimelineSpec(
     const sceneCaptions = captionsForScene(requiredCaptions, index, sceneCount)
     const captionSummary = sceneCaptions.join(' ')
     const baseTitle = titleForRole(role, index)
-    const title = creationMode === 'sample_replicate'
-      ? sampleSegmentTitle(input, index) ?? baseTitle
-      : captionSummary
+    const title = captionSummary
         ? `${baseTitle}：${captionSummary.slice(0, 22)}${captionSummary.length > 22 ? '…' : ''}`
         : baseTitle
     const body = creationMode === 'sample_replicate'
-      ? sampleSegmentBody(input, index, copy.body)
+      ? [copy.body, sampleMethods].filter(Boolean).join(' ')
       : captionSummary
         ? `画面需要具体呈现“${captionSummary}”，明确主体、环境、光线、动作和镜头运动，并自然衔接下一镜头。`
         : copy.body
@@ -342,7 +326,7 @@ export function buildDeterministicRemotionTimelineSpec(
       const generateMissingFootage = creationMode === 'text_to_video' || creationMode === 'sample_replicate'
       scenes.push({
         id: sceneId,
-        type: generateMissingFootage ? 'ai_video' : 'remotion_card',
+        type: 'remotion_card',
         start_sec: start,
         duration_sec: duration,
         title: index === 0 && !captionSummary ? copy.title : title,
@@ -366,7 +350,7 @@ export function buildDeterministicRemotionTimelineSpec(
             .filter(Boolean)
             .join('；'),
           output_asset_id: `generated_${sceneId}`,
-          input_asset_id: input.imageSrc || input.inputImageUrl ? 'planner_image_asset' : undefined,
+          input_asset_id: conditioningImageAssetId,
           provider: 'ark_seedance',
           fallback_kind: 'none',
         })
@@ -419,6 +403,21 @@ export function buildDeterministicRemotionTimelineSpec(
   const spec: RemotionTimelineSpecV1 = {
     schema_version: REMOTION_TIMELINE_SPEC_SCHEMA_VERSION,
     task_id: input.taskId,
+    creative_brief: {
+      direction: input.prompt.trim() || 'Create an editable video plan from the current project facts.',
+      image_references: assets
+        .filter((asset) => asset.type === 'image')
+        .map((asset) => ({
+          asset_id: asset.id,
+          observed_facts: [],
+          intended_use: 'Use the original image as the authoritative visual reference.',
+        })),
+      sample_methods: input.sampleUnderstanding?.source === 'llm'
+        ? (input.sampleUnderstanding.transferable_knowledge.length
+            ? input.sampleUnderstanding.transferable_knowledge.slice(0, 6).map((item) => item.statement)
+            : input.sampleUnderstanding.method_observations.slice(0, 6).map((item) => item.expression))
+        : [],
+    },
     canvas: {
       width,
       height,
@@ -456,4 +455,51 @@ export function buildDeterministicRemotionTimelineSpec(
   }
 
   return assertValidRemotionTimelineSpec(spec)
+}
+
+export function buildV2PlanningGapTimelineSpec(
+  input: V2RemotionTimelinePlannerInput,
+  gaps: NonNullable<NonNullable<RemotionTimelineSpecV1['creative_brief']>['planning_gaps']>,
+): RemotionTimelineSpecV1 {
+  const assets = buildPlannerAssets(input)
+  const durationSec = input.durationSec ?? 15
+  return assertValidRemotionTimelineSpec({
+    schema_version: REMOTION_TIMELINE_SPEC_SCHEMA_VERSION,
+    task_id: input.taskId,
+    creative_brief: {
+      direction: input.prompt.trim() || 'Planning recovery required.',
+      image_references: assets.filter((asset) => asset.type === 'image').map((asset) => ({
+        asset_id: asset.id,
+        observed_facts: [],
+        intended_use: 'Pending verified image understanding.',
+      })),
+      sample_methods: [],
+      planning_gaps: gaps,
+    },
+    canvas: {
+      width: input.canvas?.width ?? 720,
+      height: input.canvas?.height ?? 1280,
+      fps: input.canvas?.fps ?? 24,
+      duration_sec: durationSec,
+      background: '#09090b',
+    },
+    assets,
+    scenes: [{
+      id: 'scene_planning_gap',
+      type: 'remotion_card',
+      start_sec: 0,
+      duration_sec: durationSec,
+      creative_intent: {
+        title: 'Planning recovery required',
+        description: input.prompt,
+      },
+    }],
+    transitions: [],
+    caption_tracks: [],
+    overlays: [],
+    material_jobs: [],
+    audio: [],
+    render_policy: { renderer: 'remotion_timeline', fallback_renderer: 'overlay_compose' },
+    notes: ['Editable planning skeleton; formal rendering is blocked until planning gaps are resolved.'],
+  })
 }

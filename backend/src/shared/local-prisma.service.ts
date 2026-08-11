@@ -68,12 +68,31 @@ interface LocalCreativeMemory {
   revokedAt: string | null
 }
 
+interface LocalV2IdempotencyReceipt {
+  id: string
+  userId: number
+  draftId: string
+  operation: string
+  idempotencyKey: string
+  resourceKey: string
+  requestHash: string
+  status: 'running' | 'completed' | 'failed'
+  phase: string | null
+  resultRef: string | null
+  providerTaskId: string | null
+  failureJson: unknown
+  createdAt: string
+  updatedAt: string
+  completedAt: string | null
+}
+
 interface LocalDbState {
   users: LocalUser[]
   v2TimelineDrafts: LocalV2TimelineDraft[]
   v2TimelineRevisions: LocalV2TimelineRevision[]
   v2TimelineRenderRuns: LocalV2TimelineRenderRun[]
   creativeMemories: LocalCreativeMemory[]
+  v2IdempotencyReceipts: LocalV2IdempotencyReceipt[]
 }
 
 function localDataDir(): string {
@@ -103,6 +122,7 @@ function defaultState(): LocalDbState {
     v2TimelineRevisions: [],
     v2TimelineRenderRuns: [],
     creativeMemories: [],
+    v2IdempotencyReceipts: [],
   }
 }
 
@@ -122,6 +142,7 @@ function loadState(): LocalDbState {
     v2TimelineRevisions: saved.v2TimelineRevisions ?? [],
     v2TimelineRenderRuns: saved.v2TimelineRenderRuns ?? [],
     creativeMemories: saved.creativeMemories ?? [],
+    v2IdempotencyReceipts: saved.v2IdempotencyReceipts ?? [],
   }
 }
 
@@ -167,6 +188,15 @@ function creativeMemoryOut(memory: LocalCreativeMemory): Record<string, unknown>
     createdAt: new Date(memory.createdAt),
     updatedAt: new Date(memory.updatedAt),
     revokedAt: ensureDate(memory.revokedAt),
+  }
+}
+
+function idempotencyReceiptOut(receipt: LocalV2IdempotencyReceipt): Record<string, unknown> {
+  return {
+    ...clone(receipt),
+    createdAt: new Date(receipt.createdAt),
+    updatedAt: new Date(receipt.updatedAt),
+    completedAt: ensureDate(receipt.completedAt),
   }
 }
 
@@ -278,6 +308,9 @@ function makeLocalPrisma() {
           )
           state.creativeMemories = state.creativeMemories.filter(
             (memory) => !memory.draftId || !deletedIds.has(memory.draftId),
+          )
+          state.v2IdempotencyReceipts = state.v2IdempotencyReceipts.filter(
+            (receipt) => !deletedIds.has(receipt.draftId),
           )
           return { count: deletedIds.size }
         }),
@@ -394,6 +427,52 @@ function makeLocalPrisma() {
             ),
           )
           return { count: before - state.creativeMemories.length }
+        }),
+    },
+    v2IdempotencyReceipt: {
+      create: async (args: { data: Partial<LocalV2IdempotencyReceipt> }) =>
+        write(() => {
+          const duplicate = state.v2IdempotencyReceipts.some((receipt) =>
+            receipt.userId === Number(args.data.userId)
+            && receipt.operation === String(args.data.operation)
+            && receipt.idempotencyKey === String(args.data.idempotencyKey))
+          if (duplicate) throw new Error('V2 idempotency receipt already exists')
+          const now = new Date().toISOString()
+          const receipt: LocalV2IdempotencyReceipt = {
+            id: String(args.data.id),
+            userId: Number(args.data.userId),
+            draftId: String(args.data.draftId),
+            operation: String(args.data.operation),
+            idempotencyKey: String(args.data.idempotencyKey),
+            resourceKey: String(args.data.resourceKey),
+            requestHash: String(args.data.requestHash),
+            status: (args.data.status as LocalV2IdempotencyReceipt['status']) ?? 'running',
+            phase: (args.data.phase as string | null | undefined) ?? null,
+            resultRef: (args.data.resultRef as string | null | undefined) ?? null,
+            providerTaskId: (args.data.providerTaskId as string | null | undefined) ?? null,
+            failureJson: args.data.failureJson ?? null,
+            createdAt: now,
+            updatedAt: now,
+            completedAt: null,
+          }
+          state.v2IdempotencyReceipts.push(receipt)
+          return idempotencyReceiptOut(receipt)
+        }),
+      findFirst: async (args: { where?: Record<string, unknown> }) => {
+        const receipt = state.v2IdempotencyReceipts.find((item) =>
+          Object.entries(args.where ?? {}).every(
+            ([key, value]) => item[key as keyof LocalV2IdempotencyReceipt] === value,
+          ))
+        return receipt ? idempotencyReceiptOut(receipt) : null
+      },
+      update: async (args: { where: Record<string, unknown>; data: Partial<LocalV2IdempotencyReceipt> }) =>
+        write(() => {
+          const receipt = state.v2IdempotencyReceipts.find((item) => item.id === args.where.id)
+          if (!receipt) throw new Error('V2 idempotency receipt not found')
+          const data = args.data as Record<string, unknown>
+          Object.assign(receipt, clone(args.data), { updatedAt: new Date().toISOString() })
+          if (data.completedAt instanceof Date) receipt.completedAt = data.completedAt.toISOString()
+          return idempotencyReceiptOut(receipt)
         }),
     },
     v2TimelineRenderRun: {

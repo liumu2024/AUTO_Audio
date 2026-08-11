@@ -41,7 +41,7 @@ assert.equal(untouchedContext.userIntent.aspectRatio, undefined)
 const parsedSample = {
   id: 'parsed_sample', url: '/uploads/old-sample.mp4', name: 'old-sample.mp4',
   reference: { style: 'old style' },
-  sampleUnderstanding: { schema_version: 'v2_sample_understanding.v1' as const },
+  sampleUnderstanding: { schema_version: 'v2_sample_understanding.v2' as const },
 }
 assert.equal(
   buildDirectorSampleVideoFromUI({

@@ -166,8 +166,9 @@ export default function BlurDissolve({ children, progress, direction }) {
   await promoteRenderComponent({ id: 'cmp_blur_dissolve', previewEvidence: previewEvidence(spec.canvas) })
 
   const remotionRoot = path.resolve('..', 'remotion')
+  const customRegistryPrefix = `.v2-custom-components-${taskId}-`
   const customRegistryDirs = () => readdirSync(remotionRoot)
-    .filter((entry) => entry.startsWith('.v2-custom-components-'))
+    .filter((entry) => entry.startsWith(customRegistryPrefix))
   const registriesBeforeBrowserFailure = new Set(customRegistryDirs())
   const previousBrowserExecutable = process.env.REMOTION_BROWSER_EXECUTABLE
   process.env.REMOTION_BROWSER_EXECUTABLE = path.join(dataDir, 'missing-browser.exe')

@@ -30,6 +30,7 @@ import {
   getV2TimelineDrafts,
   postV2TimelineDraftPreview,
   postV2TimelineDraftRun,
+  getV2TimelineDraftRun,
   putV2TimelineDraft,
 } from './pipeline-v2/timeline-draft-controller.js'
 
@@ -65,6 +66,7 @@ app.get('/api/v2/timeline-drafts', getV2TimelineDrafts)
 app.get('/api/v2/timeline-drafts/:draftId', getV2TimelineDraft)
 app.put('/api/v2/timeline-drafts/:draftId', putV2TimelineDraft)
 app.post('/api/v2/timeline-drafts/:draftId/runs', postV2TimelineDraftRun)
+app.get('/api/v2/timeline-drafts/:draftId/runs/:runId', getV2TimelineDraftRun)
 app.delete('/api/v2/timeline-drafts/:draftId', deleteV2TimelineDraft)
 app.post('/api/v2/timeline/preview', postV2TimelinePreview)
 

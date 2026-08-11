@@ -100,14 +100,11 @@ export function isLandscapeLikeDomain(domain) {
 export function summarizeDirectorReference(understanding) {
     return {
         source: 'sample_video',
-        summary: understanding.summary_zh,
-        atmosphere: understanding.atmosphere_zh,
-        editing: understanding.editing_zh,
-        rhythm: understanding.rhythm_zh,
-        reusableStyle: understanding.reusable_style_zh,
-        segmentCount: understanding.segments.length,
+        summary: understanding.summary,
+        methodHighlights: understanding.method_observations.slice(0, 6).map((item) => item.expression),
+        transferableKnowledge: understanding.transferable_knowledge.slice(0, 6).map((item) => item.statement),
         shotCount: (understanding.shot_evidence ?? []).filter((shot) => shot.confidence >= 0.6).length,
-        warnings: understanding.warnings_zh,
+        warnings: understanding.warnings,
     };
 }
 export function summarizeDirectorMaterial(material) {

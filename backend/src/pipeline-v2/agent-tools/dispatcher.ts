@@ -11,6 +11,7 @@ import { previewV2RemotionTimeline } from '../remotion-timeline-service.js'
 import { buildV2TimelinePlanningReview } from '../remotion-timeline-review.js'
 import { executeV2TimelineDraftRun } from '../timeline-draft-runner.js'
 import { buildV2TimelineRevisionContext } from '../timeline-revision-context.js'
+import { normalizeV2TimelineSelection } from '../timeline-selection.js'
 import { buildDirectorTimelineFacts, evaluateV2TimelineRevisionCommit } from '../timeline-revision-outcome-review.js'
 import type { V2TimelineRevisionScope } from '../timeline-revision-scope.js'
 import {
@@ -131,7 +132,6 @@ function plannerInput(input: {
       recalledCreativeMemories: input.recalledCreativeMemories ?? [],
       draftId: input.workspace.draftId,
       baseRevision: input.workspace.baseRevision,
-      selectedClipId: input.workspace.selectedItemId,
       authorizationEvidence: input.authorization?.evidence,
     },
     agentSkillContext: {
@@ -313,6 +313,9 @@ export async function dispatchV2AgentTool(input: {
   const patchScope = request.toolId === 'timeline.patch'
     ? (checked.arguments.scope as V2TimelineRevisionScope)
     : undefined
+  const requestedGlobalMode = request.toolId === 'timeline.patch' && patchScope === 'global'
+    ? checked.arguments.mode as 'brief_update' | 'full_replan'
+    : undefined
   const requestedSceneId = request.toolId === 'timeline.patch'
     ? (checked.arguments.sceneId as string | undefined)
     : undefined
@@ -324,13 +327,9 @@ export async function dispatchV2AgentTool(input: {
     ? (checked.arguments.sceneIds as string[])
     : undefined
   const existingTransitionIds = new Set((existing?.spec.transitions ?? []).map((transition) => transition.id))
-  const resolvedSceneId = requestedSceneId
-    ? (existingSceneIds.has(requestedSceneId) ? requestedSceneId : undefined)
-    : (patchScope === 'scene' || patchScope === 'visual_strategy')
-      && bound.system.selectedTimelineItemId
-      && existingSceneIds.has(bound.system.selectedTimelineItemId)
-      ? bound.system.selectedTimelineItemId
-      : undefined
+  const resolvedSceneId = requestedSceneId && existingSceneIds.has(requestedSceneId)
+    ? requestedSceneId
+    : undefined
   if (request.toolId === 'timeline.patch' && existing && requestedSceneId && !existingSceneIds.has(requestedSceneId)) {
     return {
       callId: request.callId,
@@ -389,8 +388,8 @@ export async function dispatchV2AgentTool(input: {
       toolId: request.toolId,
       ok: false,
       gate: 'dispatcher_scope',
-      summary: `${patchScope} 修订需要目标场景：请在草稿中选中要修改的镜头，或提供该镜头的 sceneId。`,
-      recovery: '选择目标镜头后重试。',
+      summary: `${patchScope} 修订需要模型根据当前草稿解析出明确的 sceneId。`,
+      recovery: '请明确描述目标镜头；模型应使用当前草稿中的真实 sceneId 重试。',
     }
   }
   if (request.toolId === 'timeline.plan' || request.toolId === 'timeline.patch') {
@@ -419,7 +418,6 @@ export async function dispatchV2AgentTool(input: {
       availableComponents,
     })
     if (existing && input.workspace.draftId && input.workspace.baseRevision) {
-      const selectedClipId = bound.system.selectedTimelineItemId
       plan = {
         ...plan,
         ...(patchScope !== 'global'
@@ -437,15 +435,15 @@ export async function dispatchV2AgentTool(input: {
           kind: 'revision',
           draftId: input.workspace.draftId,
           baseRevision: input.workspace.baseRevision,
-          selectedClipId,
           authorizationEvidence: input.authorization?.evidence,
         },
         revisionBaseSpec: existing.spec,
         revisionScope: patchScope,
+        revisionGlobalMode: requestedGlobalMode,
         revisionSceneId: resolvedSceneId,
         revisionSceneIds: requestedStructureSceneIds,
         revisionTransitionIds: requestedTransitionIds,
-        revisionContext: buildV2TimelineRevisionContext({ draftId: input.workspace.draftId, baseRevision: input.workspace.baseRevision, spec: existing.spec, selectedClipId }),
+        revisionContext: buildV2TimelineRevisionContext({ draftId: input.workspace.draftId, baseRevision: input.workspace.baseRevision, spec: existing.spec }),
       }
     }
     const preview = await previewV2RemotionTimeline(
@@ -509,7 +507,13 @@ export async function dispatchV2AgentTool(input: {
     const degradationSummary = settled.degradations.length > 0
       ? `；以下可选效果未通过视觉验收，已保留对应对象的基础呈现：${settled.degradations.map((item) => `${item.displayName}（${item.targetIds.join('、')}）`).join('；')}`
       : ''
-    return { callId: request.callId, toolId: request.toolId, ok: true, summary: `${request.toolId === 'timeline.patch' ? 'V2 时间线修订已保存为新的草稿版本。' : 'V2 时间线方案已保存为可编辑草稿。'}${degradationSummary}`, draft: { id: draft.id, revision: draft.revision, spec: draft.spec, traceDir: preview.traceDir }, output: { timelineFacts: buildDirectorTimelineFacts(draft.revision, draft.spec), validation, componentDegradations: settled.degradations }, plannerInvoked: true }
+    const selectedItemId = existing
+      ? normalizeV2TimelineSelection({
+          selectedItemId: input.workspace.selectedItemId,
+          nextSpec: draft.spec,
+        })
+      : null
+    return { callId: request.callId, toolId: request.toolId, ok: true, summary: `${request.toolId === 'timeline.patch' ? 'V2 时间线修订已保存为新的草稿版本。' : 'V2 时间线方案已保存为可编辑草稿。'}${degradationSummary}`, draft: { id: draft.id, revision: draft.revision, spec: draft.spec, traceDir: preview.traceDir }, output: { timelineFacts: buildDirectorTimelineFacts(draft.revision, draft.spec), validation, componentDegradations: settled.degradations, selectedItemId }, plannerInvoked: true }
   }
   if (request.toolId === 'timeline.render') {
     if (!existing) return { callId: request.callId, toolId: request.toolId, ok: false, summary: '正式渲染需要当前 V2 草稿版本。', recovery: checked.tool.recovery }
@@ -520,6 +524,7 @@ export async function dispatchV2AgentTool(input: {
         draftId: bound.system.draftId!,
         revision: bound.system.revision!,
         userId: bound.system.userId,
+        idempotencyKey: request.callId,
         onProgress: async (event) => {
           renderPhase = event.phase
           await input.onProgress?.(event)

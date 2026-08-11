@@ -2,6 +2,7 @@ import type {
   RemotionTimelineScene,
   RemotionTimelineSpecV1,
 } from '../../../shared/types/remotion-timeline-spec.v1.js'
+import { retainV2TimelineResourceClosure } from './timeline-resource-closure.js'
 
 export type V2TimelineRevisionScope = 'subtitle' | 'scene' | 'structure' | 'visual_strategy' | 'transition' | 'global'
 
@@ -200,13 +201,14 @@ function applyStructureScope(input: {
  * outside it keep their persisted V2 values. Unknown scopes are rejected
  * instead of silently passing the candidate through.
  */
-export function applyV2TimelineRevisionScope(input: {
+function applyV2TimelineRevisionScopeUnchecked(input: {
   baseSpec: RemotionTimelineSpecV1
   candidateSpec: RemotionTimelineSpecV1
   scope: V2TimelineRevisionScope
   sceneId?: string
   sceneIds?: string[]
   transitionIds?: string[]
+  globalMode?: 'brief_update' | 'full_replan'
 }): RemotionTimelineSpecV1 {
   if (input.scope === 'subtitle') {
     if (input.sceneId) {
@@ -322,6 +324,36 @@ export function applyV2TimelineRevisionScope(input: {
       }),
     }
   }
-  if (input.scope === 'global') return input.candidateSpec
+  if (input.scope === 'global') {
+    if (input.globalMode === 'brief_update') {
+      return {
+        ...input.baseSpec,
+        creative_brief: input.candidateSpec.creative_brief
+          ? {
+              ...input.candidateSpec.creative_brief,
+              planning_gaps: input.baseSpec.creative_brief?.planning_gaps,
+            }
+          : input.baseSpec.creative_brief,
+      }
+    }
+    if (input.globalMode === 'full_replan') return input.candidateSpec
+    throw new Error('Global revision scope requires brief_update or full_replan mode.')
+  }
   throw new Error(`Unsupported revision scope: ${String(input.scope)}`)
+}
+
+export function applyV2TimelineRevisionScope(input: {
+  baseSpec: RemotionTimelineSpecV1
+  candidateSpec: RemotionTimelineSpecV1
+  scope: V2TimelineRevisionScope
+  sceneId?: string
+  sceneIds?: string[]
+  transitionIds?: string[]
+  globalMode?: 'brief_update' | 'full_replan'
+}): RemotionTimelineSpecV1 {
+  return retainV2TimelineResourceClosure({
+    baseSpec: input.baseSpec,
+    candidateSpec: input.candidateSpec,
+    mergedSpec: applyV2TimelineRevisionScopeUnchecked(input),
+  })
 }

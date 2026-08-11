@@ -12,6 +12,10 @@ import {
   type V2MaterialGenerationAdapter,
 } from '../src/pipeline-v2/material-generation-adapter.js'
 import { resolveRemotionTimelineMaterialJobs } from '../src/pipeline-v2/remotion-timeline-material-resolver.js'
+import type {
+  V2IdempotencyReceiptRecord,
+  V2IdempotencyRepository,
+} from '../src/pipeline-v2/idempotency-repository.js'
 import { assertV2MaterialResolutionContract } from './v2-material-resolution-contract.js'
 
 const repoRoot = path.resolve(process.cwd(), '..')
@@ -34,6 +38,15 @@ const base = createRemotionTimelineFixture({
 
 const spec = {
   ...base,
+  creative_brief: {
+    direction: 'A calm documentary about a mountain environment.',
+    image_references: [{
+      asset_id: 'hero_image_asset',
+      observed_facts: ['A mountain ridge fills the lower half of the image.'],
+      intended_use: 'Keep the ridge composition while adding natural motion.',
+    }],
+    sample_methods: ['Reveal the moving subject after the establishing frame.'],
+  },
   assets: base.assets
     .filter((asset) => asset.id !== 'main_video_asset')
     .map((asset) => asset.id === 'hero_image_asset'
@@ -71,12 +84,14 @@ const spec = {
 }
 
 let boundGenerationImageUrl: string | undefined
+let boundGenerationPrompt: string | undefined
 const staticAdapter = createStaticMaterialGenerationAdapter({ videoAssetPath: sampleVideo })
 const resolved = await resolveRemotionTimelineMaterialJobs({
   spec,
   adapter: {
     async generate(input) {
       boundGenerationImageUrl = input.inputImageUrl
+      boundGenerationPrompt = input.prompt
       return staticAdapter.generate(input)
     },
   },
@@ -91,8 +106,84 @@ assertV2MaterialResolutionContract({
 })
 assert.equal(resolved.report.generation_trace[0]?.provider_task_id, `static:${path.basename(sampleVideo)}`)
 assert.equal(boundGenerationImageUrl, 'https://cdn.example.com/source-landscape.png')
+assert.match(boundGenerationPrompt ?? '', /calm documentary/)
+assert.match(boundGenerationPrompt ?? '', /mountain ridge/)
+assert.match(boundGenerationPrompt ?? '', /Reveal the moving subject/)
+assert.match(resolved.report.generation_trace[0]?.request_fingerprint ?? '', /^[a-f0-9]{64}$/)
 assert.equal(resolved.report.generation_trace[0]?.input_asset_id, 'hero_image_asset')
 assert.equal(validateRemotionTimelineSpec(resolved.spec).ok, true)
+
+const reuseOutputDir = await mkdtemp(path.join(os.tmpdir(), 'v2-remotion-timeline-material-reuse-'))
+let reuseAdapterCalls = 0
+const reused = await resolveRemotionTimelineMaterialJobs({
+  spec,
+  adapter: { async generate() { reuseAdapterCalls += 1; return { ok: false, error: 'must not run' } } },
+  outputDir: reuseOutputDir,
+  reusableRun: { runId: 'previous_run', spec: resolved.spec, report: resolved.report },
+})
+assert.equal(reuseAdapterCalls, 0)
+assert.equal(reused.report.ok, true)
+assert.equal(reused.report.generation_trace[0]?.reused_from_run_id, 'previous_run')
+assert.notEqual(reused.spec.assets.find((asset) => asset.id === 'generated_scene_001')?.src, resolved.spec.assets.find((asset) => asset.id === 'generated_scene_001')?.src)
+assert.equal(existsSync(reused.spec.assets.find((asset) => asset.id === 'generated_scene_001')?.src ?? ''), true)
+await rm(reuseOutputDir, { recursive: true, force: true })
+
+let materialReceipt: V2IdempotencyReceiptRecord | undefined
+const memoryIdempotency: V2IdempotencyRepository = {
+  async get() { return materialReceipt ?? null },
+  async reserve(input) {
+    if (materialReceipt) return { kind: 'replay', receipt: materialReceipt }
+    materialReceipt = {
+      id: 'idem_material_001',
+      ...input,
+      status: 'running',
+      phase: 'reserved',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }
+    return { kind: 'reserved', receipt: materialReceipt }
+  },
+  async update(input) {
+    assert.ok(materialReceipt)
+    materialReceipt = {
+      ...materialReceipt,
+      ...input,
+      updatedAt: new Date(),
+      completedAt: input.status === 'completed' || input.status === 'failed' ? new Date() : materialReceipt.completedAt,
+    }
+    return materialReceipt
+  },
+}
+const idempotentOutputDir = await mkdtemp(path.join(os.tmpdir(), 'v2-remotion-timeline-material-idempotent-'))
+let idempotentAdapterCalls = 0
+const idempotencyContext = {
+  repository: memoryIdempotency,
+  userId: 1,
+  draftId: 'draft_material_001',
+  renderRunId: 'run_material_001',
+  renderKey: 'render-key-material-001',
+}
+await resolveRemotionTimelineMaterialJobs({
+  spec,
+  outputDir: idempotentOutputDir,
+  idempotency: idempotencyContext,
+  adapter: {
+    async generate(request) {
+      idempotentAdapterCalls += 1
+      return staticAdapter.generate(request)
+    },
+  },
+})
+const idempotentReplay = await resolveRemotionTimelineMaterialJobs({
+  spec,
+  outputDir: idempotentOutputDir,
+  idempotency: idempotencyContext,
+  adapter: { async generate() { throw new Error('idempotent replay must not resubmit') } },
+})
+assert.equal(idempotentAdapterCalls, 1)
+assert.equal(materialReceipt?.status, 'completed')
+assert.equal(idempotentReplay.report.ok, true)
+await rm(idempotentOutputDir, { recursive: true, force: true })
 
 const invalidInputAsset = validateRemotionTimelineSpec({
   ...spec,
@@ -152,6 +243,30 @@ assert.equal(fallbackResolved.report.delivery_readiness.ready, false)
 assert.deepEqual(fallbackResolved.report.delivery_readiness.missing_generated_scene_ids, ['scene_001'])
 assert.equal(fallbackResolved.spec.material_jobs[0]?.status, 'failed')
 assert.equal(validateRemotionTimelineSpec(fallbackResolved.spec).ok, true)
+
+const unknownSubmissionResolved = await resolveRemotionTimelineMaterialJobs({
+  spec: {
+    ...spec,
+    material_jobs: spec.material_jobs.map((job) => ({
+      ...job,
+      fallback_asset_id: 'hero_image_asset',
+      fallback_kind: 'generated_asset' as const,
+    })),
+  },
+  adapter: {
+    async generate() {
+      return {
+        ok: false,
+        submissionState: 'unknown' as const,
+        failureCode: 'provider_submit_state_unknown' as const,
+        error: 'submit response was lost',
+      }
+    },
+  },
+})
+assert.equal(unknownSubmissionResolved.report.ok, false)
+assert.equal(unknownSubmissionResolved.report.generation_trace[0]?.status, 'failed')
+assert.equal(unknownSubmissionResolved.report.resolved_assets.length, 0)
 
 const suppliedAssetId = 'user_supplied_scene_001'
 const fulfilledUserMaterialResolved = await resolveRemotionTimelineMaterialJobs({
@@ -239,7 +354,9 @@ const imageFallbackResolved = await resolveRemotionTimelineMaterialJobs({
   adapter: createNoopMaterialGenerationAdapter(),
 })
 assert.equal(imageFallbackResolved.report.ok, true)
-assert.equal(imageFallbackResolved.report.delivery_readiness.ready, true)
+assert.equal(imageFallbackResolved.report.delivery_readiness.ready, false)
+assert.deepEqual(imageFallbackResolved.report.delivery_readiness.missing_generated_scene_ids, ['scene_001'])
+assert.equal(imageFallbackResolved.report.delivery_readiness.fallback_scene_count, 1)
 assert.equal(imageFallbackResolved.spec.scenes[0]?.type, 'image_motion')
 assert.equal(imageFallbackResolved.spec.scenes[0]?.asset_id, fallbackOutputAssetId)
 

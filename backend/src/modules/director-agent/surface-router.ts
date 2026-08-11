@@ -1,15 +1,6 @@
 import type { DirectorConversationRuntime } from '../../../../shared/lib/director-understanding.js'
 import type { DirectorContext } from '../../../../shared/types/director-context.js'
-
-export type DirectorSurfaceMode =
-  | 'smalltalk'
-  | 'help'
-  | 'capability_intro'
-  | 'creative_guide'
-  | 'task'
-  | 'edit'
-  | 'repair'
-  | 'unknown'
+import type { DirectorSurfaceMode } from '../../../../shared/types/director-stream.js'
 
 export interface DirectorSurfaceRouteInput {
   prompt: string

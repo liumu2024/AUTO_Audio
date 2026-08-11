@@ -21,6 +21,7 @@ import {
   applyV2TimelineRevisionPreservation,
   buildV2TimelineRevisionContext,
 } from '../src/pipeline-v2/timeline-revision-context.js'
+import { hydrateV2TimelineAssetIds } from '../src/pipeline-v2/timeline-asset-id-hydration.js'
 
 const repoRoot = path.resolve(process.cwd(), '..')
 const sampleVideo = path.join(repoRoot, 'example_videos', '9.mp4')
@@ -77,8 +78,65 @@ const imageFallback = buildDeterministicRemotionTimelineSpec({
   taskId: `v2_timeline_caption_fallback_${Date.now()}`,
   creationMode: 'material_brief',
   prompt: '根据现有图片安排一版可编辑方案。',
-  materials: [{ id: 'image_1', name: '4.png', type: 'image', src: sampleImage }],
+  materials: [{ id: 'mat_image_1', name: '4.png', type: 'image', src: sampleImage }],
 })
+assert.deepEqual(
+  imageFallback.assets.map((asset) => asset.id),
+  ['mat_image_1'],
+  'New plans must keep the server-owned material ID instead of inventing a second planner ID.',
+)
+assert.equal(
+  imageFallback.assets.some((asset) => asset.id.startsWith('material_') || asset.id === 'planner_image_asset'),
+  false,
+)
+
+const hydratedLegacyAsset = hydrateV2TimelineAssetIds({
+  ...imageFallback,
+  creative_brief: {
+    direction: 'legacy fixture',
+    sample_methods: [],
+    image_references: [{
+      asset_id: 'material_01_mat_image_1',
+      observed_facts: ['legacy fact'],
+      intended_use: 'legacy use',
+    }],
+  },
+  assets: [{
+    ...imageFallback.assets[0]!,
+    id: 'material_01_mat_image_1',
+  }],
+  scenes: imageFallback.scenes.map((scene, index) =>
+    index === 0 ? { ...scene, asset_id: 'material_01_mat_image_1' } : scene),
+  material_jobs: imageFallback.material_jobs.map((job, index) =>
+    index === 0
+      ? { ...job, input_asset_id: 'material_01_mat_image_1', output_asset_id: 'material_01_mat_image_1' }
+      : job),
+}, {
+  taskId: 'legacy-hydration',
+  prompt: 'legacy hydration',
+  materials: [{ id: 'mat_image_1', type: 'image', src: sampleImage }],
+})
+assert.deepEqual(hydratedLegacyAsset.assets.map((asset) => asset.id), ['mat_image_1'])
+assert.equal(hydratedLegacyAsset.scenes[0]?.asset_id, 'mat_image_1')
+assert.equal(hydratedLegacyAsset.material_jobs[0]?.input_asset_id, 'mat_image_1')
+assert.equal(hydratedLegacyAsset.material_jobs[0]?.output_asset_id, 'mat_image_1')
+assert.equal(hydratedLegacyAsset.creative_brief?.image_references[0]?.asset_id, 'mat_image_1')
+
+const ambiguousLegacyAsset = hydrateV2TimelineAssetIds({
+  ...imageFallback,
+  assets: [{ ...imageFallback.assets[0]!, id: 'planner_image_asset', src: 'legacy://unknown' }],
+  scenes: imageFallback.scenes.map((scene, index) =>
+    index === 0 ? { ...scene, asset_id: 'planner_image_asset' } : scene),
+}, {
+  taskId: 'ambiguous-hydration',
+  prompt: 'ambiguous hydration',
+  materials: [
+    { id: 'mat_image_1', type: 'image', src: sampleImage },
+    { id: 'mat_image_2', type: 'image', src: `${sampleImage}.other` },
+  ],
+})
+assert.equal(ambiguousLegacyAsset.assets[0]?.id, 'planner_image_asset')
+assert.equal(ambiguousLegacyAsset.scenes[0]?.asset_id, 'planner_image_asset')
 assert.equal(
   imageFallback.overlays.some((overlay) => overlay.text?.includes('4.png')),
   false,
@@ -240,13 +298,8 @@ const revisionContext = buildV2TimelineRevisionContext({
   draftId: 'draft_smoke',
   baseRevision: 7,
   spec: baseRevisionSpec,
-  selectedClipId: `v2-scene-${baseRevisionSpec.scenes[0]!.id}`,
 })
 assert.equal(revisionContext.base_revision, 7)
-assert.deepEqual(revisionContext.selected_item, {
-  kind: 'scene',
-  id: baseRevisionSpec.scenes[0]!.id,
-})
 assert.equal(revisionContext.timeline.scenes[0]?.note, '首镜必须保留安静的开场停顿。')
 
 const preservedRevision = applyV2TimelineRevisionPreservation({

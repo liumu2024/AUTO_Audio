@@ -34,7 +34,9 @@ try {
       return new Response(JSON.stringify({
         id: 'understanding_2',
         output_text: JSON.stringify({
-          schema_version: 'v2_sample_understanding.v1', task_id: 'sample_protocol', summary_zh: '修复后的样例理解', segments: [],
+          schema_version: 'v2_sample_understanding.v2', task_id: 'sample_protocol', summary: '修复后的样例理解',
+          content_observations: [], method_observations: [], transferable_knowledge: [], shot_evidence: [],
+          questions: [], warnings: [],
         }),
       }), { status: 200 })
     }
@@ -76,6 +78,7 @@ try {
   assert.equal('input_asset_id' in plannerMaterialJobProperties, true)
   assert.equal('input_image_url' in plannerMaterialJobProperties, false)
   assert.equal('text' in requestBodies[1]!, false)
+  assert.match(JSON.stringify(requestBodies[1]), /Repair only the JSON format/)
   assert.equal('reasoning' in (plannerResult.rawResponse as Record<string, unknown>), false)
 
   requestBodies.length = 0
@@ -100,6 +103,92 @@ try {
     }),
     /input_image_url is reserved for historical persisted jobs/,
   )
+
+  requestBodies.length = 0
+  let unauthorizedAssetCalls = 0
+  const unauthorizedAssetSpec = {
+    ...validSpec,
+    assets: [{
+      id: 'model_invented_stock_asset',
+      type: 'video' as const,
+      src: 'https://model-invented.example.com/stock.mp4',
+      source: 'stock_asset' as const,
+    }],
+    scenes: validSpec.scenes.map((scene, index) => index === 0
+      ? { ...scene, type: 'user_video' as const, asset_id: 'model_invented_stock_asset' }
+      : scene),
+  }
+  globalThis.fetch = async (_url, init) => {
+    requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+    unauthorizedAssetCalls += 1
+    return new Response(JSON.stringify({
+      id: `planner_asset_ownership_${unauthorizedAssetCalls}`,
+      output_text: JSON.stringify(unauthorizedAssetCalls === 1 ? unauthorizedAssetSpec : validSpec),
+    }), { status: 200 })
+  }
+  const repairedUnauthorizedAsset = await runV2TimelineLlmPlanner({
+    taskId: 'planner_protocol', creationMode: 'text_to_video',
+    prompt: '生成一版无素材科技介绍视频', durationSec: 6,
+  })
+  assert.equal(unauthorizedAssetCalls, 2)
+  assert.ok(repairedUnauthorizedAsset.jsonRepair)
+  assert.equal(repairedUnauthorizedAsset.spec.assets.some((asset) => asset.id === 'model_invented_stock_asset'), false)
+  assert.match(JSON.stringify(requestBodies[1]), /Correct only the fields implicated by the validation error/)
+  assert.doesNotMatch(JSON.stringify(requestBodies[1]), /Do not change its business meaning, timeline choices, assets, or captions/)
+
+  requestBodies.length = 0
+  const conditionedAssetId = 'mat_conditioned_reference'
+  const conditionedJob = validSpec.material_jobs.find((job) => job.type === 'generate_video')
+  assert.ok(conditionedJob)
+  const conditionedSpec = structuredClone(validSpec)
+  conditionedSpec.task_id = 'planner_conditioned_reference'
+  conditionedSpec.assets.push({
+    id: conditionedAssetId,
+    type: 'image',
+    src: 'https://cdn.example.com/conditioned-reference.png',
+    source: 'user_asset',
+  })
+  conditionedSpec.creative_brief = {
+    ...conditionedSpec.creative_brief!,
+    image_references: [],
+  }
+  conditionedSpec.material_jobs = conditionedSpec.material_jobs.map((job) => job.id === conditionedJob.id
+    ? { ...job, input_asset_id: conditionedAssetId }
+    : job)
+  conditionedSpec.scenes = conditionedSpec.scenes.map((scene) => scene.id === conditionedJob.scene_id
+    ? { ...scene, creative_intent: { ...scene.creative_intent, description: 'Retain the visible source subject while adding motion.' } }
+    : scene)
+  const repairedConditionedSpec = structuredClone(conditionedSpec)
+  repairedConditionedSpec.creative_brief!.image_references = [{
+    asset_id: conditionedAssetId,
+    observed_facts: ['A clearly visible subject occupies the source image.'],
+    intended_use: 'Preserve that subject as the visual identity reference for this generated scene.',
+  }]
+  let conditionedCalls = 0
+  globalThis.fetch = async (_url, init) => {
+    requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+    conditionedCalls += 1
+    return new Response(JSON.stringify({
+      id: `planner_conditioned_${conditionedCalls}`,
+      output_text: JSON.stringify(conditionedCalls === 1 ? conditionedSpec : repairedConditionedSpec),
+    }), { status: 200 })
+  }
+  const repairedConditioned = await runV2TimelineLlmPlanner({
+    taskId: 'planner_conditioned_reference',
+    creationMode: 'text_to_video',
+    prompt: 'Animate the supplied subject consistently.',
+    durationSec: 6,
+    materials: [{
+      id: conditionedAssetId,
+      type: 'image',
+      name: 'conditioned-reference.png',
+      src: 'https://cdn.example.com/conditioned-reference.png',
+    }],
+  })
+  assert.equal(conditionedCalls, 2)
+  assert.equal(repairedConditioned.spec.creative_brief?.image_references[0]?.asset_id, conditionedAssetId)
+  assert.ok(repairedConditioned.spec.creative_brief?.image_references[0]?.observed_facts.length)
+  assert.match(JSON.stringify(requestBodies[1]), new RegExp(`Server-owned asset catalog.*${conditionedAssetId}`))
 
   requestBodies.length = 0
   const installPlannerProtocolFailure = () => {
@@ -130,8 +219,7 @@ try {
   )), false)
 
   installPlannerProtocolFailure()
-  await assert.rejects(
-    previewV2RemotionTimeline({
+  const materialGap = await previewV2RemotionTimeline({
       taskId: 'planner_material_protocol_second_failure',
       creationMode: 'material_brief',
       plannerMode: 'llm',
@@ -141,14 +229,13 @@ try {
       materials: [{
         id: 'landscape', type: 'image', name: 'landscape.png', src: 'https://cdn.example.com/landscape.png',
       }],
-    }),
-    /did not return|invalid|outcome review failed/i,
-    'a visual-material request must not silently degrade to an ungrounded image slideshow',
-  )
+    })
+  assert.equal(materialGap.plannerSource, 'llm_planning_gap')
+  assert.equal(materialGap.spec.creative_brief?.planning_gaps?.[0]?.area, 'image_understanding')
+  assert.equal(materialGap.spec.material_jobs.length, 0)
 
   installPlannerProtocolFailure()
-  await assert.rejects(
-    previewV2RemotionTimeline({
+  const mislabeledGap = await previewV2RemotionTimeline({
       taskId: 'planner_mislabeled_material_protocol_failure',
       creationMode: 'text_to_video',
       plannerMode: 'llm',
@@ -158,14 +245,12 @@ try {
       materials: [{
         id: 'mislabeled_landscape', type: 'image', name: 'landscape.png', src: 'https://cdn.example.com/landscape.png',
       }],
-    }),
-    /did not return|invalid/i,
-    'a creationMode label cannot authorize text fallback when real visual inputs are present',
-  )
+    })
+  assert.equal(mislabeledGap.plannerSource, 'llm_planning_gap')
+  assert.equal(mislabeledGap.spec.assets[0]?.id, 'mislabeled_landscape')
 
   installPlannerProtocolFailure()
-  await assert.rejects(
-    previewV2RemotionTimeline({
+  const sampleGap = await previewV2RemotionTimeline({
       taskId: 'planner_unparsed_sample_protocol_second_failure',
       creationMode: 'sample_replicate',
       plannerMode: 'llm',
@@ -173,10 +258,9 @@ try {
       prompt: 'Create a new video using the uploaded sample structure.',
       durationSec: 6,
       referenceVideoPath: 'https://cdn.example.com/sample.mp4',
-    }),
-    /did not return|invalid|outcome review failed/i,
-    'a sample request without persisted sample understanding must not use an ungrounded deterministic fallback',
-  )
+    })
+  assert.equal(sampleGap.plannerSource, 'llm_planning_gap')
+  assert.equal(sampleGap.spec.creative_brief?.planning_gaps?.[0]?.area, 'sample_transfer')
 
   installPlannerProtocolFailure()
   const understoodSampleFallback = await previewV2RemotionTimeline({
@@ -327,6 +411,7 @@ try {
   mkdirSync(path.dirname(localImagePath), { recursive: true })
   writeFileSync(localImagePath, new Uint8Array([137, 80, 78, 71]))
   try {
+    let plannerLocalCalls = 0
     globalThis.fetch = async (url, init) => {
       const target = String(url)
       if (target.endsWith('/files') && init?.method === 'POST') {
@@ -383,6 +468,13 @@ try {
     const sourceAssetId = plannerImageBase.assets[0]!.id
     const plannerImageSpec = {
       ...plannerImageBase,
+      creative_brief: {
+        ...plannerImageBase.creative_brief!,
+        image_references: plannerImageBase.creative_brief!.image_references.map((reference) => ({
+          ...reference,
+          observed_facts: ['A landscape is visibly present in the supplied image.'],
+        })),
+      },
       assets: plannerImageBase.assets.map((asset) => ({
         ...asset,
         src: 'C:\\server-private\\model-invented.png',
@@ -418,9 +510,10 @@ try {
       }
       if (target.includes('/responses')) {
         requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+        plannerLocalCalls += 1
         return new Response(JSON.stringify({
           id: 'planner_local_image_response',
-          output_text: JSON.stringify(plannerImageSpec),
+          output_text: plannerLocalCalls === 1 ? '{"schema_version":' : JSON.stringify(plannerImageSpec),
         }), { status: 200 })
       }
       throw new Error(`Unexpected mocked request: ${target}`)
@@ -440,6 +533,12 @@ try {
       plannerImageContent.filter((item) => item.type === 'input_image'),
       [{ type: 'input_image', file_id: 'planner_local_image_file' }],
       'Planner must use the same local-upload image adapter as Director',
+    )
+    const plannerRepairImageContent = ((requestBodies[1]?.input as Array<{ content?: Array<Record<string, unknown>> }> | undefined)?.[0]?.content ?? [])
+    assert.deepEqual(
+      plannerRepairImageContent.filter((item) => item.type === 'input_image'),
+      [{ type: 'input_image', file_id: 'planner_local_image_file' }],
+      'Planner protocol repair must retain the same authoritative image evidence.',
     )
     assert.deepEqual(plannerWithLocalImage.visualInputReport.attached_material_ids, ['planner_local_image'])
     assert.equal(

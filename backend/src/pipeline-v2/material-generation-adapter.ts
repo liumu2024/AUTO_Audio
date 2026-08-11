@@ -21,12 +21,19 @@ export interface V2MaterialGenerationResult {
   ok: boolean
   asset?: V2GeneratedMaterialAsset
   providerTaskId?: string
+  submissionState?: 'not_submitted' | 'submitted' | 'unknown'
+  failureCode?: 'provider_submit_state_unknown' | 'provider_receipt_persist_failed'
   metadata?: Record<string, unknown>
   error?: string
 }
 
 export interface V2MaterialGenerationAdapter {
-  generate(input: V2MaterialGenerationRequest): Promise<V2MaterialGenerationResult>
+  generate(
+    input: V2MaterialGenerationRequest,
+    options?: {
+      onProviderTaskSubmitted?: (providerTaskId: string) => void | Promise<void>
+    },
+  ): Promise<V2MaterialGenerationResult>
 }
 
 export function createNoopMaterialGenerationAdapter(): V2MaterialGenerationAdapter {
@@ -34,6 +41,7 @@ export function createNoopMaterialGenerationAdapter(): V2MaterialGenerationAdapt
     async generate(input) {
       return {
         ok: false,
+        submissionState: 'not_submitted',
         error: `No material generation adapter is configured for ${input.type}.`,
       }
     },
@@ -50,11 +58,13 @@ export function createStaticMaterialGenerationAdapter(input: {
       if (!src) {
         return {
           ok: false,
+          submissionState: 'not_submitted',
           error: `Static adapter has no asset path for ${request.type}.`,
         }
       }
       return {
         ok: true,
+        submissionState: 'not_submitted',
         providerTaskId: `static:${path.basename(src)}`,
         asset: {
           id: request.outputAssetId,

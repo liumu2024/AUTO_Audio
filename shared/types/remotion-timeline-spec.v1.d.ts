@@ -135,9 +135,26 @@ export interface RemotionTimelineRenderPolicy {
     renderer: 'remotion_timeline';
     fallback_renderer?: 'overlay_compose';
 }
+export interface V2CreativePlanningGap {
+    area: 'image_understanding' | 'scene_plan' | 'sample_transfer';
+    message: string;
+    affected_scene_ids?: string[];
+}
+export interface V2CreativeBrief {
+    direction: string;
+    image_references: Array<{
+        asset_id: string;
+        observed_facts: string[];
+        intended_use: string;
+    }>;
+    sample_methods: string[];
+    /** Server-maintained recovery state; model output cannot write this field. */
+    planning_gaps?: V2CreativePlanningGap[];
+}
 export interface RemotionTimelineSpecV1 {
     schema_version: typeof REMOTION_TIMELINE_SPEC_SCHEMA_VERSION;
     task_id: string;
+    creative_brief?: V2CreativeBrief;
     canvas: RemotionTimelineCanvas;
     assets: RemotionTimelineAsset[];
     scenes: RemotionTimelineScene[];

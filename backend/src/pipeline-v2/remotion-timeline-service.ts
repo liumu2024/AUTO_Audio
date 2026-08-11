@@ -11,6 +11,7 @@ import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-time
 import { bindRegisteredRenderComponentDisplayNames } from '../modules/render-components/component-registry.js'
 import { createConfiguredV2MaterialGenerationAdapter } from './configured-material-adapter.js'
 import type { V2MaterialGenerationAdapter } from './material-generation-adapter.js'
+import type { V2IdempotencyRepository } from './idempotency-repository.js'
 import {
   resolveRemotionTimelineMaterialJobs,
   standardizeRemotionTimelineVideoAssets,
@@ -18,6 +19,7 @@ import {
 } from './remotion-timeline-material-resolver.js'
 import {
   buildDeterministicRemotionTimelineSpec,
+  buildV2PlanningGapTimelineSpec,
   type V2RemotionTimelinePlannerInput,
 } from './remotion-timeline-planner.js'
 import {
@@ -37,6 +39,7 @@ import type { V2PlannerInput } from './v2-input.js'
 import type { V2TimelineVisualInputReport } from './remotion-timeline-llm-planner.js'
 import { applyV2TimelineRevisionPreservation } from './timeline-revision-context.js'
 import { applyV2TimelineRevisionScope } from './timeline-revision-scope.js'
+import { assertV2TimelinePlanningComplete } from './timeline-planning-gaps.js'
 import {
   reviewV2TimelineRevisionOutcome,
   V2TimelineRevisionOutcomeError,
@@ -86,6 +89,21 @@ export interface V2TimelineRunOptions {
   authorizedDraftComponentIds?: readonly string[]
   /** Internal test seam. Public HTTP callers cannot bind this option. */
   materialAdapter?: V2MaterialGenerationAdapter
+  /** Internal RenderRun facts used for Provider idempotency and generated-shot reuse. */
+  materialExecution?: {
+    idempotency: {
+      repository: V2IdempotencyRepository
+      userId: number
+      draftId: string
+      renderRunId: string
+      renderKey: string
+    }
+    reusableRun?: {
+      runId: string
+      spec: RemotionTimelineSpecV1
+      report: V2TimelineMaterialResolutionReport
+    }
+  }
 }
 
 export interface V2TimelinePreviewOptions {
@@ -175,6 +193,7 @@ async function resolveTimelineSpec(input: {
               sceneId: input.plannerInput.revisionSceneId,
               sceneIds: input.plannerInput.revisionSceneIds,
               transitionIds: input.plannerInput.revisionTransitionIds,
+              globalMode: input.plannerInput.revisionGlobalMode,
             }),
           }
           await input.trace.writeJson('02-planning', 'timeline-scoped-candidate.json', llmPlanner.spec)
@@ -210,7 +229,7 @@ async function resolveTimelineSpec(input: {
           await input.trace.writeText('02-planning', 'timeline-outcome-correction-request.md', correctionPrompt)
           llmPlanner = await runV2TimelineLlmPlanner(
             plannerInputFrom(input.plannerInput),
-            { promptText: correctionPrompt },
+            { promptText: correctionPrompt, allowJsonRepair: false },
           )
           await input.trace.writeJson('02-planning', 'timeline-outcome-correction-model-response.audit.json', llmPlanner.initialResponseAudit)
           await input.trace.writeJson('02-planning', 'timeline-outcome-correction-json-candidate.audit.json', llmPlanner.rawResponse)
@@ -224,6 +243,7 @@ async function resolveTimelineSpec(input: {
                 sceneId: input.plannerInput.revisionSceneId,
                 sceneIds: input.plannerInput.revisionSceneIds,
                 transitionIds: input.plannerInput.revisionTransitionIds,
+                globalMode: input.plannerInput.revisionGlobalMode,
               }),
             }
             await input.trace.writeJson('02-planning', 'timeline-outcome-correction-scoped-candidate.json', llmPlanner.spec)
@@ -255,7 +275,7 @@ async function resolveTimelineSpec(input: {
         visualInputReport: llmPlanner.visualInputReport,
       }
     } catch (error) {
-      if (error instanceof V2TimelineRevisionOutcomeError) throw error
+      if (error instanceof V2TimelineRevisionOutcomeError && input.plannerInput.revisionBaseSpec) throw error
       const message = error instanceof Error ? error.message : String(error)
       const protocol = error && typeof error === 'object' && 'diagnostic' in error
         ? (error as { diagnostic?: Record<string, unknown> }).diagnostic
@@ -279,7 +299,7 @@ async function resolveTimelineSpec(input: {
       }
       // A deterministic initial plan is not a valid substitute for an edit:
       // it has no scoped relation to the saved base and could replace it.
-      if (input.plannerInput.revisionBaseSpec || !input.plannerInput.allowPlannerFallback) throw error
+      if (input.plannerInput.revisionBaseSpec) throw error
       const hasParsedSampleFacts = Boolean(input.plannerInput.sampleUnderstanding)
       const hasUnparsedSample = Boolean(input.plannerInput.referenceVideoPath) && !hasParsedSampleFacts
       const hasVisualMaterial = Boolean(
@@ -291,7 +311,20 @@ async function resolveTimelineSpec(input: {
         || input.plannerInput.creationMode === 'sample_replicate'
       const canFallbackDeterministically = hasParsedSampleFacts
         || (!hasUnparsedSample && !hasVisualMaterial && !requestsUnavailableVisualFallback)
-      if (!canFallbackDeterministically) throw error
+      if (!canFallbackDeterministically) {
+        const area = input.plannerInput.creationMode === 'sample_replicate'
+          ? 'sample_transfer'
+          : hasVisualMaterial
+            ? 'image_understanding'
+            : 'scene_plan'
+        const spec = await bindComponentNames(buildV2PlanningGapTimelineSpec(input.plannerInput, [{
+          area,
+          message: `Planner could not produce a verified timeline: ${message}`,
+        }]))
+        await input.trace.writeJson('02-planning', 'timeline-planning-gap-spec.json', spec)
+        return { spec, plannerSource: 'llm_planning_gap' }
+      }
+      if (!input.plannerInput.allowPlannerFallback) throw error
       const spec = await bindComponentNames(await buildTimelineSpec(input.plannerInput))
       await input.trace.writeJson('02-planning', 'timeline-fallback-spec.json', spec)
       return {
@@ -436,6 +469,7 @@ export async function runV2RemotionTimeline(
     trace,
     timelineSpecOverride: input.timelineSpecOverride,
   })
+  assertV2TimelinePlanningComplete(resolved.spec)
   const attachedImages = resolved.visualInputReport?.attached_image_input_count ?? 0
   await trace.writeJson('02-planning', 'planning-decision.json', {
     planner_source: resolved.plannerSource,
@@ -499,6 +533,8 @@ export async function runV2RemotionTimeline(
       ?? createConfiguredV2MaterialGenerationAdapter({ outputDir: outputRoot }),
     outputDir: outputRoot,
     maxConcurrency: env.v2MaterialGenerationConcurrency,
+    idempotency: options.materialExecution?.idempotency,
+    reusableRun: options.materialExecution?.reusableRun,
     onProgress: async (event) => {
       const fraction = event.total > 0 ? event.completed / event.total : 1
       await reportProgress({

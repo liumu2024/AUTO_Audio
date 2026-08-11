@@ -7,9 +7,9 @@ import {
   streamDirectorChat,
   getDirectorWorkspaceSession,
   getV2TimelineDraft,
-  type DirectorAgentStreamEvent,
   type V2TimelineDraftRunResult,
 } from '@/lib/api'
+import type { DirectorAgentStreamEvent } from '@shared/types/director-stream'
 import {
   summarizeDirectorSessionState,
   syncDirectorSessionSnapshot,
@@ -71,6 +71,7 @@ function syncDirectorContext(input: {
 
 function applyDirectorWorkspaceContext(context: DirectorContext, acknowledgeLocalChanges = false) {
   useDirectorContextStore.getState().replaceContext(context)
+  useV2TimelineStore.getState().selectClip(context.currentTimeline?.selectedClipId ?? null)
   useCreationStore.getState().acceptServerMaterials(context.materials, acknowledgeLocalChanges)
   const sample = context.sampleVideo
   useCreationStore.getState().acceptServerSample(sample?.url
@@ -165,11 +166,9 @@ function buildV2ConversationSummary() {
   const sample = v2.sampleSession?.understanding
   const sampleText = sample
     ? [
-        `Sample understanding: ${sample.summary_zh}`,
-        `Story: ${sample.story_zh}`,
-        `Atmosphere: ${sample.atmosphere_zh}`,
-        `Editing: ${sample.editing_zh}`,
-        `Rhythm: ${sample.rhythm_zh}`,
+        `Sample understanding: ${sample.summary}`,
+        `Transferable methods: ${sample.method_observations.map((item) => `${item.expression} (${item.purpose})`).join('; ')}`,
+        `Transferable knowledge: ${sample.transferable_knowledge.map((item) => item.statement).join('; ')}`,
       ].join('\n')
     : ''
   const timelineText = v2.spec
@@ -508,9 +507,6 @@ export function DirectorChatPanel() {
             debugThoughts.push(event.ok ? `后端结果：${event.summary}` : `后端未完成：${event.summary}`)
           }
           if (event.type === 'assistant_reply') directMessage = event.message
-          if (event.type === 'workspace_snapshot') {
-            applyDirectorWorkspaceContext(event.state.context, true)
-          }
           if (event.type === 'state_update') {
             useDirectorContextStore.getState().setDirectorState(event.state)
           }
@@ -523,9 +519,6 @@ export function DirectorChatPanel() {
             debugThoughts.push(
               `V2 会话已同步；本轮${event.modelCalled ? '已调用导演模型' : '使用上下文降级'}。`,
             )
-          }
-          if (event.type === 'done') {
-            if (event.message) directMessage = event.message
           }
         },
         abort.signal,

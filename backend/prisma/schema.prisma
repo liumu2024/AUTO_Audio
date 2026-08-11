@@ -20,6 +20,7 @@ model User {
 
   v2TimelineDrafts V2TimelineDraft[]
   creativeMemories CreativeMemory[]
+  idempotencyReceipts V2IdempotencyReceipt[]
 
   @@map("users")
 }
@@ -41,6 +42,7 @@ model V2TimelineDraft {
   revisions  V2TimelineRevision[]
   renderRuns V2TimelineRenderRun[]
   creativeMemories CreativeMemory[]
+  idempotencyReceipts V2IdempotencyReceipt[]
 
   @@index([userId])
   @@map("v2_timeline_drafts")
@@ -106,4 +108,29 @@ model CreativeMemory {
   @@index([userId, status])
   @@index([draftId, status])
   @@map("creative_memories")
+}
+
+model V2IdempotencyReceipt {
+  id             String    @id
+  userId         Int       @map("user_id")
+  draftId        String    @map("draft_id")
+  operation      String
+  idempotencyKey String    @map("idempotency_key")
+  resourceKey    String    @map("resource_key")
+  requestHash    String    @map("request_hash")
+  status         String
+  phase          String?
+  resultRef      String?   @map("result_ref")
+  providerTaskId String?   @map("provider_task_id")
+  failureJson    Json?     @map("failure_json")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  completedAt    DateTime? @map("completed_at")
+
+  user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  draft V2TimelineDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, operation, idempotencyKey])
+  @@index([draftId, operation, createdAt])
+  @@map("v2_idempotency_receipts")
 }

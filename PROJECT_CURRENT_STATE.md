@@ -192,7 +192,7 @@ V2 run 链路：
 3. 调用 `/api/director/chat`；理解模型在结构化决策中选择本轮 Skill 与 Tool。
 4. 后端 Registry 校验 Skill/Tool 关系、参数、V2 状态与交付授权，并按阶段调度 Tool。
 5. Tool 真实结果先写回 V2 草稿/会话，再由理解模型基于结果生成自然回复。
-6. 前端消费 `skill_selected`、`skill_loaded`、`tool_*`、`assistant_reply` 和 `workspace_snapshot` 事件，更新右侧预览区、时间线和 trace 地址。
+6. 前端消费 `skill_selected`、`skill_loaded`、`tool_*`、`assistant_reply` 和唯一的 `workspace_session` 事件，更新右侧预览区、时间线和 trace 地址。
 
 `/api/v2/sample/analyze`、`/api/v2/timeline/preview` 和草稿 RenderRun API 仍可直接调用；导演正式链路不再由前端 action 映射决定执行顺序。
 

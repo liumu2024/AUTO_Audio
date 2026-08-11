@@ -63,6 +63,20 @@ const hydratedLegacySubtitleState = hydrateDirectorWorkspaceState({
   },
 })
 assert.equal('subtitlePolicy' in hydratedLegacySubtitleState.context.slots, false)
+const hydratedLegacySampleState = hydrateDirectorWorkspaceState({
+  ...preserved,
+  context: {
+    ...preserved.context,
+    sampleVideo: {
+      id: 'legacy_sample', url: '/uploads/legacy.mp4',
+      sampleUnderstanding: { schema_version: 'v2_sample_understanding.v1' } as never,
+      reference: { source: 'sample_video', summary: 'legacy', segmentCount: 3, shotCount: 3 } as never,
+    },
+  },
+})
+assert.equal(hydratedLegacySampleState.context.sampleVideo?.url, '/uploads/legacy.mp4')
+assert.equal(hydratedLegacySampleState.context.sampleVideo?.sampleUnderstanding, undefined)
+assert.equal(hydratedLegacySampleState.context.sampleVideo?.reference, undefined)
 
 const withOutcome = applyDirectorWorkspacePatch(preserved, {
   draftId: 'draft_v2_1',

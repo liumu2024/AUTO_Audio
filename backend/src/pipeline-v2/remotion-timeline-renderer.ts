@@ -66,13 +66,30 @@ function isRemoteOrStatic(src: string): boolean {
   return /^https?:\/\//i.test(src) || src.startsWith('static:')
 }
 
+async function createStagedPublicAssetDir(remotionRoot: string, taskId: string): Promise<string> {
+  const root = path.join(remotionRoot, 'public', 'v2-assets')
+  await mkdir(root, { recursive: true })
+  return mkdtemp(path.join(root, `${safePart(taskId)}-`))
+}
+
+async function removeTransientDir(dir: string, label: string, originalError?: unknown): Promise<void> {
+  try {
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  } catch (cleanupError) {
+    if (!originalError) throw cleanupError
+    const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+    console.error(`[v2-timeline-render] ${label} cleanup failed: ${message}`)
+  }
+}
+
 async function stageLocalAssetsForRemotion(input: {
   spec: RemotionTimelineSpecV1
   remotionRoot: string
+  publicDir: string
 }): Promise<RemotionTimelineSpecV1> {
-  const publicRelativeDir = path.posix.join('v2-assets', safePart(input.spec.task_id))
-  const publicDir = path.join(input.remotionRoot, 'public', ...publicRelativeDir.split('/'))
-  await mkdir(publicDir, { recursive: true })
+  const publicRelativeDir = path.relative(path.join(input.remotionRoot, 'public'), input.publicDir)
+    .split(path.sep)
+    .join('/')
 
   const assets: RemotionTimelineAsset[] = []
   for (const asset of input.spec.assets) {
@@ -87,7 +104,7 @@ async function stageLocalAssetsForRemotion(input: {
     }
     const ext = path.extname(sourcePath) || (asset.type === 'image' ? '.png' : asset.type === 'audio' ? '.mp3' : '.mp4')
     const fileName = `${safePart(asset.id)}${ext}`
-    const targetPath = path.join(publicDir, fileName)
+    const targetPath = path.join(input.publicDir, fileName)
     await copyFile(sourcePath, targetPath)
     assets.push({
       ...asset,
@@ -109,7 +126,7 @@ async function createCustomComponentRegistry(input: {
   spec: RemotionTimelineSpecV1
   remotionRoot: string
 }): Promise<{ dir: string; entryPath: string }> {
-  const customDir = await mkdtemp(path.join(input.remotionRoot, '.v2-custom-components-'))
+  const customDir = await mkdtemp(path.join(input.remotionRoot, `.v2-custom-components-${safePart(input.spec.task_id)}-`))
   const referenced = referencedComponentIds(input.spec)
   try {
     const imports: string[] = []
@@ -136,7 +153,7 @@ async function createCustomComponentRegistry(input: {
     await writeFile(entryPath, registry, 'utf8')
     return { dir: customDir, entryPath }
   } catch (error) {
-    await rm(customDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    await removeTransientDir(customDir, 'custom component registry', error)
     throw error
   }
 }
@@ -162,52 +179,63 @@ export async function renderV2RemotionTimeline(input: {
   const remotionRoot = resolveFromCwd(input.remotionRoot ?? '../remotion')
   const outputDir = resolveFromCwd(input.outputDir)
   await mkdir(outputDir, { recursive: true })
-  const renderSpec = await stageLocalAssetsForRemotion({ spec, remotionRoot })
-
-  const propsPath = path.join(outputDir, 'remotion-timeline-props.json')
-  const outputPath = path.join(outputDir, input.outputName ?? `${spec.task_id}.mp4`)
-  await writeFile(propsPath, `${JSON.stringify(renderSpec, null, 2)}\n`, 'utf8')
-
-  const args = [
-    path.join(remotionRoot, 'scripts', 'render-timeline-video.mjs'),
-    '--props',
-    propsPath,
-    '--out',
-    outputPath,
-    '--composition-id',
-    'V2TimelineVideo',
-  ]
-  const browserExecutable = process.env.REMOTION_BROWSER_EXECUTABLE?.trim()
-  if (browserExecutable) args.push('--browser-executable', browserExecutable)
-
-  const customRegistry = await createCustomComponentRegistry({ spec: renderSpec, remotionRoot })
-  args.push('--custom-components-registry', customRegistry.entryPath)
-  let result
+  const publicAssetDir = await createStagedPublicAssetDir(remotionRoot, spec.task_id)
+  let operationError: unknown
   try {
-    result = await runCommand(commandForNode(), args, remotionRoot)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const renderSpec = await stageLocalAssetsForRemotion({ spec, remotionRoot, publicDir: publicAssetDir })
+
+    const propsPath = path.join(outputDir, 'remotion-timeline-props.json')
+    const outputPath = path.join(outputDir, input.outputName ?? `${spec.task_id}.mp4`)
+    await writeFile(propsPath, `${JSON.stringify(renderSpec, null, 2)}\n`, 'utf8')
+
+    const args = [
+      path.join(remotionRoot, 'scripts', 'render-timeline-video.mjs'),
+      '--props',
+      propsPath,
+      '--out',
+      outputPath,
+      '--composition-id',
+      'V2TimelineVideo',
+    ]
+    const browserExecutable = process.env.REMOTION_BROWSER_EXECUTABLE?.trim()
+    if (browserExecutable) args.push('--browser-executable', browserExecutable)
+
+    const customRegistry = await createCustomComponentRegistry({ spec: renderSpec, remotionRoot })
+    args.push('--custom-components-registry', customRegistry.entryPath)
+    let result
+    let commandError: unknown
+    try {
+      result = await runCommand(commandForNode(), args, remotionRoot)
+    } catch (error) {
+      commandError = error
+      const message = error instanceof Error ? error.message : String(error)
+      if (input.recordComponentOutcomes !== false) {
+        for (const id of componentIds) {
+          if (message.includes(id)) await markRenderFailed(id)
+        }
+      }
+      throw error
+    } finally {
+      await removeTransientDir(customRegistry.dir, 'custom registry', commandError)
+    }
+    const file = await stat(outputPath)
     if (input.recordComponentOutcomes !== false) {
       for (const id of componentIds) {
-        if (message.includes(id)) await markRenderFailed(id)
+        await markRenderSucceeded(id)
       }
     }
+    return {
+      propsPath,
+      outputPath,
+      summaryPath: path.join(outputDir, 'timeline-render-summary.json'),
+      fileSizeBytes: file.size,
+      command: [commandForNode(), ...args],
+      log: [result.stdout, result.stderr].filter(Boolean).join('\n'),
+    }
+  } catch (error) {
+    operationError = error
     throw error
   } finally {
-    await rm(customRegistry.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-  }
-  const file = await stat(outputPath)
-  if (input.recordComponentOutcomes !== false) {
-    for (const id of componentIds) {
-      await markRenderSucceeded(id)
-    }
-  }
-  return {
-    propsPath,
-    outputPath,
-    summaryPath: path.join(outputDir, 'timeline-render-summary.json'),
-    fileSizeBytes: file.size,
-    command: [commandForNode(), ...args],
-    log: [result.stdout, result.stderr].filter(Boolean).join('\n'),
+    await removeTransientDir(publicAssetDir, 'staged public assets', operationError)
   }
 }

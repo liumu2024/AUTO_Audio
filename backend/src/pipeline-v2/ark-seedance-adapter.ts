@@ -120,7 +120,10 @@ export function createArkSeedanceMaterialGenerationAdapter(
   const timeoutMs = options.timeoutMs ?? env.v2VideoGenerationTimeoutMs
   const pollIntervalMs = options.pollIntervalMs ?? env.v2VideoGenerationPollIntervalMs
 
-  async function submitTask(input: V2MaterialGenerationRequest): Promise<{ id?: string; raw: unknown }> {
+  async function submitTask(
+    input: V2MaterialGenerationRequest,
+    onDispatch: () => void,
+  ): Promise<{ id?: string; raw: unknown }> {
     const imageUrl = input.inputImageUrl ?? options.defaultImageUrl ?? env.v2VideoGenerationDefaultImageUrl
     if (!apiKey) throw new Error('V2_VIDEO_GENERATION_API_KEY or ARK_API_KEY is not configured.')
     if (!submitUrl) throw new Error('V2_VIDEO_GENERATION_SUBMIT_URL is not configured.')
@@ -148,6 +151,7 @@ export function createArkSeedanceMaterialGenerationAdapter(
       })
     }
 
+    onDispatch()
     const response = await fetchImpl(submitUrl, {
       method: 'POST',
       headers: {
@@ -217,20 +221,42 @@ export function createArkSeedanceMaterialGenerationAdapter(
   }
 
   return {
-    async generate(input): Promise<V2MaterialGenerationResult> {
+    async generate(input, generationOptions): Promise<V2MaterialGenerationResult> {
       if (input.type !== 'generate_video') {
         return {
           ok: false,
+          submissionState: 'not_submitted',
           error: 'Ark Seedance adapter only supports generate_video jobs.',
         }
       }
+      let requestDispatched = false
+      let providerTaskId: string | undefined
       try {
-        const submitted = await submitTask(input)
+        const submitted = await submitTask(input, () => {
+          requestDispatched = true
+        })
         if (!submitted.id) {
           return {
             ok: false,
+            submissionState: 'unknown',
+            failureCode: 'provider_submit_state_unknown',
             metadata: { submit_response: submitted.raw },
             error: 'Ark Seedance submit response did not include a task id.',
+          }
+        }
+        providerTaskId = submitted.id
+        try {
+          await generationOptions?.onProviderTaskSubmitted?.(submitted.id)
+        } catch (error) {
+          return {
+            ok: false,
+            providerTaskId: submitted.id,
+            submissionState: 'submitted',
+            failureCode: 'provider_receipt_persist_failed',
+            metadata: { submit_response: submitted.raw },
+            error: `Provider task was submitted but its receipt could not be persisted: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
           }
         }
         const completed = await pollTask(submitted.id)
@@ -241,6 +267,7 @@ export function createArkSeedanceMaterialGenerationAdapter(
         return {
           ok: true,
           providerTaskId: submitted.id,
+          submissionState: 'submitted',
           metadata: {
             submit_response: submitted.raw,
             final_response: completed.raw,
@@ -256,6 +283,9 @@ export function createArkSeedanceMaterialGenerationAdapter(
       } catch (error) {
         return {
           ok: false,
+          providerTaskId,
+          submissionState: providerTaskId ? 'submitted' : requestDispatched ? 'unknown' : 'not_submitted',
+          failureCode: !providerTaskId && requestDispatched ? 'provider_submit_state_unknown' : undefined,
           error: error instanceof Error ? error.message : String(error),
         }
       }
