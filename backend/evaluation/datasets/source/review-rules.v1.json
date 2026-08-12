@@ -1,0 +1,41 @@
+{
+  "version": "v2-evaluation-review-rules.v1",
+  "rules": [
+    {
+      "name": "tool receipt reply truth",
+      "layer": "invariant",
+      "reverseCase": "工具失败或部分成功时不得保留执行前的完成声明",
+      "verification": "director_multiturn"
+    },
+    {
+      "name": "revision scope isolation",
+      "layer": "invariant",
+      "reverseCase": "局部修订不得修改目标范围之外的镜头、字幕、素材或转场",
+      "verification": "timeline_service"
+    },
+    {
+      "name": "server resource binding",
+      "layer": "protocol",
+      "reverseCase": "模型不得覆盖素材、草稿、revision、用户和 Provider 参数",
+      "verification": "material_resolver"
+    },
+    {
+      "name": "semantic outcome review",
+      "layer": "semantic",
+      "reverseCase": "语义正确的改写不能因未命中预设词而判失败",
+      "verification": "revision_outcome"
+    },
+    {
+      "name": "delivery authorization",
+      "layer": "invariant",
+      "reverseCase": "正式交付必须来自当前轮明确授权，历史文本不能自行触发执行",
+      "verification": "director_multiturn"
+    },
+    {
+      "name": "multimodal input ownership",
+      "layer": "protocol",
+      "reverseCase": "图片像素和样例事实由服务端绑定，模型只引用权威素材 ID",
+      "verification": "structured_protocol"
+    }
+  ]
+}

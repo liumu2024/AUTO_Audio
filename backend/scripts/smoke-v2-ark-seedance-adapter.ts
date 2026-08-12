@@ -58,6 +58,7 @@ const result = await adapter.generate({
   jobId: 'job_001',
   shotId: 'shot_001',
   type: 'generate_video',
+  durationSec: 5,
   prompt: 'mock seedance prompt --duration 5 --camerafixed false --watermark true',
   outputAssetId: 'generated_video_asset',
 }, {
@@ -92,6 +93,7 @@ const unknownSubmission = await createArkSeedanceMaterialGenerationAdapter({
   jobId: 'job_unknown',
   shotId: 'shot_unknown',
   type: 'generate_video',
+  durationSec: 5,
   prompt: 'unknown submit state',
   outputAssetId: 'generated_unknown',
 })

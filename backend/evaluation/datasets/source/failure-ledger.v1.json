@@ -1,0 +1,53 @@
+{
+  "version": "v2-evaluation-failure-ledger.v1",
+  "entries": [
+    {
+      "rootCause": "model_reconfirm",
+      "status": "needs_live_rerun",
+      "verification": "profile:live",
+      "references": ["case:subtitle_local_edit", "case:transition_local_edit"]
+    },
+    {
+      "rootCause": "model_intent_no_patch",
+      "status": "needs_live_rerun",
+      "verification": "profile:live",
+      "references": ["case:scene_content_edit"]
+    },
+    {
+      "rootCause": "model_scope_choice",
+      "status": "needs_live_rerun",
+      "verification": "profile:stability",
+      "references": ["case:edit_then_dry_render"]
+    },
+    {
+      "rootCause": "model_requirement_memory_mix",
+      "status": "needs_live_rerun",
+      "verification": "profile:live",
+      "references": ["case:confirmed_requirement_reaches_planner"]
+    },
+    {
+      "rootCause": "model_memory_write",
+      "status": "needs_live_rerun",
+      "verification": "profile:live",
+      "references": ["case:explicit_user_preference", "case:tentative_preference_is_candidate"]
+    },
+    {
+      "rootCause": "model_state_action_missing",
+      "status": "needs_live_rerun",
+      "verification": "profile:live",
+      "references": ["case:requirement_lifecycle"]
+    },
+    {
+      "rootCause": "model_render_refusal",
+      "status": "needs_real_media",
+      "verification": "profile:canary",
+      "references": ["case:canary_text_initial", "case:canary_caption_rerender", "case:canary_brief_rerender"]
+    },
+    {
+      "rootCause": "retrieval_limit",
+      "status": "deferred",
+      "verification": "profile:memory_retrieval",
+      "references": ["query:q_multiple_relevant"]
+    }
+  ]
+}

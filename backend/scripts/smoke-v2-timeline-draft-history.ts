@@ -368,6 +368,7 @@ await repository.completeRenderRun({
 
 let idempotentRenderCalls = 0
 const idempotentKey = `render-key-${Date.now()}`
+const isolatedRenderRoot = path.resolve('tmp', `v2-history-render-${Date.now()}`)
 const runIdempotently = () => executeV2TimelineDraftRun({
   repository,
   idempotency,
@@ -375,7 +376,9 @@ const runIdempotently = () => executeV2TimelineDraftRun({
   draftId: draft.id,
   revision: source.revision,
   userId: 1,
-  runTimeline: async (input) => {
+  renderOutputBaseDir: isolatedRenderRoot,
+  runTimeline: async (input, options) => {
+    assert.equal(options.outputBaseDir, isolatedRenderRoot)
     idempotentRenderCalls += 1
     await new Promise((resolve) => setTimeout(resolve, 20))
     idempotentOutputDir = path.resolve('v2-renders', input.taskId)

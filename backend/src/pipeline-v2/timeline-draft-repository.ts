@@ -293,7 +293,7 @@ export interface V2TimelineDraftRepository {
     id: string
     resolvedSpec: RemotionTimelineSpecV1
     outputPath: string
-    outputUrl: string
+    outputUrl?: string
     traceDir: string
     materialResolution: unknown
     evaluation: unknown

@@ -20,6 +20,7 @@ import { createV2TimelineDraftRepository } from '../pipeline-v2/timeline-draft-r
 import { buildDirectorTimelineFacts } from '../pipeline-v2/timeline-revision-outcome-review.js'
 import type { V2TimelineRevisionScope } from '../pipeline-v2/timeline-revision-scope.js'
 import { evaluateDirectorReplyQuality } from '../../scripts/v2-director-reply-quality-gate.js'
+import { validateAllowedMutationRules } from './agent-evaluation-contract.js'
 
 type Fixture = 'empty' | 'draft' | 'material' | 'sample' | 'scifi_draft'
 type ExpectedKind = 'create' | 'discussion' | 'revise' | 'execute'
@@ -72,6 +73,16 @@ interface ExpectedTurn {
     requiredTransitionTypes?: string[]
     forbiddenTransitionTypes?: string[]
     requiredOverlayRanges?: Array<{ text: string; startSec: number; endSec: number }>
+    requiredOverlayStyles?: Array<{ type: 'caption' | 'title' | 'label'; backgroundAlpha?: number; opacity?: number }>
+    requiredSceneFacts?: Array<{ sceneId: string; facts: string[] }>
+    requiredSceneMotions?: Array<{ sceneId: string; motion: 'none' | 'slow_zoom_in' | 'slow_zoom_out' | 'pan_left' | 'pan_right' }>
+    requiredCreativeBriefFacts?: string[]
+    requiredTransitionDetails?: Array<{ id: string; type: string; durationSec: number }>
+    allowedMutations?: Array<{
+      object: 'scene' | 'overlay' | 'transition' | 'material_job' | 'creative_brief'
+      ids?: string[]
+      fields: string[]
+    }>
   }
 }
 
@@ -129,6 +140,10 @@ function parseEvaluationSuite(source: string, file: string): EvaluationSuite {
       ) {
         throw new Error(`${file}: invalid ${evaluationCase.id} turn ${index + 1}.`)
       }
+      validateAllowedMutationRules(
+        turn.expected.timeline?.allowedMutations,
+        `${file}: ${evaluationCase.id} turn ${index + 1}`,
+      )
     }
   }
   return suite as EvaluationSuite
@@ -153,7 +168,14 @@ export interface EvaluationTurnResult {
   action: string
   skills: string[]
   tools: string[]
-  toolResults: Array<{ actionRef: string; status: 'succeeded' | 'failed' | 'skipped'; toolId: string; ok: boolean; summary: string }>
+  toolResults: Array<{
+    actionRef: string
+    status: 'succeeded' | 'failed' | 'skipped'
+    toolId: string
+    ok: boolean
+    summary: string
+    result?: Record<string, unknown>
+  }>
   actionReceipts: Array<{ ref: string; kind: string; status: 'succeeded' | 'failed' | 'skipped'; dependsOn: string[] }>
   source: string
   creationMode?: string
@@ -702,9 +724,37 @@ function sameOutsideSubtitle(before: RemotionTimelineSpecV1, after: RemotionTime
     && JSON.stringify(before.overlays) !== JSON.stringify(after.overlays)
 }
 
-function checkTimelineRequirements(
+function alphaFromBackground(background: string | undefined) {
+  if (!background) return undefined
+  const match = background.match(/rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\s*\)/i)
+  return match ? Number(match[1]) : undefined
+}
+
+function sameOutsideAllowedMutations(
+  before: RemotionTimelineSpecV1,
+  after: RemotionTimelineSpecV1,
+  rules: NonNullable<NonNullable<ExpectedTurn['timeline']>['allowedMutations']>,
+) {
+  const normalize = (spec: RemotionTimelineSpecV1) => {
+    const value = structuredClone(spec) as unknown as Record<string, any>
+    for (const rule of rules) {
+      const targets = rule.object === 'creative_brief'
+        ? [value.creative_brief ??= { direction: undefined, image_references: [], sample_methods: [] }]
+        : (value[rule.object === 'material_job' ? 'material_jobs' : `${rule.object}s`] as Array<Record<string, any>> | undefined)
+          ?.filter((item) => !rule.ids || rule.ids.includes(item.id))
+      for (const target of targets ?? []) {
+        for (const field of rule.fields) delete target[field]
+      }
+    }
+    return value
+  }
+  return JSON.stringify(normalize(before)) === JSON.stringify(normalize(after))
+}
+
+export function evaluateTimelineRequirements(
   spec: RemotionTimelineSpecV1 | undefined,
   expected: ExpectedTurn['timeline'],
+  beforeSpec?: RemotionTimelineSpecV1,
 ) {
   if (!expected) return { checks: 0, passed: 0, failures: [] as string[] }
   const required = expected.requiredVisibleText ?? []
@@ -712,6 +762,11 @@ function checkTimelineRequirements(
   const requiredTransitions = expected.requiredTransitionTypes ?? []
   const forbiddenTransitions = expected.forbiddenTransitionTypes ?? []
   const requiredOverlayRanges = expected.requiredOverlayRanges ?? []
+  const requiredOverlayStyles = expected.requiredOverlayStyles ?? []
+  const requiredSceneFacts = expected.requiredSceneFacts ?? []
+  const requiredSceneMotions = expected.requiredSceneMotions ?? []
+  const requiredCreativeBriefFacts = expected.requiredCreativeBriefFacts ?? []
+  const requiredTransitionDetails = expected.requiredTransitionDetails ?? []
   const checks = required.length + forbidden.length
     + (expected.usesProvidedMaterial === undefined ? 0 : 1)
     + (expected.aspectRatio === undefined ? 0 : 1)
@@ -721,6 +776,12 @@ function checkTimelineRequirements(
     + requiredTransitions.length
     + forbiddenTransitions.length
     + requiredOverlayRanges.length
+    + requiredOverlayStyles.length
+    + requiredSceneFacts.reduce((sum, item) => sum + item.facts.length, 0)
+    + requiredSceneMotions.length
+    + requiredCreativeBriefFacts.length
+    + requiredTransitionDetails.length
+    + Number(Boolean(expected.allowedMutations?.length))
   if (!spec) {
     return {
       checks,
@@ -786,6 +847,42 @@ function checkTimelineRequirements(
     ))
     if (matched) passed += 1
     else failures.push(`覆盖层“${range.text}”未出现在 ${range.startSec}-${range.endSec} 秒`)
+  }
+  for (const style of requiredOverlayStyles) {
+    const candidates = spec.overlays.filter((overlay) => overlay.type === style.type)
+    const matched = candidates.length > 0 && candidates.every((overlay) => (
+      (style.opacity === undefined || Math.abs((overlay.opacity ?? 1) - style.opacity) < 0.02)
+      && (style.backgroundAlpha === undefined || Math.abs((alphaFromBackground(overlay.background) ?? -1) - style.backgroundAlpha) < 0.02)
+    ))
+    if (matched) passed += 1
+    else failures.push(`覆盖层样式未落实：${style.type}`)
+  }
+  for (const requirement of requiredSceneFacts) {
+    const scene = spec.scenes.find((item) => item.id === requirement.sceneId)
+    const text = scene ? [scene.title, scene.subtitle, scene.body, scene.background, scene.note, scene.creative_intent?.title, scene.creative_intent?.description].filter(Boolean).join('\n') : ''
+    for (const fact of requirement.facts) {
+      if (includesFact(text, fact)) passed += 1
+      else failures.push(`镜头 ${requirement.sceneId} 缺少内容事实：${fact}`)
+    }
+  }
+  for (const requirement of requiredSceneMotions) {
+    const scene = spec.scenes.find((item) => item.id === requirement.sceneId)
+    if (scene?.motion === requirement.motion) passed += 1
+    else failures.push(`镜头 ${requirement.sceneId} 运镜不是 ${requirement.motion}`)
+  }
+  const briefText = spec.creative_brief?.direction ?? ''
+  for (const fact of requiredCreativeBriefFacts) {
+    if (includesFact(briefText, fact)) passed += 1
+    else failures.push(`创作总纲缺少：${fact}`)
+  }
+  for (const detail of requiredTransitionDetails) {
+    const transition = spec.transitions.find((item) => item.id === detail.id)
+    if (transition?.type === detail.type && Math.abs(transition.duration_sec - detail.durationSec) < 0.05) passed += 1
+    else failures.push(`转场 ${detail.id} 未落实 ${detail.type}/${detail.durationSec}秒`)
+  }
+  if (expected.allowedMutations?.length) {
+    if (beforeSpec && sameOutsideAllowedMutations(beforeSpec, spec, expected.allowedMutations)) passed += 1
+    else failures.push('修订修改了声明允许范围之外的字段')
   }
   return { checks, passed, failures }
 }
@@ -1401,6 +1498,7 @@ export async function runV2AgentEvaluation(input: {
   outputDir: string
   runs: number
   caseIds?: string[]
+  dispatchTool?: typeof dispatchV2AgentTool
 }): Promise<EvaluationReport> {
   await mkdir(input.outputDir, { recursive: true })
   const startedAt = new Date().toISOString()
@@ -1437,7 +1535,7 @@ export async function runV2AgentEvaluation(input: {
         }, {
           dispatchTool: testTurn.expected.dryRender
             ? dryDispatcher(testTurn)
-            : dispatchV2AgentTool,
+            : input.dispatchTool ?? dispatchV2AgentTool,
         })) {
           events.push(event)
         }
@@ -1473,7 +1571,14 @@ export async function runV2AgentEvaluation(input: {
           .filter((event): event is Extract<DirectorAgentStreamEvent, { type: 'tool_result' }> => (
             event.type === 'tool_result'
           ))
-          .map((event) => ({ actionRef: event.actionRef, status: event.status, toolId: event.toolId, ok: event.ok, summary: event.summary }))
+          .map((event) => ({
+            actionRef: event.actionRef,
+            status: event.status,
+            toolId: event.toolId,
+            ok: event.ok,
+            summary: event.summary,
+            result: event.result,
+          }))
         const draftEvent = [...events].reverse().find(
           (event) => event.type === 'tool_result' && Boolean(event.draft),
         )
@@ -1571,7 +1676,7 @@ export async function runV2AgentEvaluation(input: {
         const timelineValid = testTurn.expected.draftChange === true
           ? Boolean(afterSpec && validateRemotionTimelineSpec(afterSpec).ok)
           : undefined
-        const timelineRequirements = checkTimelineRequirements(afterSpec ?? currentSpec, testTurn.expected.timeline)
+        const timelineRequirements = evaluateTimelineRequirements(afterSpec ?? currentSpec, testTurn.expected.timeline, beforeSpec)
         const plannerRequirements = await checkPlannerRequirements(
           draftEvent?.type === 'tool_result' ? draftEvent.draft?.traceDir : undefined,
           testTurn.expected.plannerActiveRequirements,

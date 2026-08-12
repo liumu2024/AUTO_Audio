@@ -100,18 +100,25 @@ export async function evaluateCreativeMemoryRetrieval(input: {
     const candidateKeys = result.candidate.map((item) => idToKey.get(item.memory.id)).filter(Boolean) as string[]
     const relevance = query.activeRelevant ?? {}
     const relevantKeys = Object.keys(relevance)
+    const queryActiveRetrieved = activeKeys.filter((key) => key in relevance).length
     activeRelevant += relevantKeys.length
-    activeRetrieved += activeKeys.filter((key) => key in relevance).length
+    activeRetrieved += queryActiveRetrieved
+    let queryNdcg: number | null = null
     if (relevantKeys.length) {
       const actualDcg = dcg(activeKeys.map((key) => relevance[key] ?? 0))
       const idealDcg = dcg(Object.values(relevance).sort((a, b) => b - a).slice(0, 8))
-      ndcgTotal += idealDcg ? actualDcg / idealDcg : 0
+      queryNdcg = idealDcg ? actualDcg / idealDcg : 0
+      ndcgTotal += queryNdcg
       ndcgQueries += 1
     }
+    let queryCandidateRelevant = 0
+    let queryCandidateReturned = 0
     if (query.candidateRelevant !== undefined) {
       const relevantCandidates = new Set(query.candidateRelevant)
-      candidateRelevantReturned += candidateKeys.filter((key) => relevantCandidates.has(key)).length
-      candidateReturned += Math.max(1, candidateKeys.length)
+      queryCandidateRelevant = candidateKeys.filter((key) => relevantCandidates.has(key)).length
+      queryCandidateReturned = Math.max(1, candidateKeys.length)
+      candidateRelevantReturned += queryCandidateRelevant
+      candidateReturned += queryCandidateReturned
       candidateQueries += 1
     }
     const returned = [...result.active, ...result.candidate]
@@ -132,6 +139,11 @@ export async function evaluateCreativeMemoryRetrieval(input: {
       query: query.query,
       activeKeys,
       candidateKeys,
+      activeRelevant: relevantKeys.length,
+      activeRetrieved: queryActiveRetrieved,
+      ndcg: queryNdcg,
+      candidateRelevantReturned: queryCandidateRelevant,
+      candidateReturned: queryCandidateReturned,
       audit: result.audit,
     })
   }
@@ -139,6 +151,12 @@ export async function evaluateCreativeMemoryRetrieval(input: {
   const report = {
     version: suite.version,
     queries: suite.queries.length,
+    activeRelevant,
+    activeRetrieved,
+    ndcgTotal,
+    ndcgQueries,
+    candidateRelevantReturned,
+    candidateReturned,
     activeMemoryRecallAt8: divide(activeRetrieved, activeRelevant),
     activeMemoryNdcgAt8: divide(ndcgTotal, ndcgQueries),
     candidatePrecisionAt3: divide(candidateRelevantReturned, candidateReturned),

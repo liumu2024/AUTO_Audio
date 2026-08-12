@@ -1,0 +1,13 @@
+{
+  "ratings": [
+    {
+      "caseId": "canary_caption_rerender",
+      "renderIndex": 2,
+      "scores": {
+        "visual_quality_score10": 7.5,
+        "edit_fidelity_score10": 9
+      },
+      "notes": "示例文件。复制后填写真实人工评分，不要直接作为正式成绩。"
+    }
+  ]
+}

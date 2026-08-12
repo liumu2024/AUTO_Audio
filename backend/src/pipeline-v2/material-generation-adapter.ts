@@ -12,6 +12,7 @@ export interface V2MaterialGenerationRequest {
   jobId: string
   shotId: string
   type: 'generate_image' | 'generate_video'
+  durationSec: number
   prompt: string
   inputImageUrl?: string
   outputAssetId: string

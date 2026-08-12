@@ -15,11 +15,11 @@ try {
   const fixtureMemoryCount = async () =>
     (await prisma.creativeMemory.findMany({ where: { userId: 901 } })).length
   const report = await evaluateCreativeMemoryRetrieval({
-    suiteFile: path.resolve('evals/v2-agent/memory-retrieval.v1.json'),
+    suiteFile: path.resolve('evaluation/datasets/source/memory-retrieval.v1.json'),
   })
   const countAfterFirstRun = await fixtureMemoryCount()
-  await evaluateCreativeMemoryRetrieval({
-    suiteFile: path.resolve('evals/v2-agent/memory-retrieval.v1.json'),
+  const repeated = await evaluateCreativeMemoryRetrieval({
+    suiteFile: path.resolve('evaluation/datasets/source/memory-retrieval.v1.json'),
   })
   assert.equal(await fixtureMemoryCount(), countAfterFirstRun)
   assert.equal(report.activeMemoryRecallAt8, 1)
@@ -27,7 +27,12 @@ try {
   assert.equal(report.candidatePrecisionAt3, 1)
   assert.equal(report.crossScopeRetrievalCount, 0)
   assert.equal(report.forbiddenRetrievalCount, 0)
-  assert.equal(report.unrelatedRetrievalCount, 0)
+  const stableResults = (value: typeof report.queryResults) => value.map((item) => ({
+    id: item.id,
+    activeKeys: item.activeKeys,
+    candidateKeys: item.candidateKeys,
+  }))
+  assert.deepEqual(stableResults(repeated.queryResults), stableResults(report.queryResults))
   console.log('V2 creative memory retrieval smoke passed.')
 } finally {
   rmSync(dataDir, { recursive: true, force: true })

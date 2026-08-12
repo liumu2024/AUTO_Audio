@@ -1,0 +1,120 @@
+{
+  "version": "v2-agent-core-current.v1",
+  "cases": [
+    {
+      "id": "discussion_uses_workspace_without_mutation",
+      "category": "context_decision",
+      "fixture": "draft",
+      "metricIds": ["context_decision_accuracy_rate", "reply_relevance_score10"],
+      "turns": [
+        { "prompt": "当前方案有几个镜头？只回答，不修改。", "expected": { "tools": [], "kind": "discussion", "requiredFacts": ["3"], "draftChange": false } },
+        { "prompt": "第一段的字幕是什么？仍然只回答。", "expected": { "tools": [], "kind": "discussion", "requiredFacts": ["安心到家"], "draftChange": false } }
+      ]
+    },
+    {
+      "id": "requirement_lifecycle",
+      "category": "durable_requirements",
+      "fixture": "empty",
+      "metricIds": ["scenario_goal_completion_rate", "context_decision_accuracy_rate"],
+      "turns": [
+        { "prompt": "记录为已确认要求：目标受众是独居青年。", "expected": { "tools": [], "kind": "discussion", "stateAction": "add", "activeRequirements": ["独居青年"], "draftChange": false } },
+        { "prompt": "再记录一条：沟通语气可靠但不冰冷。", "expected": { "tools": [], "kind": "discussion", "stateAction": "add", "activeRequirements": ["独居青年", "可靠但不冰冷"], "draftChange": false } },
+        { "prompt": "将受众要求更新为初入职场的独居青年，其他要求保留。", "expected": { "tools": [], "kind": "discussion", "stateAction": "replace", "activeRequirements": ["初入职场", "可靠但不冰冷"], "supersededRequirements": ["独居青年"], "draftChange": false } },
+        { "prompt": "撤销语气要求，复述现在仍有效的要求。", "expected": { "tools": [], "kind": "discussion", "stateAction": "revoke", "activeRequirements": ["初入职场"], "revokedRequirements": ["可靠但不冰冷"], "requiredFacts": ["初入职场"], "draftChange": false } }
+      ]
+    },
+    {
+      "id": "current_input_overrides_history",
+      "category": "context_priority",
+      "fixture": "empty",
+      "metricIds": ["context_decision_accuracy_rate", "scenario_goal_completion_rate"],
+      "turns": [
+        { "prompt": "记录要求：画面整体采用暖色调。", "expected": { "tools": [], "kind": "discussion", "stateAction": "add", "activeRequirements": ["暖色"], "draftChange": false } },
+        { "prompt": "更新这条要求：改为中性、低饱和色调。", "expected": { "tools": [], "kind": "discussion", "stateAction": "replace", "activeRequirements": ["中性", "低饱和"], "supersededRequirements": ["暖色"], "draftChange": false } },
+        { "prompt": "不要修改草稿，只告诉我现在有效的色彩要求。", "expected": { "tools": [], "kind": "discussion", "stateAction": "none", "requiredFacts": ["中性", "低饱和"], "activeRequirements": ["中性", "低饱和"], "draftChange": false } }
+      ]
+    },
+    {
+      "id": "explicit_user_preference",
+      "category": "creative_memory",
+      "fixture": "empty",
+      "metricIds": ["memory_write_precision", "memory_write_recall", "memory_scope_accuracy_rate", "memory_application_accuracy_rate"],
+      "turns": [
+        { "prompt": "我一直偏好硬核学术气息、信息密度高但排版克制的视频风格，请记住。", "expected": { "tools": [], "kind": "discussion", "memoryAction": { "operation": "add", "scopeType": "user", "status": "active", "requiredFacts": ["硬核学术", "排版克制"] }, "draftChange": false } },
+        { "prompt": "这次做一个咖啡品牌短片，不要自动套用不相关偏好；先告诉我你记住了什么。", "expected": { "tools": [], "kind": "discussion", "memoryReplyFacts": ["硬核学术", "排版克制"], "draftChange": false } },
+        { "prompt": "撤销刚才记住的硬核学术风格偏好。", "expected": { "tools": [], "kind": "discussion", "memoryAction": { "operation": "revoke", "scopeType": "user", "requiredFacts": ["硬核学术"] }, "draftChange": false } }
+      ]
+    },
+    {
+      "id": "tentative_preference_is_candidate",
+      "category": "creative_memory",
+      "fixture": "empty",
+      "metricIds": ["memory_write_precision", "memory_scope_accuracy_rate", "memory_non_interference_rate"],
+      "turns": [
+        { "prompt": "我这次好像更喜欢轻快木吉他，但还不确定。", "expected": { "tools": [], "kind": "discussion", "memoryAction": { "operation": "add", "scopeType": "user", "status": "candidate", "requiredFacts": ["轻快木吉他"] }, "draftChange": false } },
+        { "prompt": "讨论一个庄重的纪念短片，候选偏好不要当成已确认要求。", "expected": { "tools": [], "kind": "discussion", "forbiddenMemoryReplyFacts": ["必须使用轻快木吉他"], "draftChange": false } }
+      ]
+    },
+    {
+      "id": "noncreative_chat_not_persisted",
+      "category": "memory_non_interference",
+      "fixture": "empty",
+      "metricIds": ["memory_non_interference_rate", "reply_relevance_score10"],
+      "turns": [
+        { "prompt": "我今天有点累，先随便聊两句，不要改方案。", "expected": { "tools": [], "kind": "discussion", "memoryAction": { "operation": "none" }, "draftChange": false } },
+        { "prompt": "刚才的临时状态不要成为创作偏好。", "expected": { "tools": [], "kind": "discussion", "memoryAction": { "operation": "none" }, "draftChange": false } }
+      ]
+    },
+    {
+      "id": "text_creation_and_recall",
+      "category": "text_to_video_creation",
+      "fixture": "empty",
+      "ui": { "aspectRatio": "16:9", "durationSec": 12, "styleIntensity": "strong" },
+      "metricIds": ["scenario_goal_completion_rate", "artifact_requirement_realization_rate", "timeline_validity_rate", "structured_first_pass_rate", "plan_coherence_score10"],
+      "turns": [
+        { "prompt": "创建一版12秒横版智能门锁宣传视频方案，四个镜头，突出夜归安全和远程确认，不要渲染。", "expected": { "tools": ["timeline.plan"], "kind": "create", "draftChange": true, "creationMode": "text_to_video", "effectiveAspectRatio": "16:9", "effectiveDurationSec": 12, "toolSuccess": true, "timeline": { "aspectRatio": "16:9", "durationSec": 12, "sceneCount": 4 } } },
+        { "prompt": "复述这版方案的全局方向和镜头数量，不修改。", "expected": { "tools": [], "kind": "discussion", "requiredFacts": ["夜归", "4"], "draftChange": false } }
+      ]
+    },
+    {
+      "id": "confirmed_requirement_reaches_planner",
+      "category": "planner_requirement_context",
+      "fixture": "empty",
+      "ui": { "aspectRatio": "16:9", "durationSec": 12 },
+      "metricIds": ["planner_requirement_input_rate", "scenario_goal_completion_rate"],
+      "turns": [
+        { "prompt": "记录为已确认要求：视频必须突出夜间独居安全。", "expected": { "tools": [], "kind": "discussion", "stateAction": "add", "activeRequirements": ["夜间独居安全"], "draftChange": false } },
+        { "prompt": "依据当前已确认要求创建12秒横版方案，不要渲染。", "expected": { "tools": ["timeline.plan"], "kind": "create", "toolSuccess": true, "draftChange": true, "plannerActiveRequirements": ["夜间独居安全"], "timeline": { "durationSec": 12, "aspectRatio": "16:9" } } }
+      ]
+    },
+    {
+      "id": "capability_discussion_no_execution",
+      "category": "capability_grounding",
+      "fixture": "draft",
+      "metricIds": ["context_decision_accuracy_rate", "reply_relevance_score10"],
+      "turns": [
+        { "prompt": "如果我随后只改字幕，哪些内容可以复用？现在只解释，不执行。", "expected": { "tools": [], "kind": "discussion", "requiredFacts": ["字幕", "复用"], "draftChange": false } },
+        { "prompt": "如果渲染失败，你会不会仍然说已经完成？只回答。", "expected": { "tools": [], "kind": "discussion", "requiredFacts": ["不会", "失败"], "draftChange": false } }
+      ]
+    },
+    {
+      "id": "render_result_fidelity",
+      "category": "tool_receipt_fidelity",
+      "fixture": "draft",
+      "metricIds": ["scenario_goal_completion_rate", "reply_relevance_score10", "hard_blocker_count"],
+      "turns": [
+        { "prompt": "把当前草稿渲染出来。", "expected": { "tools": ["timeline.render"], "kind": "execute", "toolSuccess": true, "dryRender": true, "draftChange": false } }
+      ]
+    },
+    {
+      "id": "tool_failure_is_reported",
+      "category": "tool_receipt_fidelity",
+      "fixture": "draft",
+      "metricIds": ["scenario_goal_completion_rate", "recovery_completion_rate", "hard_blocker_count"],
+      "turns": [
+        { "prompt": "将第一段字幕改为“安全回家，从此更从容”。", "simulateFailure": "timeline.patch", "expected": { "tools": ["timeline.patch"], "kind": "revise", "toolSuccess": false, "draftChange": false, "revisionScope": "subtitle", "revisionSceneId": "scene_1" } },
+        { "prompt": "刚才失败了，再尝试一次同样的字幕修改。", "expected": { "tools": ["timeline.patch"], "kind": "revise", "toolSuccess": true, "recovery": true, "draftChange": true, "revisionScope": "subtitle", "revisionSceneId": "scene_1", "timeline": { "requiredVisibleText": ["安全回家，从此更从容"] } } }
+      ]
+    }
+  ]
+}

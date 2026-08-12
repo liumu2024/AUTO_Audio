@@ -11,6 +11,7 @@ import {
   type V2TimelineRunResult,
 } from './remotion-timeline-service.js'
 import type { V2TraceContext } from './trace.js'
+import type { V2MaterialGenerationAdapter } from './material-generation-adapter.js'
 import { buildV2TimelinePlanningReview } from './remotion-timeline-review.js'
 import {
   createV2IdempotencyRepository,
@@ -89,6 +90,9 @@ interface V2TimelineDraftRunInput {
   userId: number
   idempotencyKey: string
   idempotency?: V2IdempotencyRepository
+  materialAdapter?: V2MaterialGenerationAdapter
+  /** Internal evaluation seam; public HTTP requests cannot set this path. */
+  renderOutputBaseDir?: string
   onProgress?: V2TimelineRunOptions['onProgress']
   traceContext?: V2TraceContext
   runTimeline?: TimelineRunner
@@ -148,6 +152,8 @@ async function executeV2TimelineDraftRunOnce(
           timelineSpecOverride: source.spec,
         },
         {
+          materialAdapter: input.materialAdapter,
+          outputBaseDir: input.renderOutputBaseDir,
           onProgress: input.onProgress,
           traceContext: input.traceContext,
           authorizedDraftComponentIds: timelineRenderComponentReferences(source.spec)
@@ -170,7 +176,9 @@ async function executeV2TimelineDraftRunOnce(
           },
         },
       )
-      const outputUrl = `/v2-renders/${encodeURIComponent(result.taskId)}/${encodeURIComponent(path.basename(result.outputPath))}`
+      const outputUrl = input.renderOutputBaseDir
+        ? undefined
+        : `/v2-renders/${encodeURIComponent(result.taskId)}/${encodeURIComponent(path.basename(result.outputPath))}`
       const run = await input.repository.completeRenderRun({
         id: runId,
         resolvedSpec: result.spec,
@@ -199,7 +207,7 @@ async function executeV2TimelineDraftRunOnce(
       }
     } catch (error) {
       const cleanupTasks: Promise<unknown>[] = [
-        rm(path.resolve(process.cwd(), 'v2-renders', runId), {
+        rm(path.resolve(input.renderOutputBaseDir ?? path.resolve(process.cwd(), 'v2-renders'), runId), {
           recursive: true,
           force: true,
           maxRetries: 10,

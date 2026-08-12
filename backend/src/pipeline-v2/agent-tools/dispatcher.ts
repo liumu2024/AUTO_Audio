@@ -47,6 +47,7 @@ import {
   v2IdempotencyRequestHash,
 } from '../idempotency-repository.js'
 import { V2_TIMELINE_PLANNER_PROTOCOL_VERSION } from '../remotion-timeline-llm-planner.js'
+import type { V2MaterialGenerationAdapter } from '../material-generation-adapter.js'
 
 export interface V2AgentToolProposal {
   /** Model-local action reference. It is never used as an execution identity. */
@@ -109,6 +110,10 @@ export interface V2AgentToolDispatchInput {
   recalledCreativeKnowledge?: string[]
   authorizedDraftComponentIds?: string[]
   onProgress?: (event: V2AgentToolProgress) => void | Promise<void>
+  /** Internal evaluation seam; public requests cannot supply an adapter. */
+  materialAdapter?: V2MaterialGenerationAdapter
+  /** Internal evaluation seam; public requests cannot select an output directory. */
+  renderOutputBaseDir?: string
 }
 
 const drafts = createV2TimelineDraftRepository()
@@ -543,6 +548,8 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
         revision: bound.system.revision!,
         userId: bound.system.userId,
         idempotencyKey: request.callId,
+        materialAdapter: input.materialAdapter,
+        renderOutputBaseDir: input.renderOutputBaseDir,
         onProgress: async (event) => {
           renderPhase = event.phase
           await input.onProgress?.(event)

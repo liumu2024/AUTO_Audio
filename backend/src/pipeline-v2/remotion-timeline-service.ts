@@ -89,6 +89,8 @@ export interface V2TimelineRunOptions {
   authorizedDraftComponentIds?: readonly string[]
   /** Internal test seam. Public HTTP callers cannot bind this option. */
   materialAdapter?: V2MaterialGenerationAdapter
+  /** Internal evaluation seam. Production callers use the default v2-renders directory. */
+  outputBaseDir?: string
   /** Internal RenderRun facts used for Provider idempotency and generated-shot reuse. */
   materialExecution?: {
     idempotency: {
@@ -117,8 +119,8 @@ function plannerInputFrom(input: V2PlannerInput & { imageSrc?: string }): V2Remo
   }
 }
 
-function outputRootFor(taskId: string): string {
-  return path.resolve(process.cwd(), 'v2-renders', taskId)
+function outputRootFor(taskId: string, outputBaseDir?: string): string {
+  return path.resolve(outputBaseDir ?? path.resolve(process.cwd(), 'v2-renders'), taskId)
 }
 
 function traceablePlannerInput(input: V2PlannerInput & { imageSrc?: string }) {
@@ -461,7 +463,7 @@ export async function runV2RemotionTimeline(
   await reportProgress({ phase: 'prepare', progress: 5, message: '正在读取并校验当前 V2 草稿。' })
   const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
   await trace.writeJson('01-input', 'timeline-hard-requirements.json', hardRequirements)
-  const outputRoot = outputRootFor(input.taskId)
+  const outputRoot = outputRootFor(input.taskId, options.outputBaseDir)
   await mkdir(outputRoot, { recursive: true })
 
   const resolved = await resolveTimelineSpec({

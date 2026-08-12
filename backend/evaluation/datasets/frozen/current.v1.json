@@ -1,0 +1,3758 @@
+{
+  "schemaVersion": "v2_evaluation_frozen.v1",
+  "datasetVersion": "v2-agent-current-2026-08-12.v1",
+  "sourceHashes": {
+    "manifest.v1.json": "0c17ef9766ce23a0050b02b8f65e1a6b2075cd6a3589c9a68818ca841d43dc76",
+    "agent-core.v1.json": "714da269bef7f8d42b5c18b7be4ae9954314c9ca6110f2abac02f6825731584b",
+    "agent-editing.v1.json": "5343b0eb0b0544b0c79ee00c6bb4a5b2fdd7c08f1ee0ad9889140996b04dac26",
+    "agent-multimodal.v1.json": "5cc55695673a3dcd024539427f497735ff562b02c0993173c85cd26da6725825",
+    "agent-canary.v1.json": "45b95d2ed0b20a1dadd4da94cd37f0ee00865c6c81e7fa94b6990a3559fde1cd",
+    "memory-retrieval.v1.json": "d8cc1f4cb4304ab2c498f73b79bbc1220607443e37dc7b05f1f4aa2908d0cfd1",
+    "media:example_videos/img/1.png": "c7a89eec7b61b33847711be82d4d715c745dd7c98018f4335e4f4aeecb7e429e",
+    "media:example_videos/img/15.png": "2ecdd12a10e8b267f2f086a16fd2729391aa0292ff49a87d9b4f27a3d1f59905",
+    "media:example_videos/img/23.png": "bd229c9dfbd63c6aa12ea1b261920bb518c244f1c633e98b8f3ee1f47f3aaba3",
+    "media:example_videos/img/city.jpg": "ca6cc086dcb6b9843fa88014bdc9018b1474db0b0821f9dd29b0e3b8c3a772f9",
+    "media:example_videos/img/shangpinjia.jpg": "0df517c23d4998d3fc5fd242fa5f5994786dfb015d833fca9c48f8ad6a759fad",
+    "media:example_videos/img/kehuan.jpg": "b127591863aecbccff4aaaa778e2353dc7a17982f080a8a95c0483022bf5e2c0",
+    "media:example_videos/img/xuhuan.jpg": "788f32a5cc34522e64613b903ae514d1f5f1ade8de2e2c68d43ff0b00a03dfc7",
+    "media:example_videos/img/huangdi.jpg": "723f67ef0307aff6af667e770ff7319017ca9890ef03e4cc2c6f0e437904d512",
+    "media:example_videos/img/dragon.jpg": "915c88a4d9b33858d95343b2c3d8b8d332f6dfc27c00900bdea9e5f8a5081984",
+    "media:example_videos/img/qipao.png": "4f69bf93179168b8709358283bb1f3c9f2d22f94636ab22f46e58dff98a8ec1f",
+    "media:example_videos/img/zixingc.jpg": "4ab710ce72bff1b8f0ad7fef1f717506a083a22743cf70c9820cb05fbbf42984",
+    "media:example_videos/img/shuidao.jpg": "7c3f74aa3845d366ca7ea3e3635c8b5d1eab0fb491f7f3cfc23d7af92ca7f0e2",
+    "media-understanding.v1.json": "2ebfbe80c6f51bdd34e7c68f2e8a743cd545c5fa523328ef1beb3607db7a8d6a",
+    "sample:example_videos/1.mp4": "95c14fa7f6a1af45855f3277d3e027418e87254144ac3184d13944574092d2a9",
+    "sample:example_videos/8.mp4": "e94e7b83083d194720f46a3e87cc901c1e38f9fa0ee17f5a76fbc6f58fcd0651",
+    "sample-understanding.v1.json": "91ae013352af5fccda47b33be3caedbf1267e1fc0e97a97c15519aed81d30a48",
+    "failure-ledger.v1.json": "d31c1faa94caf8339754a21233fc5d34e3c222b6a13bf241b68b9a9e2993e7b6",
+    "review-rules.v1.json": "59eb3a39fd11015b0da257a8ecf15a978b9f87da438eb8cf8d4cbf801de9dd81",
+    "manual-rubric.v1.json": "e2b6e2fcc9c0a2956bbbc6429508a94e06d35469a585e4b5f5ed91bf48962d44"
+  },
+  "manifest": {
+    "schemaVersion": "v2_evaluation_manifest.v1",
+    "datasetVersion": "v2-agent-current-2026-08-12.v1",
+    "description": "面向可编辑时间线、真实工具回执、长期记忆、素材理解与低成本交付的 V2 Agent 长期回归集。",
+    "metricCatalog": [
+      {
+        "id": "protocol_contract_pass",
+        "scale": "binary",
+        "label": "结构化协议门禁",
+        "description": "结构化输出、修复和安全边界 smoke 全部通过。",
+        "hardGate": true
+      },
+      {
+        "id": "editable_timeline_contract_pass",
+        "scale": "binary",
+        "label": "可编辑时间线门禁",
+        "description": "规划、局部修订、资源闭包和历史版本 smoke 全部通过。",
+        "hardGate": true
+      },
+      {
+        "id": "multimodal_binding_contract_pass",
+        "scale": "binary",
+        "label": "多模态素材绑定门禁",
+        "description": "图片、样例和 Provider 参数由服务端权威绑定。",
+        "hardGate": true
+      },
+      {
+        "id": "memory_knowledge_contract_pass",
+        "scale": "binary",
+        "label": "记忆与知识门禁",
+        "description": "偏好、普适知识、作用域和检索隔离 smoke 全部通过。",
+        "hardGate": true
+      },
+      {
+        "id": "idempotency_contract_pass",
+        "scale": "binary",
+        "label": "幂等门禁",
+        "description": "Director、Tool、草稿、渲染和外部生成重复请求不会产生重复副作用。",
+        "hardGate": true
+      },
+      {
+        "id": "remotion_engineering_contract_pass",
+        "scale": "binary",
+        "label": "Remotion 工程门禁",
+        "description": "时间线渲染、自定义组件和低成本交付 smoke 全部通过。",
+        "hardGate": true
+      },
+      {
+        "id": "ui_state_contract_pass",
+        "scale": "binary",
+        "label": "前端状态门禁",
+        "description": "工作区恢复、历史版本、选中对象和最终成片状态保持一致。",
+        "hardGate": true
+      },
+      {
+        "id": "scenario_goal_completion_rate",
+        "scale": "rate",
+        "label": "场景目标完成率",
+        "description": "每轮用户目标在回复、状态和产物中共同完成的比例。"
+      },
+      {
+        "id": "independent_action_completion_rate",
+        "scale": "rate",
+        "label": "独立动作完成率",
+        "description": "不依赖失败动作的合法动作继续完成的比例。"
+      },
+      {
+        "id": "dependency_execution_accuracy_rate",
+        "scale": "rate",
+        "label": "依赖执行准确率",
+        "description": "依赖成功时执行、依赖失败时跳过的比例。"
+      },
+      {
+        "id": "system_binding_integrity_rate",
+        "scale": "rate",
+        "label": "系统资源绑定完整率",
+        "description": "模型不能覆盖草稿、素材、样例和用户等服务端资源。"
+      },
+      {
+        "id": "context_decision_accuracy_rate",
+        "scale": "rate",
+        "label": "上下文决策准确率",
+        "description": "当前输入、历史上下文和已确认事实被正确区分和使用。"
+      },
+      {
+        "id": "artifact_requirement_realization_rate",
+        "scale": "rate",
+        "label": "方案要求落实率",
+        "description": "可机器检查的要求真实进入 Planner 和最终时间线。"
+      },
+      {
+        "id": "recovery_completion_rate",
+        "scale": "rate",
+        "label": "失败恢复完成率",
+        "description": "故障后保留有效状态并在后续轮次完成目标。"
+      },
+      {
+        "id": "timeline_validity_rate",
+        "scale": "rate",
+        "label": "时间线结构有效率",
+        "description": "最终完整时间线满足结构、时间和资源约束。"
+      },
+      {
+        "id": "planner_requirement_input_rate",
+        "scale": "rate",
+        "label": "Planner 要求输入率",
+        "description": "有效创作要求进入 Planner 权威输入。"
+      },
+      {
+        "id": "revision_completion_rate",
+        "scale": "rate",
+        "label": "局部修订完成率",
+        "description": "对既有草稿的编辑要求成功保存为新 revision。"
+      },
+      {
+        "id": "structured_first_pass_rate",
+        "scale": "rate",
+        "label": "结构化一次通过率",
+        "description": "无需 repair 或 fallback 的模型响应比例。"
+      },
+      {
+        "id": "memory_write_precision",
+        "scale": "rate",
+        "label": "偏好写入精确率",
+        "description": "写入的长期偏好确实值得沉淀。"
+      },
+      {
+        "id": "memory_write_recall",
+        "scale": "rate",
+        "label": "偏好写入召回率",
+        "description": "明确值得沉淀的偏好被记录。"
+      },
+      {
+        "id": "memory_scope_accuracy_rate",
+        "scale": "rate",
+        "label": "偏好作用域准确率",
+        "description": "用户级和草稿级偏好作用域正确。"
+      },
+      {
+        "id": "memory_application_accuracy_rate",
+        "scale": "rate",
+        "label": "偏好应用准确率",
+        "description": "相关偏好被采用且不覆盖当前要求。"
+      },
+      {
+        "id": "memory_non_interference_rate",
+        "scale": "rate",
+        "label": "偏好非干扰率",
+        "description": "无关、候选、撤销或跨草稿偏好不污染当前任务。"
+      },
+      {
+        "id": "active_memory_recall_at8",
+        "scale": "rate",
+        "label": "Active 偏好 Recall@8",
+        "description": "相关 active 偏好在 Top-8 中的召回率。"
+      },
+      {
+        "id": "active_memory_ndcg_at8",
+        "scale": "mean",
+        "label": "Active 偏好 nDCG@8",
+        "description": "相关偏好排序质量。"
+      },
+      {
+        "id": "candidate_memory_precision_at3",
+        "scale": "rate",
+        "label": "Candidate 偏好 Precision@3",
+        "description": "候选偏好 Top-3 的精确率。"
+      },
+      {
+        "id": "image_observation_fact_rate",
+        "scale": "rate",
+        "label": "图片事实识别率",
+        "description": "Planner 从真实像素提取的标注事实命中率。"
+      },
+      {
+        "id": "image_pixel_delivery_rate",
+        "scale": "rate",
+        "label": "图片像素送达率",
+        "description": "真实图片像素成功作为多模态输入送达 Planner。"
+      },
+      {
+        "id": "image_hallucination_avoidance_rate",
+        "scale": "rate",
+        "label": "图片事实无幻觉率",
+        "description": "未把标注为不存在的要素写成图片既有事实。"
+      },
+      {
+        "id": "image_reference_binding_rate",
+        "scale": "rate",
+        "label": "图片参考绑定率",
+        "description": "创作总纲引用服务端权威图片 ID。"
+      },
+      {
+        "id": "conditioned_generation_plan_rate",
+        "scale": "rate",
+        "label": "图片条件生成规划率",
+        "description": "需要扩展动作时规划条件生成，而不是退化为静态轮播。"
+      },
+      {
+        "id": "image_interference_robustness_rate",
+        "scale": "rate",
+        "label": "图片干扰下内容理解率",
+        "description": "存在水印或伪透明棋盘格时，全部主体与环境金标均被正确提取的样本通过率。"
+      },
+      {
+        "id": "sample_semantic_analysis_rate",
+        "scale": "rate",
+        "label": "样例语义分析率",
+        "description": "真实样例视频由多模态模型完成内容与方法理解，而非元数据 fallback。"
+      },
+      {
+        "id": "sample_method_evidence_rate",
+        "scale": "rate",
+        "label": "样例方法证据率",
+        "description": "样例表现方法包含目的、时机理由和有效时间证据。"
+      },
+      {
+        "id": "sample_transferable_knowledge_rate",
+        "scale": "rate",
+        "label": "样例可迁移知识率",
+        "description": "普适创作方法可追溯到样例中的方法证据。"
+      },
+      {
+        "id": "reply_relevance_score10",
+        "scale": "score10",
+        "label": "回复相关性",
+        "description": "Judge 对最终回复相关性、上下文使用和事实忠实度的 0–10 分。"
+      },
+      {
+        "id": "plan_coherence_score10",
+        "scale": "score10",
+        "label": "方案叙事连贯性",
+        "description": "人工评价总纲、镜头职责与节奏是否形成统一方案。"
+      },
+      {
+        "id": "reference_use_quality_score10",
+        "scale": "score10",
+        "label": "图片参考运用质量",
+        "description": "人工评价是否融合图片事实与原始参考，而非静态 PPT。"
+      },
+      {
+        "id": "sample_method_transfer_score10",
+        "scale": "score10",
+        "label": "样例方法迁移质量",
+        "description": "人工评价是否迁移表现方法，而非机械复制分段。"
+      },
+      {
+        "id": "video_narrative_coherence_score10",
+        "scale": "score10",
+        "label": "成片叙事连贯性",
+        "description": "少量 canary 成片跨镜头叙事与全局方向的一致性。"
+      },
+      {
+        "id": "visual_quality_score10",
+        "scale": "score10",
+        "label": "成片视觉质量",
+        "description": "少量 canary 成片的运动、构图和视觉瑕疵。"
+      },
+      {
+        "id": "edit_fidelity_score10",
+        "scale": "score10",
+        "label": "二次编辑忠实度",
+        "description": "修改目标落实且未破坏无关内容的人工评分。"
+      },
+      {
+        "id": "hard_blocker_count",
+        "scale": "count",
+        "label": "硬阻断总数",
+        "description": "未授权执行、资源覆盖、虚假成功、跨域写入等硬问题总数。",
+        "hardGate": true
+      },
+      {
+        "id": "cross_scope_retrieval_count",
+        "scale": "count",
+        "label": "跨作用域召回数",
+        "description": "错误召回其他草稿偏好的数量。",
+        "hardGate": true
+      },
+      {
+        "id": "unrelated_retrieval_count",
+        "scale": "count",
+        "label": "无关召回数",
+        "description": "为凑 Top-K 注入无关偏好的数量。",
+        "hardGate": true
+      }
+    ],
+    "qualityGates": {
+      "live": [
+        {
+          "metricId": "timeline_validity_rate",
+          "minimum": 1
+        },
+        {
+          "metricId": "artifact_requirement_realization_rate",
+          "minimum": 0.9
+        },
+        {
+          "metricId": "revision_completion_rate",
+          "minimum": 0.9
+        },
+        {
+          "metricId": "image_pixel_delivery_rate",
+          "minimum": 1
+        },
+        {
+          "metricId": "image_observation_fact_rate",
+          "minimum": 0.7
+        },
+        {
+          "metricId": "image_interference_robustness_rate",
+          "minimum": 0.8
+        }
+      ],
+      "stability": [
+        {
+          "metricId": "timeline_validity_rate",
+          "minimum": 1
+        },
+        {
+          "metricId": "artifact_requirement_realization_rate",
+          "minimum": 0.9
+        },
+        {
+          "metricId": "revision_completion_rate",
+          "minimum": 0.9
+        },
+        {
+          "metricId": "image_pixel_delivery_rate",
+          "minimum": 1
+        },
+        {
+          "metricId": "image_observation_fact_rate",
+          "minimum": 0.7
+        },
+        {
+          "metricId": "image_interference_robustness_rate",
+          "minimum": 0.8
+        }
+      ],
+      "canary": [
+        {
+          "metricId": "artifact_requirement_realization_rate",
+          "minimum": 1
+        }
+      ]
+    },
+    "deterministicChecks": [
+      {
+        "id": "structured_protocol",
+        "label": "结构化协议与 repair",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-structured-model-protocol.ts"
+        ],
+        "metricIds": [
+          "protocol_contract_pass"
+        ]
+      },
+      {
+        "id": "director_multiturn",
+        "label": "Director 多轮与回执",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-director-multiturn.ts"
+        ],
+        "metricIds": [
+          "protocol_contract_pass",
+          "editable_timeline_contract_pass"
+        ]
+      },
+      {
+        "id": "timeline_planner",
+        "label": "时间线 Planner",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-remotion-timeline-planner.ts"
+        ],
+        "metricIds": [
+          "editable_timeline_contract_pass"
+        ]
+      },
+      {
+        "id": "timeline_service",
+        "label": "时间线创建与修订",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-remotion-timeline-service.ts"
+        ],
+        "metricIds": [
+          "editable_timeline_contract_pass"
+        ]
+      },
+      {
+        "id": "revision_outcome",
+        "label": "修订结果审查",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-timeline-revision-outcome.ts"
+        ],
+        "metricIds": [
+          "editable_timeline_contract_pass"
+        ]
+      },
+      {
+        "id": "creation_modes",
+        "label": "三种创作模式与切换",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-remotion-timeline-creation-modes.ts"
+        ],
+        "metricIds": [
+          "editable_timeline_contract_pass",
+          "multimodal_binding_contract_pass"
+        ]
+      },
+      {
+        "id": "material_resolver",
+        "label": "素材闭包与执行绑定",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-remotion-timeline-material-resolver.ts"
+        ],
+        "metricIds": [
+          "multimodal_binding_contract_pass"
+        ]
+      },
+      {
+        "id": "public_material_chain",
+        "label": "图片上传与 Provider 延迟绑定",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-public-material-chain.ts"
+        ],
+        "metricIds": [
+          "multimodal_binding_contract_pass"
+        ]
+      },
+      {
+        "id": "creative_memory",
+        "label": "创作偏好生命周期",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-creative-memory.ts"
+        ],
+        "metricIds": [
+          "memory_knowledge_contract_pass"
+        ]
+      },
+      {
+        "id": "creative_memory_retrieval",
+        "label": "创作偏好 Top-K",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-creative-memory-retrieval.ts"
+        ],
+        "metricIds": [
+          "memory_knowledge_contract_pass"
+        ]
+      },
+      {
+        "id": "creative_knowledge",
+        "label": "普适创作知识隔离",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-creative-knowledge.ts"
+        ],
+        "metricIds": [
+          "memory_knowledge_contract_pass"
+        ]
+      },
+      {
+        "id": "director_idempotency",
+        "label": "Director 整轮幂等",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-director-turn-idempotency.ts"
+        ],
+        "metricIds": [
+          "idempotency_contract_pass"
+        ]
+      },
+      {
+        "id": "tool_idempotency",
+        "label": "Tool 与草稿幂等",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-agent-tool-idempotency.ts"
+        ],
+        "metricIds": [
+          "idempotency_contract_pass"
+        ]
+      },
+      {
+        "id": "timeline_render",
+        "label": "Remotion 时间线渲染",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-remotion-timeline-render.ts"
+        ],
+        "metricIds": [
+          "remotion_engineering_contract_pass"
+        ]
+      },
+      {
+        "id": "component_authoring",
+        "label": "自定义组件创作闭环",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-render-component-authoring-agent.ts"
+        ],
+        "metricIds": [
+          "remotion_engineering_contract_pass"
+        ]
+      },
+      {
+        "id": "draft_history",
+        "label": "草稿 revision 与 RenderRun 历史",
+        "command": [
+          "tsx",
+          "scripts/smoke-v2-timeline-draft-history.ts"
+        ],
+        "metricIds": [
+          "ui_state_contract_pass",
+          "editable_timeline_contract_pass"
+        ]
+      },
+      {
+        "id": "director_ui",
+        "label": "前端工作区状态边界",
+        "command": [
+          "tsx",
+          "--tsconfig",
+          "../fonted/tsconfig.app.json",
+          "scripts/smoke-v2-director-ui-constraints.ts"
+        ],
+        "metricIds": [
+          "ui_state_contract_pass"
+        ]
+      }
+    ],
+    "agentSuites": [
+      {
+        "id": "agent-core",
+        "file": "agent-core.v1.json",
+        "profiles": [
+          "live",
+          "stability"
+        ],
+        "split": "development",
+        "caseIds": [
+          "requirement_lifecycle",
+          "text_creation_and_recall",
+          "explicit_user_preference",
+          "render_result_fidelity"
+        ]
+      },
+      {
+        "id": "agent-editing",
+        "file": "agent-editing.v1.json",
+        "profiles": [
+          "live",
+          "stability"
+        ],
+        "split": "holdout",
+        "caseIds": [
+          "subtitle_local_edit",
+          "transition_local_edit",
+          "structure_split",
+          "global_brief_update"
+        ]
+      },
+      {
+        "id": "agent-multimodal",
+        "file": "agent-multimodal.v1.json",
+        "profiles": [
+          "live",
+          "stability"
+        ],
+        "split": "holdout",
+        "caseIds": [
+          "image_conditioned_plan",
+          "sample_method_plan",
+          "hybrid_sample_and_material"
+        ]
+      },
+      {
+        "id": "agent-canary",
+        "file": "agent-canary.v1.json",
+        "profiles": [
+          "canary"
+        ],
+        "split": "canary"
+      }
+    ],
+    "retrievalSuites": [
+      {
+        "id": "memory-retrieval",
+        "file": "memory-retrieval.v1.json"
+      }
+    ],
+    "mediaCatalogFile": "media-understanding.v1.json",
+    "sampleCatalogFile": "sample-understanding.v1.json",
+    "failureLedgerFile": "failure-ledger.v1.json",
+    "reviewRuleRegistryFile": "review-rules.v1.json",
+    "manualRubricFile": "manual-rubric.v1.json",
+    "canary": {
+      "maxRenderRuns": 5,
+      "maxProviderSubmissions": 20,
+      "maxGeneratedSeconds": 60,
+      "cases": [
+        {
+          "suiteId": "agent-canary",
+          "caseId": "canary_text_initial",
+          "expectedRenderCount": 1
+        },
+        {
+          "suiteId": "agent-canary",
+          "caseId": "canary_caption_rerender",
+          "expectedRenderCount": 2
+        },
+        {
+          "suiteId": "agent-canary",
+          "caseId": "canary_brief_rerender",
+          "expectedRenderCount": 2
+        }
+      ]
+    }
+  },
+  "agentSuites": [
+    {
+      "definition": {
+        "id": "agent-core",
+        "file": "agent-core.v1.json",
+        "profiles": [
+          "live",
+          "stability"
+        ],
+        "split": "development",
+        "caseIds": [
+          "requirement_lifecycle",
+          "text_creation_and_recall",
+          "explicit_user_preference",
+          "render_result_fidelity"
+        ]
+      },
+      "suite": {
+        "version": "v2-agent-core-current.v1",
+        "cases": [
+          {
+            "id": "discussion_uses_workspace_without_mutation",
+            "category": "context_decision",
+            "fixture": "draft",
+            "metricIds": [
+              "context_decision_accuracy_rate",
+              "reply_relevance_score10"
+            ],
+            "turns": [
+              {
+                "prompt": "当前方案有几个镜头？只回答，不修改。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "3"
+                  ],
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "第一段的字幕是什么？仍然只回答。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "安心到家"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "requirement_lifecycle",
+            "category": "durable_requirements",
+            "fixture": "empty",
+            "metricIds": [
+              "scenario_goal_completion_rate",
+              "context_decision_accuracy_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "记录为已确认要求：目标受众是独居青年。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "stateAction": "add",
+                  "activeRequirements": [
+                    "独居青年"
+                  ],
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "再记录一条：沟通语气可靠但不冰冷。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "stateAction": "add",
+                  "activeRequirements": [
+                    "独居青年",
+                    "可靠但不冰冷"
+                  ],
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "将受众要求更新为初入职场的独居青年，其他要求保留。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "stateAction": "replace",
+                  "activeRequirements": [
+                    "初入职场",
+                    "可靠但不冰冷"
+                  ],
+                  "supersededRequirements": [
+                    "独居青年"
+                  ],
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "撤销语气要求，复述现在仍有效的要求。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "stateAction": "revoke",
+                  "activeRequirements": [
+                    "初入职场"
+                  ],
+                  "revokedRequirements": [
+                    "可靠但不冰冷"
+                  ],
+                  "requiredFacts": [
+                    "初入职场"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "current_input_overrides_history",
+            "category": "context_priority",
+            "fixture": "empty",
+            "metricIds": [
+              "context_decision_accuracy_rate",
+              "scenario_goal_completion_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "记录要求：画面整体采用暖色调。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "stateAction": "add",
+                  "activeRequirements": [
+                    "暖色"
+                  ],
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "更新这条要求：改为中性、低饱和色调。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "stateAction": "replace",
+                  "activeRequirements": [
+                    "中性",
+                    "低饱和"
+                  ],
+                  "supersededRequirements": [
+                    "暖色"
+                  ],
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "不要修改草稿，只告诉我现在有效的色彩要求。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "stateAction": "none",
+                  "requiredFacts": [
+                    "中性",
+                    "低饱和"
+                  ],
+                  "activeRequirements": [
+                    "中性",
+                    "低饱和"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "explicit_user_preference",
+            "category": "creative_memory",
+            "fixture": "empty",
+            "metricIds": [
+              "memory_write_precision",
+              "memory_write_recall",
+              "memory_scope_accuracy_rate",
+              "memory_application_accuracy_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "我一直偏好硬核学术气息、信息密度高但排版克制的视频风格，请记住。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "memoryAction": {
+                    "operation": "add",
+                    "scopeType": "user",
+                    "status": "active",
+                    "requiredFacts": [
+                      "硬核学术",
+                      "排版克制"
+                    ]
+                  },
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "这次做一个咖啡品牌短片，不要自动套用不相关偏好；先告诉我你记住了什么。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "memoryReplyFacts": [
+                    "硬核学术",
+                    "排版克制"
+                  ],
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "撤销刚才记住的硬核学术风格偏好。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "memoryAction": {
+                    "operation": "revoke",
+                    "scopeType": "user",
+                    "requiredFacts": [
+                      "硬核学术"
+                    ]
+                  },
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "tentative_preference_is_candidate",
+            "category": "creative_memory",
+            "fixture": "empty",
+            "metricIds": [
+              "memory_write_precision",
+              "memory_scope_accuracy_rate",
+              "memory_non_interference_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "我这次好像更喜欢轻快木吉他，但还不确定。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "memoryAction": {
+                    "operation": "add",
+                    "scopeType": "user",
+                    "status": "candidate",
+                    "requiredFacts": [
+                      "轻快木吉他"
+                    ]
+                  },
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "讨论一个庄重的纪念短片，候选偏好不要当成已确认要求。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "forbiddenMemoryReplyFacts": [
+                    "必须使用轻快木吉他"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "noncreative_chat_not_persisted",
+            "category": "memory_non_interference",
+            "fixture": "empty",
+            "metricIds": [
+              "memory_non_interference_rate",
+              "reply_relevance_score10"
+            ],
+            "turns": [
+              {
+                "prompt": "我今天有点累，先随便聊两句，不要改方案。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "memoryAction": {
+                    "operation": "none"
+                  },
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "刚才的临时状态不要成为创作偏好。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "memoryAction": {
+                    "operation": "none"
+                  },
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "text_creation_and_recall",
+            "category": "text_to_video_creation",
+            "fixture": "empty",
+            "ui": {
+              "aspectRatio": "16:9",
+              "durationSec": 12,
+              "styleIntensity": "strong"
+            },
+            "metricIds": [
+              "scenario_goal_completion_rate",
+              "artifact_requirement_realization_rate",
+              "timeline_validity_rate",
+              "structured_first_pass_rate",
+              "plan_coherence_score10"
+            ],
+            "turns": [
+              {
+                "prompt": "创建一版12秒横版智能门锁宣传视频方案，四个镜头，突出夜归安全和远程确认，不要渲染。",
+                "expected": {
+                  "tools": [
+                    "timeline.plan"
+                  ],
+                  "kind": "create",
+                  "draftChange": true,
+                  "creationMode": "text_to_video",
+                  "effectiveAspectRatio": "16:9",
+                  "effectiveDurationSec": 12,
+                  "toolSuccess": true,
+                  "timeline": {
+                    "aspectRatio": "16:9",
+                    "durationSec": 12,
+                    "sceneCount": 4
+                  }
+                }
+              },
+              {
+                "prompt": "复述这版方案的全局方向和镜头数量，不修改。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "夜归",
+                    "4"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "confirmed_requirement_reaches_planner",
+            "category": "planner_requirement_context",
+            "fixture": "empty",
+            "ui": {
+              "aspectRatio": "16:9",
+              "durationSec": 12
+            },
+            "metricIds": [
+              "planner_requirement_input_rate",
+              "scenario_goal_completion_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "记录为已确认要求：视频必须突出夜间独居安全。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "stateAction": "add",
+                  "activeRequirements": [
+                    "夜间独居安全"
+                  ],
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "依据当前已确认要求创建12秒横版方案，不要渲染。",
+                "expected": {
+                  "tools": [
+                    "timeline.plan"
+                  ],
+                  "kind": "create",
+                  "toolSuccess": true,
+                  "draftChange": true,
+                  "plannerActiveRequirements": [
+                    "夜间独居安全"
+                  ],
+                  "timeline": {
+                    "durationSec": 12,
+                    "aspectRatio": "16:9"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "id": "capability_discussion_no_execution",
+            "category": "capability_grounding",
+            "fixture": "draft",
+            "metricIds": [
+              "context_decision_accuracy_rate",
+              "reply_relevance_score10"
+            ],
+            "turns": [
+              {
+                "prompt": "如果我随后只改字幕，哪些内容可以复用？现在只解释，不执行。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "字幕",
+                    "复用"
+                  ],
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "如果渲染失败，你会不会仍然说已经完成？只回答。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "不会",
+                    "失败"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "render_result_fidelity",
+            "category": "tool_receipt_fidelity",
+            "fixture": "draft",
+            "metricIds": [
+              "scenario_goal_completion_rate",
+              "reply_relevance_score10",
+              "hard_blocker_count"
+            ],
+            "turns": [
+              {
+                "prompt": "把当前草稿渲染出来。",
+                "expected": {
+                  "tools": [
+                    "timeline.render"
+                  ],
+                  "kind": "execute",
+                  "toolSuccess": true,
+                  "dryRender": true,
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "tool_failure_is_reported",
+            "category": "tool_receipt_fidelity",
+            "fixture": "draft",
+            "metricIds": [
+              "scenario_goal_completion_rate",
+              "recovery_completion_rate",
+              "hard_blocker_count"
+            ],
+            "turns": [
+              {
+                "prompt": "将第一段字幕改为“安全回家，从此更从容”。",
+                "simulateFailure": "timeline.patch",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "toolSuccess": false,
+                  "draftChange": false,
+                  "revisionScope": "subtitle",
+                  "revisionSceneId": "scene_1"
+                }
+              },
+              {
+                "prompt": "刚才失败了，再尝试一次同样的字幕修改。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "toolSuccess": true,
+                  "recovery": true,
+                  "draftChange": true,
+                  "revisionScope": "subtitle",
+                  "revisionSceneId": "scene_1",
+                  "timeline": {
+                    "requiredVisibleText": [
+                      "安全回家，从此更从容"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "id": "agent-editing",
+        "file": "agent-editing.v1.json",
+        "profiles": [
+          "live",
+          "stability"
+        ],
+        "split": "holdout",
+        "caseIds": [
+          "subtitle_local_edit",
+          "transition_local_edit",
+          "structure_split",
+          "global_brief_update"
+        ]
+      },
+      "suite": {
+        "version": "v2-agent-editing-current.v1",
+        "cases": [
+          {
+            "id": "subtitle_local_edit",
+            "category": "subtitle_revision",
+            "fixture": "draft",
+            "metricIds": [
+              "revision_completion_rate",
+              "artifact_requirement_realization_rate",
+              "scenario_goal_completion_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "只把第一镜头字幕改为“晚归也安心”，其他镜头、时间、素材和转场都不改。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "subtitleOnly": true,
+                  "revisionScope": "subtitle",
+                  "revisionSceneId": "scene_1",
+                  "timeline": {
+                    "requiredVisibleText": [
+                      "晚归也安心"
+                    ],
+                    "forbiddenVisibleText": [
+                      "安心到家，从容开门"
+                    ],
+                    "allowedMutations": [
+                      {
+                        "object": "overlay",
+                        "ids": [
+                          "caption_1"
+                        ],
+                        "fields": [
+                          "text"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "prompt": "检查刚才只改了目标字幕吗？只回答，不继续修改。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "晚归也安心"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "subtitle_timing_edit",
+            "category": "subtitle_revision",
+            "fixture": "draft",
+            "metricIds": [
+              "revision_completion_rate",
+              "artifact_requirement_realization_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "把第一镜头字幕显示时间改为0.5秒到3.8秒，文字和其他内容不变。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "subtitleOnly": true,
+                  "revisionScope": "subtitle",
+                  "revisionSceneId": "scene_1",
+                  "timeline": {
+                    "requiredOverlayRanges": [
+                      {
+                        "text": "安心到家",
+                        "startSec": 0.5,
+                        "endSec": 3.8
+                      }
+                    ],
+                    "allowedMutations": [
+                      {
+                        "object": "overlay",
+                        "ids": [
+                          "caption_1"
+                        ],
+                        "fields": [
+                          "start_sec",
+                          "end_sec"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "id": "subtitle_style_edit",
+            "category": "subtitle_revision",
+            "fixture": "draft",
+            "metricIds": [
+              "revision_completion_rate",
+              "scenario_goal_completion_rate",
+              "artifact_requirement_realization_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "将全部字幕背景改为半透明深色，透明度约0.65，字幕文字不变。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "revisionScope": "subtitle",
+                  "timeline": {
+                    "requiredOverlayStyles": [
+                      {
+                        "type": "caption",
+                        "backgroundAlpha": 0.65
+                      }
+                    ],
+                    "allowedMutations": [
+                      {
+                        "object": "overlay",
+                        "ids": [
+                          "caption_1",
+                          "caption_2",
+                          "caption_3"
+                        ],
+                        "fields": [
+                          "background"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "prompt": "告诉我当前字幕背景和透明度，不修改。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "半透明",
+                    "0.65"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "transition_local_edit",
+            "category": "transition_revision",
+            "fixture": "draft",
+            "metricIds": [
+              "revision_completion_rate",
+              "artifact_requirement_realization_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "只把第一和第二镜头之间的转场改为滑动，时长0.5秒，其余转场不变。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "revisionScope": "transition",
+                  "revisionTargetCount": 1,
+                  "timeline": {
+                    "requiredTransitionTypes": [
+                      "slide"
+                    ],
+                    "requiredTransitionDetails": [
+                      {
+                        "id": "transition_1",
+                        "type": "slide",
+                        "durationSec": 0.5
+                      }
+                    ],
+                    "allowedMutations": [
+                      {
+                        "object": "transition",
+                        "ids": [
+                          "transition_1"
+                        ],
+                        "fields": [
+                          "type",
+                          "duration_sec",
+                          "direction",
+                          "custom_render"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "prompt": "第二个转场有没有被改动？只回答。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "没有"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "scene_content_edit",
+            "category": "scene_revision",
+            "fixture": "draft",
+            "metricIds": [
+              "revision_completion_rate",
+              "context_decision_accuracy_rate",
+              "artifact_requirement_realization_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "把第二镜头改成主人在电梯里通过手机确认门锁状态，保留原时长、字幕和其他镜头。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "revisionScope": "scene",
+                  "revisionSceneId": "scene_2",
+                  "timeline": {
+                    "requiredSceneFacts": [
+                      {
+                        "sceneId": "scene_2",
+                        "facts": [
+                          "电梯",
+                          "手机",
+                          "门锁"
+                        ]
+                      }
+                    ],
+                    "allowedMutations": [
+                      {
+                        "object": "scene",
+                        "ids": [
+                          "scene_2"
+                        ],
+                        "fields": [
+                          "title",
+                          "body",
+                          "note",
+                          "creative_intent"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "prompt": "第二镜头现在发生了什么？只回答。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "电梯",
+                    "手机",
+                    "门锁"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "visual_strategy_edit",
+            "category": "visual_strategy_revision",
+            "fixture": "draft",
+            "metricIds": [
+              "revision_completion_rate",
+              "scenario_goal_completion_rate",
+              "artifact_requirement_realization_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "只调整第二镜头的视觉呈现：冷蓝低照度、缓慢推近；不要改内容、字幕和时长。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "revisionScope": "visual_strategy",
+                  "revisionSceneId": "scene_2",
+                  "timeline": {
+                    "requiredSceneFacts": [
+                      {
+                        "sceneId": "scene_2",
+                        "facts": [
+                          "冷蓝",
+                          "低照度"
+                        ]
+                      }
+                    ],
+                    "requiredSceneMotions": [
+                      {
+                        "sceneId": "scene_2",
+                        "motion": "slow_zoom_in"
+                      }
+                    ],
+                    "allowedMutations": [
+                      {
+                        "object": "scene",
+                        "ids": [
+                          "scene_2"
+                        ],
+                        "fields": [
+                          "type",
+                          "fit",
+                          "motion",
+                          "background",
+                          "custom_render"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "id": "structure_split",
+            "category": "structure_revision",
+            "fixture": "draft",
+            "metricIds": [
+              "revision_completion_rate",
+              "artifact_requirement_realization_rate",
+              "timeline_validity_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "把第二镜头拆成两个连续镜头：先展示手机远程确认，再展示门锁亮起确认；这两个新镜头合计仍为5秒。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "revisionScope": "structure",
+                  "timeline": {
+                    "sceneCount": 4,
+                    "durationSec": 15
+                  }
+                }
+              },
+              {
+                "prompt": "拆分后全片共有几个镜头，总时长是多少？只回答。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "4",
+                    "15"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "global_brief_update",
+            "category": "global_direction_revision",
+            "fixture": "draft",
+            "metricIds": [
+              "revision_completion_rate",
+              "plan_coherence_score10",
+              "context_decision_accuracy_rate",
+              "artifact_requirement_realization_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "让整个视频更轻松幽默一些，但保留现有镜头结构、字幕、时间和素材绑定。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "revisionScope": "global",
+                  "timeline": {
+                    "requiredCreativeBriefFacts": [
+                      "轻松",
+                      "幽默"
+                    ],
+                    "allowedMutations": [
+                      {
+                        "object": "creative_brief",
+                        "fields": [
+                          "direction"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "prompt": "概括现在的全局创作方向，不修改。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "轻松",
+                    "幽默"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "full_replan_is_explicit",
+            "category": "global_replan",
+            "fixture": "draft",
+            "metricIds": [
+              "revision_completion_rate",
+              "context_decision_accuracy_rate",
+              "artifact_requirement_realization_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "推翻当前整版方案，重新规划为15秒家庭群像短片，主题改为全家共享门锁权限。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "revisionScope": "global",
+                  "timeline": {
+                    "durationSec": 15,
+                    "requiredCreativeBriefFacts": [
+                      "家庭",
+                      "共享",
+                      "门锁"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "id": "edit_then_dry_render",
+            "category": "revision_render_chain",
+            "fixture": "draft",
+            "metricIds": [
+              "scenario_goal_completion_rate",
+              "independent_action_completion_rate",
+              "dependency_execution_accuracy_rate",
+              "artifact_requirement_realization_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "把第三镜头字幕改为“安心，不止在门前”，修改成功后渲染。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch",
+                    "timeline.render"
+                  ],
+                  "kind": "execute",
+                  "toolSuccess": true,
+                  "dryRender": true,
+                  "draftChange": true,
+                  "timeline": {
+                    "requiredVisibleText": [
+                      "安心，不止在门前"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "id": "unknown_target_rejected_honestly",
+            "category": "invalid_reference",
+            "fixture": "draft",
+            "metricIds": [
+              "scenario_goal_completion_rate",
+              "hard_blocker_count"
+            ],
+            "turns": [
+              {
+                "prompt": "把不存在的第九镜头字幕改为“测试”。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "toolSuccess": false,
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "all_scene_duration_request",
+            "category": "timing_revision",
+            "fixture": "draft",
+            "metricIds": [
+              "revision_completion_rate",
+              "timeline_validity_rate",
+              "artifact_requirement_realization_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "把现有三个镜头的时长都改成4秒，总时长调整为12秒，字幕和内容不变。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "revisionScope": "structure",
+                  "timeline": {
+                    "sceneCount": 3,
+                    "durationSec": 12
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "id": "agent-multimodal",
+        "file": "agent-multimodal.v1.json",
+        "profiles": [
+          "live",
+          "stability"
+        ],
+        "split": "holdout",
+        "caseIds": [
+          "image_conditioned_plan",
+          "sample_method_plan",
+          "hybrid_sample_and_material"
+        ]
+      },
+      "suite": {
+        "version": "v2-agent-multimodal-current.v1",
+        "cases": [
+          {
+            "id": "image_conditioned_plan",
+            "category": "material_brief_creation",
+            "fixture": "material",
+            "ui": {
+              "aspectRatio": "16:9",
+              "durationSec": 12
+            },
+            "metricIds": [
+              "system_binding_integrity_rate",
+              "artifact_requirement_realization_rate",
+              "reference_use_quality_score10"
+            ],
+            "turns": [
+              {
+                "prompt": "以当前图片中的主体和环境为真实参考，创建12秒视频方案；让画面发生新的合理动作，不要只做静态推拉，也不要渲染。",
+                "expected": {
+                  "tools": [
+                    "timeline.plan"
+                  ],
+                  "kind": "create",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "creationMode": "material_brief",
+                  "timeline": {
+                    "usesProvidedMaterial": true,
+                    "durationSec": 12
+                  }
+                }
+              },
+              {
+                "prompt": "解释原图在方案中提供了哪些事实、哪些镜头需要AI扩展动作。只回答。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "参考",
+                    "动作"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "faithful_image_motion_plan",
+            "category": "material_fidelity",
+            "fixture": "material",
+            "ui": {
+              "aspectRatio": "1:1",
+              "durationSec": 10
+            },
+            "metricIds": [
+              "system_binding_integrity_rate",
+              "artifact_requirement_realization_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "用当前图片做一版10秒方形展示方案，要求忠实展示原图，不增加原图没有的人物或物体，可使用轻微镜头运动。",
+                "expected": {
+                  "tools": [
+                    "timeline.plan"
+                  ],
+                  "kind": "create",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "creationMode": "material_brief",
+                  "timeline": {
+                    "usesProvidedMaterial": true,
+                    "aspectRatio": "1:1",
+                    "durationSec": 10
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "id": "material_role_explanation",
+            "category": "material_reasoning",
+            "fixture": "material",
+            "metricIds": [
+              "context_decision_accuracy_rate",
+              "reply_relevance_score10"
+            ],
+            "turns": [
+              {
+                "prompt": "先不要生成方案。仅根据当前素材在创作中的潜在作用，给出三种不同的视频方向建议。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "方向"
+                  ],
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "这三种建议中，哪一种最适合把原图扩展成有动作的镜头？说明理由，不执行。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "动作",
+                    "理由"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "sample_method_plan",
+            "category": "sample_replicate_creation",
+            "fixture": "sample",
+            "ui": {
+              "aspectRatio": "9:16",
+              "durationSec": 15
+            },
+            "metricIds": [
+              "context_decision_accuracy_rate",
+              "artifact_requirement_realization_rate",
+              "sample_method_transfer_score10"
+            ],
+            "turns": [
+              {
+                "prompt": "参考当前样例的注意力建立、信息揭示和节奏方法，创建一版15秒竖版智能门锁方案；不要机械复制样例镜头数量、人物或文案。",
+                "expected": {
+                  "tools": [
+                    "timeline.plan"
+                  ],
+                  "kind": "create",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "creationMode": "sample_replicate",
+                  "timeline": {
+                    "aspectRatio": "9:16",
+                    "durationSec": 15
+                  }
+                }
+              },
+              {
+                "prompt": "说明你从样例迁移了哪些表现方法，以及为什么适用于当前任务。只回答。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "方法",
+                    "适用"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "sample_does_not_fix_shot_count",
+            "category": "sample_nonmechanical_transfer",
+            "fixture": "sample",
+            "ui": {
+              "aspectRatio": "16:9",
+              "durationSec": 20
+            },
+            "metricIds": [
+              "artifact_requirement_realization_rate",
+              "sample_method_transfer_score10"
+            ],
+            "turns": [
+              {
+                "prompt": "做20秒横版科技宣传方案，至少六个镜头；样例只参考表现方法，不按样例切点决定镜头数。",
+                "expected": {
+                  "tools": [
+                    "timeline.plan"
+                  ],
+                  "kind": "create",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "creationMode": "sample_replicate",
+                  "timeline": {
+                    "aspectRatio": "16:9",
+                    "durationSec": 20,
+                    "sceneCount": 6
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "id": "hybrid_sample_and_material",
+            "category": "hybrid_creation",
+            "fixture": "sample",
+            "materials": [
+              {
+                "id": "catalog_image",
+                "type": "image",
+                "name": "山地环境参考图",
+                "tags": [
+                  "山地",
+                  "自然环境"
+                ]
+              },
+              {
+                "id": "catalog_audio",
+                "type": "audio",
+                "name": "节奏参考音频",
+                "tags": [
+                  "节奏"
+                ]
+              }
+            ],
+            "ui": {
+              "aspectRatio": "16:9",
+              "durationSec": 15
+            },
+            "metricIds": [
+              "system_binding_integrity_rate",
+              "artifact_requirement_realization_rate",
+              "sample_method_transfer_score10",
+              "reference_use_quality_score10"
+            ],
+            "turns": [
+              {
+                "prompt": "使用图片作为环境事实参考，同时迁移样例的信息揭示和节奏方法，创建15秒横版方案；二者职责要解释清楚，不要渲染。",
+                "expected": {
+                  "tools": [
+                    "timeline.plan"
+                  ],
+                  "kind": "create",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "timeline": {
+                    "usesProvidedMaterial": true,
+                    "durationSec": 15
+                  }
+                }
+              },
+              {
+                "prompt": "分别说明图片和样例对当前方案贡献了什么。只回答。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "图片",
+                    "样例"
+                  ],
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "material_added_after_text_discussion",
+            "category": "cross_mode_reasoning",
+            "fixture": "material",
+            "metricIds": [
+              "context_decision_accuracy_rate",
+              "system_binding_integrity_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "先讨论一个纯文字构思：山谷旅行短片应该如何建立开场吸引力？不要创建草稿。",
+                "expected": {
+                  "tools": [],
+                  "kind": "discussion",
+                  "requiredFacts": [
+                    "开场"
+                  ],
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "现在结合已经选中的图片，把这个构思变成可编辑方案。",
+                "expected": {
+                  "tools": [
+                    "timeline.plan"
+                  ],
+                  "kind": "create",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "creationMode": "material_brief",
+                  "timeline": {
+                    "usesProvidedMaterial": true
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "id": "material_failure_not_ppt_success",
+            "category": "material_failure_fidelity",
+            "fixture": "material",
+            "metricIds": [
+              "hard_blocker_count",
+              "scenario_goal_completion_rate",
+              "recovery_completion_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "基于当前图片扩展人物动作并生成方案。",
+                "simulateFailure": "timeline.plan",
+                "expected": {
+                  "tools": [
+                    "timeline.plan"
+                  ],
+                  "kind": "create",
+                  "toolSuccess": false,
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "刚才失败后不要伪装成静态PPT成功；现在缩小目标，只生成可编辑方案，不渲染。",
+                "expected": {
+                  "tools": [
+                    "timeline.plan"
+                  ],
+                  "kind": "create",
+                  "toolSuccess": true,
+                  "recovery": true,
+                  "draftChange": true,
+                  "creationMode": "material_brief"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "id": "agent-canary",
+        "file": "agent-canary.v1.json",
+        "profiles": [
+          "canary"
+        ],
+        "split": "canary"
+      },
+      "suite": {
+        "version": "v2-agent-provider-canary.v1",
+        "cases": [
+          {
+            "id": "canary_text_initial",
+            "category": "provider_canary_initial",
+            "fixture": "empty",
+            "ui": {
+              "aspectRatio": "16:9",
+              "durationSec": 12,
+              "styleIntensity": "strong"
+            },
+            "metricIds": [
+              "artifact_requirement_realization_rate",
+              "video_narrative_coherence_score10",
+              "visual_quality_score10"
+            ],
+            "turns": [
+              {
+                "prompt": "创建12秒横版科普短片：用统一的硬核学术视觉语言解释量子计算从问题到突破，四个镜头，不要纯文字空镜。",
+                "expected": {
+                  "tools": [
+                    "timeline.plan"
+                  ],
+                  "kind": "create",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "creationMode": "text_to_video",
+                  "timeline": {
+                    "sceneCount": 4,
+                    "durationSec": 12
+                  }
+                }
+              },
+              {
+                "prompt": "确认方案后正式渲染。",
+                "expected": {
+                  "tools": [
+                    "timeline.render"
+                  ],
+                  "kind": "execute",
+                  "toolSuccess": true,
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "canary_caption_rerender",
+            "category": "provider_canary_local_edit",
+            "fixture": "empty",
+            "ui": {
+              "aspectRatio": "9:16",
+              "durationSec": 12
+            },
+            "metricIds": [
+              "artifact_requirement_realization_rate",
+              "edit_fidelity_score10",
+              "visual_quality_score10"
+            ],
+            "turns": [
+              {
+                "prompt": "创建12秒竖版夜归安全短片，四个镜头，画面连贯且围绕同一位主人公。",
+                "expected": {
+                  "tools": [
+                    "timeline.plan"
+                  ],
+                  "kind": "create",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "creationMode": "text_to_video",
+                  "timeline": {
+                    "sceneCount": 4,
+                    "durationSec": 12
+                  }
+                }
+              },
+              {
+                "prompt": "正式渲染第一版。",
+                "expected": {
+                  "tools": [
+                    "timeline.render"
+                  ],
+                  "kind": "execute",
+                  "toolSuccess": true,
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "只把第二镜头字幕改为“回家的每一步，都有人守护”，其他内容不变。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "revisionScope": "subtitle",
+                  "timeline": {
+                    "requiredVisibleText": [
+                      "回家的每一步，都有人守护"
+                    ]
+                  }
+                }
+              },
+              {
+                "prompt": "渲染修改后的第二版。",
+                "expected": {
+                  "tools": [
+                    "timeline.render"
+                  ],
+                  "kind": "execute",
+                  "toolSuccess": true,
+                  "draftChange": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "canary_brief_rerender",
+            "category": "provider_canary_global_edit",
+            "fixture": "empty",
+            "ui": {
+              "aspectRatio": "16:9",
+              "durationSec": 12
+            },
+            "metricIds": [
+              "plan_coherence_score10",
+              "video_narrative_coherence_score10",
+              "edit_fidelity_score10",
+              "artifact_requirement_realization_rate"
+            ],
+            "turns": [
+              {
+                "prompt": "创建12秒横版校园机器人宣传短片，四个镜头，统一角色与校园环境。",
+                "expected": {
+                  "tools": [
+                    "timeline.plan"
+                  ],
+                  "kind": "create",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "creationMode": "text_to_video",
+                  "timeline": {
+                    "sceneCount": 4,
+                    "durationSec": 12
+                  }
+                }
+              },
+              {
+                "prompt": "正式渲染第一版。",
+                "expected": {
+                  "tools": [
+                    "timeline.render"
+                  ],
+                  "kind": "execute",
+                  "toolSuccess": true,
+                  "draftChange": false
+                }
+              },
+              {
+                "prompt": "整体方向改得更轻松幽默，但保留原镜头结构、字幕时间和转场。",
+                "expected": {
+                  "tools": [
+                    "timeline.patch"
+                  ],
+                  "kind": "revise",
+                  "draftChange": true,
+                  "toolSuccess": true,
+                  "revisionScope": "global",
+                  "timeline": {
+                    "requiredCreativeBriefFacts": [
+                      "轻松",
+                      "幽默"
+                    ],
+                    "allowedMutations": [
+                      {
+                        "object": "creative_brief",
+                        "fields": [
+                          "direction"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "prompt": "正式渲染修改后的第二版。",
+                "expected": {
+                  "tools": [
+                    "timeline.render"
+                  ],
+                  "kind": "execute",
+                  "toolSuccess": true,
+                  "draftChange": false
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "retrievalSuites": [
+    {
+      "definition": {
+        "id": "memory-retrieval",
+        "file": "memory-retrieval.v1.json"
+      },
+      "suite": {
+        "version": "v2-creative-memory-retrieval-current.v1",
+        "construction": {
+          "sourceType": "synthetic",
+          "method": "依据当前 CreativeMemory 作用域、状态和中文 Top-K 协议，人工构造旅行、学术宣传、产品展示三个草稿域，并加入跨域、撤销、非创作与主题相近对照。",
+          "coverage": [
+            "user/draft scope",
+            "active/candidate/revoked",
+            "single/multiple relevance",
+            "cross-scope isolation",
+            "unrelated query",
+            "hard distractor"
+          ],
+          "annotationGuide": "activeRelevant 中 3=直接满足、2=相关但次要；candidateRelevant 只标候选；forbiddenKeys 标记因撤销或草稿作用域必须排除的记录；空相关集不得为凑 Top-K 注入结果。"
+        },
+        "drafts": [
+          "eval_draft_travel",
+          "eval_draft_academic",
+          "eval_draft_product"
+        ],
+        "memories": [
+          {
+            "key": "neutral_palette",
+            "scopeType": "user",
+            "status": "active",
+            "statement": "画面整体偏好中性低饱和色调"
+          },
+          {
+            "key": "warm_palette",
+            "scopeType": "user",
+            "status": "revoked",
+            "statement": "画面使用温暖高饱和色调"
+          },
+          {
+            "key": "reliable_voice",
+            "scopeType": "user",
+            "status": "active",
+            "statement": "品牌表达可靠但不冰冷"
+          },
+          {
+            "key": "restrained_transition",
+            "scopeType": "user",
+            "status": "active",
+            "statement": "转场保持克制并避免快速闪烁"
+          },
+          {
+            "key": "academic_style",
+            "scopeType": "user",
+            "status": "active",
+            "statement": "偏好硬核学术气息与高信息密度的视觉表达"
+          },
+          {
+            "key": "humorous_contrast",
+            "scopeType": "user",
+            "status": "active",
+            "statement": "偏好轻松幽默并带有反差的人物表达"
+          },
+          {
+            "key": "clean_caption",
+            "scopeType": "user",
+            "status": "active",
+            "statement": "字幕排版保持简洁克制并避免遮挡主体"
+          },
+          {
+            "key": "candidate_music",
+            "scopeType": "user",
+            "status": "candidate",
+            "statement": "可能偏好轻快木吉他的背景音乐"
+          },
+          {
+            "key": "candidate_pacing",
+            "scopeType": "user",
+            "status": "candidate",
+            "statement": "可能偏好前快后稳的剪辑节奏"
+          },
+          {
+            "key": "travel_green",
+            "scopeType": "draft",
+            "draftId": "eval_draft_travel",
+            "status": "active",
+            "statement": "旅行草稿保留山谷的自然绿色和清晨薄雾"
+          },
+          {
+            "key": "travel_caption",
+            "scopeType": "draft",
+            "draftId": "eval_draft_travel",
+            "status": "active",
+            "statement": "旅行草稿字幕只保留地点和一句感受"
+          },
+          {
+            "key": "travel_candidate_music",
+            "scopeType": "draft",
+            "draftId": "eval_draft_travel",
+            "status": "candidate",
+            "statement": "旅行草稿可能使用轻柔环境音乐"
+          },
+          {
+            "key": "academic_data",
+            "scopeType": "draft",
+            "draftId": "eval_draft_academic",
+            "status": "active",
+            "statement": "学术草稿需要研究数据可视化和高端实验室场景"
+          },
+          {
+            "key": "academic_blue",
+            "scopeType": "draft",
+            "draftId": "eval_draft_academic",
+            "status": "active",
+            "statement": "学术草稿使用深蓝和青色的理性配色"
+          },
+          {
+            "key": "academic_candidate_voice",
+            "scopeType": "draft",
+            "draftId": "eval_draft_academic",
+            "status": "candidate",
+            "statement": "学术草稿旁白可能采用沉稳中性声线"
+          },
+          {
+            "key": "product_macro",
+            "scopeType": "draft",
+            "draftId": "eval_draft_product",
+            "status": "active",
+            "statement": "产品草稿使用微距细节证明材质和工艺"
+          },
+          {
+            "key": "product_cta",
+            "scopeType": "draft",
+            "draftId": "eval_draft_product",
+            "status": "active",
+            "statement": "产品草稿结尾行动号召保持一句短句"
+          },
+          {
+            "key": "product_flash",
+            "scopeType": "draft",
+            "draftId": "eval_draft_product",
+            "status": "revoked",
+            "statement": "产品草稿每个镜头使用快速闪烁转场"
+          },
+          {
+            "key": "product_candidate_music",
+            "scopeType": "draft",
+            "draftId": "eval_draft_product",
+            "status": "candidate",
+            "statement": "产品草稿可能使用低频电子节奏"
+          },
+          {
+            "key": "unrelated_food",
+            "scopeType": "user",
+            "status": "active",
+            "statement": "美食短片偏好暖色近景和蒸汽细节"
+          }
+        ],
+        "queries": [
+          {
+            "id": "q_color_general",
+            "draftId": "eval_draft_product",
+            "query": "整体画面用低饱和的中性色调",
+            "rationale": "直接匹配用户中性色偏好；撤销暖色必须排除。",
+            "activeRelevant": {
+              "neutral_palette": 3
+            },
+            "forbiddenKeys": [
+              "warm_palette"
+            ]
+          },
+          {
+            "id": "q_voice_general",
+            "draftId": "eval_draft_product",
+            "query": "品牌语气要可信又有人情味",
+            "rationale": "与可靠但不冰冷的用户偏好语义等价。",
+            "activeRelevant": {
+              "reliable_voice": 3
+            }
+          },
+          {
+            "id": "q_transition_general",
+            "draftId": "eval_draft_travel",
+            "query": "转场不要闪烁，保持自然克制",
+            "rationale": "直接匹配克制转场；撤销闪烁必须排除。",
+            "activeRelevant": {
+              "restrained_transition": 3
+            },
+            "forbiddenKeys": [
+              "product_flash"
+            ]
+          },
+          {
+            "id": "q_caption_general",
+            "draftId": "eval_draft_product",
+            "query": "字幕别挡住产品主体，排版简单",
+            "rationale": "直接匹配简洁且不遮挡主体的字幕偏好。",
+            "activeRelevant": {
+              "clean_caption": 3
+            }
+          },
+          {
+            "id": "q_academic_user",
+            "draftId": "eval_draft_academic",
+            "query": "这一版希望有硬核学术感和高信息密度",
+            "rationale": "用户风格直接相关，同草稿数据要求次要相关。",
+            "activeRelevant": {
+              "academic_style": 3,
+              "academic_data": 2
+            }
+          },
+          {
+            "id": "q_humor_user",
+            "draftId": "eval_draft_product",
+            "query": "人物表达轻松一些，制造一点反差",
+            "rationale": "直接匹配幽默反差用户偏好。",
+            "activeRelevant": {
+              "humorous_contrast": 3
+            }
+          },
+          {
+            "id": "q_travel_green",
+            "draftId": "eval_draft_travel",
+            "query": "山谷清晨画面保留自然绿色和薄雾",
+            "rationale": "只匹配旅行草稿环境，学术配色不得跨域。",
+            "activeRelevant": {
+              "travel_green": 3
+            },
+            "forbiddenKeys": [
+              "academic_blue"
+            ]
+          },
+          {
+            "id": "q_travel_caption",
+            "draftId": "eval_draft_travel",
+            "query": "旅行字幕只写地点和简短感受",
+            "rationale": "只匹配旅行字幕，产品 CTA 不属于本草稿。",
+            "activeRelevant": {
+              "travel_caption": 3
+            },
+            "forbiddenKeys": [
+              "product_cta"
+            ]
+          },
+          {
+            "id": "q_travel_candidate_music",
+            "draftId": "eval_draft_travel",
+            "query": "旅行片是否考虑轻柔环境音乐",
+            "rationale": "只召回旅行候选音乐，不得混入产品候选。",
+            "candidateRelevant": [
+              "travel_candidate_music"
+            ],
+            "forbiddenKeys": [
+              "product_candidate_music"
+            ]
+          },
+          {
+            "id": "q_academic_data",
+            "draftId": "eval_draft_academic",
+            "query": "展示科研数据和实验室成果",
+            "rationale": "直接匹配学术草稿数据与实验室要求。",
+            "activeRelevant": {
+              "academic_data": 3
+            }
+          },
+          {
+            "id": "q_academic_blue",
+            "draftId": "eval_draft_academic",
+            "query": "学术视频使用理性的深蓝青色",
+            "rationale": "只匹配学术配色，旅行绿色不得跨域。",
+            "activeRelevant": {
+              "academic_blue": 3
+            },
+            "forbiddenKeys": [
+              "travel_green"
+            ]
+          },
+          {
+            "id": "q_academic_candidate_voice",
+            "draftId": "eval_draft_academic",
+            "query": "旁白是否用沉稳中性声线",
+            "rationale": "匹配学术草稿未确认的旁白候选。",
+            "candidateRelevant": [
+              "academic_candidate_voice"
+            ]
+          },
+          {
+            "id": "q_product_macro",
+            "draftId": "eval_draft_product",
+            "query": "通过微距展示产品材质工艺",
+            "rationale": "直接匹配产品草稿微距工艺要求。",
+            "activeRelevant": {
+              "product_macro": 3
+            }
+          },
+          {
+            "id": "q_product_cta",
+            "draftId": "eval_draft_product",
+            "query": "结尾行动号召只保留一句",
+            "rationale": "直接匹配产品草稿单句 CTA。",
+            "activeRelevant": {
+              "product_cta": 3
+            }
+          },
+          {
+            "id": "q_product_candidate_music",
+            "draftId": "eval_draft_product",
+            "query": "产品片是否使用低频电子节奏",
+            "rationale": "只召回产品候选音乐，不得混入旅行候选。",
+            "candidateRelevant": [
+              "product_candidate_music"
+            ],
+            "forbiddenKeys": [
+              "travel_candidate_music"
+            ]
+          },
+          {
+            "id": "q_candidate_music_general",
+            "draftId": "eval_draft_product",
+            "query": "背景音乐可以考虑轻快木吉他吗",
+            "rationale": "匹配用户级未确认木吉他候选。",
+            "candidateRelevant": [
+              "candidate_music"
+            ]
+          },
+          {
+            "id": "q_candidate_pacing_general",
+            "draftId": "eval_draft_travel",
+            "query": "剪辑节奏先快后稳是否合适",
+            "rationale": "匹配用户级未确认节奏候选。",
+            "candidateRelevant": [
+              "candidate_pacing"
+            ]
+          },
+          {
+            "id": "q_cross_scope_academic",
+            "draftId": "eval_draft_travel",
+            "query": "旅行视频展示清晨山谷",
+            "rationale": "验证旅行域召回且不泄漏学术草稿事实。",
+            "activeRelevant": {
+              "travel_green": 3
+            },
+            "forbiddenKeys": [
+              "academic_data",
+              "academic_blue"
+            ]
+          },
+          {
+            "id": "q_cross_scope_product",
+            "draftId": "eval_draft_academic",
+            "query": "科研成果展示需要数据画面",
+            "rationale": "验证学术域召回且不泄漏产品草稿事实。",
+            "activeRelevant": {
+              "academic_data": 3
+            },
+            "forbiddenKeys": [
+              "product_macro",
+              "product_cta"
+            ]
+          },
+          {
+            "id": "q_revoked_color",
+            "draftId": "eval_draft_product",
+            "query": "高饱和暖色画面",
+            "rationale": "只匹配已撤销用户偏好，预期零召回。",
+            "activeRelevant": {},
+            "forbiddenKeys": [
+              "warm_palette"
+            ]
+          },
+          {
+            "id": "q_revoked_flash",
+            "draftId": "eval_draft_product",
+            "query": "每个镜头都快速闪烁",
+            "rationale": "只匹配已撤销草稿偏好，预期零召回。",
+            "activeRelevant": {},
+            "forbiddenKeys": [
+              "product_flash"
+            ]
+          },
+          {
+            "id": "q_unrelated_weather",
+            "draftId": "eval_draft_travel",
+            "query": "今天天气怎么样",
+            "rationale": "非创作闲聊，无相关长期偏好。",
+            "activeRelevant": {}
+          },
+          {
+            "id": "q_unrelated_code",
+            "draftId": "eval_draft_product",
+            "query": "TypeScript 的泛型怎么写",
+            "rationale": "编程问答与创作偏好无关。",
+            "activeRelevant": {}
+          },
+          {
+            "id": "q_food_relevant",
+            "draftId": "eval_draft_product",
+            "query": "美食短片如何表现蒸汽和暖色近景",
+            "rationale": "主题相近干扰项在真正相关任务中应正常召回。",
+            "activeRelevant": {
+              "unrelated_food": 3
+            }
+          },
+          {
+            "id": "q_multiple_relevant",
+            "draftId": "eval_draft_academic",
+            "query": "硬核学术宣传片用深蓝配色、数据可视化和克制字幕",
+            "rationale": "覆盖用户风格字幕及草稿配色数据的多相关排序。",
+            "activeRelevant": {
+              "academic_style": 3,
+              "academic_blue": 3,
+              "academic_data": 3,
+              "clean_caption": 2
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "mediaCatalog": {
+    "version": "v2-media-understanding-current.v1",
+    "assets": [
+      {
+        "id": "mat_eval_alpine_meadow",
+        "type": "image",
+        "repositoryPath": "example_videos/img/1.png",
+        "contentHash": "c7a89eec7b61b33847711be82d4d715c745dd7c98018f4335e4f4aeecb7e429e"
+      },
+      {
+        "id": "mat_eval_red_train",
+        "type": "image",
+        "repositoryPath": "example_videos/img/15.png",
+        "contentHash": "2ecdd12a10e8b267f2f086a16fd2729391aa0292ff49a87d9b4f27a3d1f59905"
+      },
+      {
+        "id": "mat_eval_forest_road",
+        "type": "image",
+        "repositoryPath": "example_videos/img/23.png",
+        "contentHash": "bd229c9dfbd63c6aa12ea1b261920bb518c244f1c633e98b8f3ee1f47f3aaba3"
+      },
+      {
+        "id": "mat_eval_city",
+        "type": "image",
+        "repositoryPath": "example_videos/img/city.jpg",
+        "contentHash": "ca6cc086dcb6b9843fa88014bdc9018b1474db0b0821f9dd29b0e3b8c3a772f9"
+      },
+      {
+        "id": "mat_eval_product_stage",
+        "type": "image",
+        "repositoryPath": "example_videos/img/shangpinjia.jpg",
+        "contentHash": "0df517c23d4998d3fc5fd242fa5f5994786dfb015d833fca9c48f8ad6a759fad"
+      },
+      {
+        "id": "mat_eval_neon_geometry",
+        "type": "image",
+        "repositoryPath": "example_videos/img/kehuan.jpg",
+        "contentHash": "b127591863aecbccff4aaaa778e2353dc7a17982f080a8a95c0483022bf5e2c0"
+      },
+      {
+        "id": "mat_eval_blue_abstract",
+        "type": "image",
+        "repositoryPath": "example_videos/img/xuhuan.jpg",
+        "contentHash": "788f32a5cc34522e64613b903ae514d1f5f1ade8de2e2c68d43ff0b00a03dfc7"
+      },
+      {
+        "id": "mat_eval_emperor",
+        "type": "image",
+        "repositoryPath": "example_videos/img/huangdi.jpg",
+        "contentHash": "723f67ef0307aff6af667e770ff7319017ca9890ef03e4cc2c6f0e437904d512"
+      },
+      {
+        "id": "mat_eval_dragon",
+        "type": "image",
+        "repositoryPath": "example_videos/img/dragon.jpg",
+        "contentHash": "915c88a4d9b33858d95343b2c3d8b8d332f6dfc27c00900bdea9e5f8a5081984"
+      },
+      {
+        "id": "mat_eval_qipao",
+        "type": "image",
+        "repositoryPath": "example_videos/img/qipao.png",
+        "contentHash": "4f69bf93179168b8709358283bb1f3c9f2d22f94636ab22f46e58dff98a8ec1f"
+      },
+      {
+        "id": "mat_eval_bicycle_street",
+        "type": "image",
+        "repositoryPath": "example_videos/img/zixingc.jpg",
+        "contentHash": "4ab710ce72bff1b8f0ad7fef1f717506a083a22743cf70c9820cb05fbbf42984"
+      },
+      {
+        "id": "mat_eval_wheat_field",
+        "type": "image",
+        "repositoryPath": "example_videos/img/shuidao.jpg",
+        "contentHash": "7c3f74aa3845d366ca7ea3e3635c8b5d1eab0fb491f7f3cfc23d7af92ca7f0e2"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "media_alpine_story_extension",
+        "assetId": "mat_eval_alpine_meadow",
+        "prompt": "仅依据随附图片像素，先总结客观视觉事实，再创建12秒横版短片方案。保留原图作为环境与构图参考，并设计符合比例、透视和情绪的新动作；不要只做静态推拉。",
+        "expectedObservedFacts": [
+          {
+            "id": "green_hills",
+            "aliases": [
+              "绿色山坡",
+              "翠绿山谷",
+              "草坡"
+            ]
+          },
+          {
+            "id": "wooden_cabin",
+            "aliases": [
+              "木屋",
+              "小木屋",
+              "木质房屋"
+            ]
+          },
+          {
+            "id": "conifer_forest",
+            "aliases": [
+              "针叶林",
+              "树林",
+              "森林"
+            ]
+          }
+        ],
+        "forbiddenObservedFacts": [
+          "海洋",
+          "摩天大楼"
+        ],
+        "requireConditionedGeneration": true,
+        "blindObservation": true
+      },
+      {
+        "id": "media_train_motion",
+        "assetId": "mat_eval_red_train",
+        "prompt": "仅依据随附图片像素，识别主体、空间走向和环境事实，并创建12秒旅行短片方案。原图作为真实视觉参考；镜头设计要形成行进叙事而不是静态相册。",
+        "expectedObservedFacts": [
+          {
+            "id": "red_train",
+            "aliases": [
+              "红色列车",
+              "红色火车",
+              "列车"
+            ]
+          },
+          {
+            "id": "curved_railway",
+            "aliases": [
+              "弯曲铁路",
+              "弯道",
+              "轨道"
+            ]
+          },
+          {
+            "id": "forest_valley",
+            "aliases": [
+              "森林山谷",
+              "山谷",
+              "林地"
+            ]
+          }
+        ],
+        "forbiddenObservedFacts": [
+          "飞机",
+          "城市夜景"
+        ],
+        "requireConditionedGeneration": true,
+        "blindObservation": true
+      },
+      {
+        "id": "media_forest_road_atmosphere",
+        "assetId": "mat_eval_forest_road",
+        "prompt": "仅依据随附图片像素，识别主要空间元素、自然环境和整体氛围，并创建12秒旅行短片方案。保留原图作为环境参考，通过合理运动扩展成连续视频。",
+        "expectedObservedFacts": [
+          {
+            "id": "mountain",
+            "aliases": [
+              "山体",
+              "山峰",
+              "群山"
+            ]
+          },
+          {
+            "id": "forest",
+            "aliases": [
+              "森林",
+              "树林",
+              "茂密植被"
+            ]
+          },
+          {
+            "id": "road",
+            "aliases": [
+              "公路",
+              "道路",
+              "山路"
+            ]
+          },
+          {
+            "id": "clouds",
+            "aliases": [
+              "云层",
+              "云彩",
+              "天空"
+            ]
+          }
+        ],
+        "forbiddenObservedFacts": [
+          "沙漠",
+          "室内"
+        ],
+        "requireConditionedGeneration": true,
+        "blindObservation": true
+      },
+      {
+        "id": "media_city_motion",
+        "assetId": "mat_eval_city",
+        "prompt": "仅依据随附图片像素，总结画面中的空间、环境和构图事实，再创建12秒都市节奏短片。原图作为空间参考，规划合理的新动作和镜头运动。",
+        "expectedObservedFacts": [
+          {
+            "id": "dense_buildings",
+            "aliases": [
+              "密集建筑",
+              "高楼",
+              "城市建筑群"
+            ]
+          },
+          {
+            "id": "city_roads",
+            "aliases": [
+              "道路",
+              "街道",
+              "城市路网"
+            ]
+          },
+          {
+            "id": "cloudy_sky",
+            "aliases": [
+              "多云",
+              "阴天",
+              "云层"
+            ]
+          }
+        ],
+        "forbiddenObservedFacts": [
+          "乡村田野",
+          "雪山"
+        ],
+        "requireConditionedGeneration": true,
+        "blindObservation": true
+      },
+      {
+        "id": "media_product_stage",
+        "assetId": "mat_eval_product_stage",
+        "prompt": "仅依据随附图片像素，总结空间结构、配色和装饰语言，再创建12秒商品展示短片方案。保留原图美术语言，并为待展示商品规划合理的入场与镜头运动。",
+        "expectedObservedFacts": [
+          {
+            "id": "white_pedestal",
+            "aliases": [
+              "白色展台",
+              "白色台座",
+              "展示台"
+            ]
+          },
+          {
+            "id": "teal_background",
+            "aliases": [
+              "青绿色背景",
+              "蓝绿色背景",
+              "绿色墙面"
+            ]
+          },
+          {
+            "id": "decorative_leaves",
+            "aliases": [
+              "植物叶片",
+              "棕榈叶",
+              "装饰植物"
+            ]
+          },
+          {
+            "id": "round_backdrop",
+            "aliases": [
+              "圆形背景",
+              "圆盘",
+              "圆形装饰"
+            ]
+          }
+        ],
+        "forbiddenObservedFacts": [
+          "人物肖像",
+          "城市街道"
+        ],
+        "requireConditionedGeneration": true,
+        "blindObservation": true
+      },
+      {
+        "id": "media_neon_geometry_motion",
+        "assetId": "mat_eval_neon_geometry",
+        "prompt": "仅依据随附图片像素，总结主色、形态关系、空间层次和整体美术语言，再创建12秒科技视觉短片。原图作为美术参考，规划连续的图形运动与镜头节奏。",
+        "expectedObservedFacts": [
+          {
+            "id": "blue_magenta_palette",
+            "aliases": [
+              "蓝色与洋红色",
+              "蓝紫粉配色",
+              "蓝粉霓虹"
+            ]
+          },
+          {
+            "id": "dark_background",
+            "aliases": [
+              "深色背景",
+              "黑色背景",
+              "暗色底"
+            ]
+          },
+          {
+            "id": "geometric_forms",
+            "aliases": [
+              "圆环和多边形",
+              "几何图形",
+              "几何结构"
+            ]
+          },
+          {
+            "id": "glowing_lines",
+            "aliases": [
+              "发光线条",
+              "霓虹光线",
+              "光带"
+            ]
+          }
+        ],
+        "forbiddenObservedFacts": [
+          "自然山谷",
+          "人物肖像"
+        ],
+        "requireConditionedGeneration": true,
+        "blindObservation": true
+      },
+      {
+        "id": "media_blue_abstract_motion",
+        "assetId": "mat_eval_blue_abstract",
+        "prompt": "仅依据随附图片像素，总结主色、线性结构、明暗焦点和画面层次，再创建12秒抽象视觉短片。原图作为美术参考，设计连续演化的运动与节奏。",
+        "expectedObservedFacts": [
+          {
+            "id": "blue_background",
+            "aliases": [
+              "蓝色背景",
+              "深蓝色底",
+              "蓝色空间"
+            ]
+          },
+          {
+            "id": "white_filaments",
+            "aliases": [
+              "白色光丝",
+              "白色线网",
+              "发光丝线"
+            ]
+          },
+          {
+            "id": "central_glow",
+            "aliases": [
+              "中心亮点",
+              "中央发光区域",
+              "中心光团"
+            ]
+          },
+          {
+            "id": "abstract_fractal",
+            "aliases": [
+              "抽象分形",
+              "网状抽象结构",
+              "分形纹理"
+            ]
+          }
+        ],
+        "forbiddenObservedFacts": [
+          "城市建筑",
+          "人物肖像"
+        ],
+        "requireConditionedGeneration": true,
+        "blindObservation": true
+      },
+      {
+        "id": "media_emperor_watermark",
+        "assetId": "mat_eval_emperor",
+        "prompt": "仅依据随附图片像素，识别人物身份线索、服饰、头饰和所处环境，再创建12秒人物叙事短片。原图作为角色外观参考，规划符合人物身份的新动作。",
+        "expectedObservedFacts": [
+          {
+            "id": "male_character",
+            "aliases": [
+              "男性",
+              "男子",
+              "古装人物"
+            ]
+          },
+          {
+            "id": "yellow_robe",
+            "aliases": [
+              "黄色龙袍",
+              "黄色长袍",
+              "龙纹服饰"
+            ]
+          },
+          {
+            "id": "golden_crown",
+            "aliases": [
+              "金色冠冕",
+              "金冠",
+              "头冠"
+            ]
+          },
+          {
+            "id": "palace_setting",
+            "aliases": [
+              "宫殿",
+              "宫廷建筑",
+              "古建筑"
+            ]
+          }
+        ],
+        "forbiddenObservedFacts": [
+          "现代西装",
+          "办公室"
+        ],
+        "requireConditionedGeneration": true,
+        "blindObservation": true,
+        "interference": "watermark"
+      },
+      {
+        "id": "media_dragon_watermark",
+        "assetId": "mat_eval_dragon",
+        "prompt": "仅依据随附图片像素，识别幻想主体、造型、装饰环境和整体美术语言，再创建12秒东方幻想短片。原图作为主体与风格参考，规划自然的新动作。",
+        "expectedObservedFacts": [
+          {
+            "id": "blue_dragon",
+            "aliases": [
+              "蓝色龙",
+              "蓝龙",
+              "龙形生物"
+            ]
+          },
+          {
+            "id": "golden_horns",
+            "aliases": [
+              "金色龙角",
+              "金色犄角",
+              "龙角"
+            ]
+          },
+          {
+            "id": "red_white_flowers",
+            "aliases": [
+              "红白花朵",
+              "牡丹花",
+              "花卉"
+            ]
+          },
+          {
+            "id": "ornate_style",
+            "aliases": [
+              "华丽装饰",
+              "东方装饰风格",
+              "工笔风格"
+            ]
+          }
+        ],
+        "forbiddenObservedFacts": [
+          "现代汽车",
+          "写字楼"
+        ],
+        "requireConditionedGeneration": true,
+        "blindObservation": true,
+        "interference": "watermark"
+      },
+      {
+        "id": "media_qipao_watermark_checkerboard",
+        "assetId": "mat_eval_qipao",
+        "prompt": "仅依据随附图片像素，识别人物、服装、手持物和背景特征，再创建12秒东方人物短片。原图作为角色外观参考，规划克制的新动作。",
+        "expectedObservedFacts": [
+          {
+            "id": "woman",
+            "aliases": [
+              "女性",
+              "女子",
+              "女人"
+            ]
+          },
+          {
+            "id": "qipao",
+            "aliases": [
+              "旗袍",
+              "中式连衣裙",
+              "中式服装"
+            ]
+          },
+          {
+            "id": "round_fan",
+            "aliases": [
+              "圆扇",
+              "团扇",
+              "手持扇子"
+            ]
+          },
+          {
+            "id": "checkerboard_background",
+            "aliases": [
+              "棋盘格背景",
+              "灰白方格背景",
+              "透明背景网格"
+            ],
+            "interferenceArtifact": true
+          }
+        ],
+        "forbiddenObservedFacts": [
+          "山谷",
+          "汽车"
+        ],
+        "requireConditionedGeneration": true,
+        "blindObservation": true,
+        "interference": "watermark_and_checkerboard"
+      },
+      {
+        "id": "media_bicycle_street_watermark",
+        "assetId": "mat_eval_bicycle_street",
+        "prompt": "仅依据随附图片像素，识别交通工具、建筑立面、所在空间和配色，再创建12秒城市出行短片。原图作为环境参考，规划符合透视关系的新动作。",
+        "expectedObservedFacts": [
+          {
+            "id": "bicycle",
+            "aliases": [
+              "自行车",
+              "单车",
+              "脚踏车"
+            ]
+          },
+          {
+            "id": "electric_scooter",
+            "aliases": [
+              "电动滑板车",
+              "滑板车",
+              "电动踏板车"
+            ]
+          },
+          {
+            "id": "green_pink_wall",
+            "aliases": [
+              "绿色和粉色墙面",
+              "绿粉色墙",
+              "彩色墙面"
+            ]
+          },
+          {
+            "id": "sidewalk",
+            "aliases": [
+              "人行道",
+              "路边",
+              "街道"
+            ]
+          }
+        ],
+        "forbiddenObservedFacts": [
+          "森林山谷",
+          "宫殿"
+        ],
+        "requireConditionedGeneration": true,
+        "blindObservation": true,
+        "interference": "watermark"
+      },
+      {
+        "id": "media_wheat_checkerboard",
+        "assetId": "mat_eval_wheat_field",
+        "prompt": "仅依据随附图片像素，识别主要自然主体、颜色、地平区域和背景纹理，再创建12秒农业主题短片。原图作为主体参考，规划符合自然尺度的运动。",
+        "expectedObservedFacts": [
+          {
+            "id": "wheat",
+            "aliases": [
+              "麦穗",
+              "麦田",
+              "小麦"
+            ]
+          },
+          {
+            "id": "golden_crop",
+            "aliases": [
+              "金黄色作物",
+              "金色麦穗",
+              "黄色农作物"
+            ]
+          },
+          {
+            "id": "field",
+            "aliases": [
+              "田地",
+              "农田",
+              "成片作物"
+            ]
+          },
+          {
+            "id": "checkerboard_background",
+            "aliases": [
+              "棋盘格背景",
+              "灰白方格背景",
+              "透明背景网格"
+            ],
+            "interferenceArtifact": true
+          }
+        ],
+        "forbiddenObservedFacts": [
+          "城市高楼",
+          "人物肖像"
+        ],
+        "requireConditionedGeneration": true,
+        "blindObservation": true,
+        "interference": "checkerboard"
+      }
+    ]
+  },
+  "sampleCatalog": {
+    "version": "v2-sample-understanding-evaluation.v1",
+    "assets": [
+      {
+        "id": "sample_video_1",
+        "type": "video",
+        "repositoryPath": "example_videos/1.mp4",
+        "contentHash": "95c14fa7f6a1af45855f3277d3e027418e87254144ac3184d13944574092d2a9"
+      },
+      {
+        "id": "sample_video_8",
+        "type": "video",
+        "repositoryPath": "example_videos/8.mp4",
+        "contentHash": "e94e7b83083d194720f46a3e87cc901c1e38f9fa0ee17f5a76fbc6f58fcd0651"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "sample_expression_methods_1",
+        "assetId": "sample_video_1",
+        "prompt": "分析样片中发生的内容、表现方法及其时机理由，提取可迁移到其他题材的导演方法。不要只按时间复述镜头。",
+        "minMethodObservations": 2,
+        "minTransferableKnowledge": 1,
+        "expectedContentFacts": [
+          {
+            "id": "mountain_landscape",
+            "aliases": [
+              "山峰",
+              "雪山",
+              "群山",
+              "山地"
+            ],
+            "evidenceRanges": [
+              {
+                "startSec": 0,
+                "endSec": 4
+              },
+              {
+                "startSec": 6,
+                "endSec": 10
+              },
+              {
+                "startSec": 12,
+                "endSec": 16.14
+              }
+            ]
+          },
+          {
+            "id": "lake_water",
+            "aliases": [
+              "湖泊",
+              "湖面",
+              "湖水",
+              "水域"
+            ],
+            "evidenceRanges": [
+              {
+                "startSec": 0,
+                "endSec": 4
+              },
+              {
+                "startSec": 6,
+                "endSec": 16.14
+              }
+            ]
+          },
+          {
+            "id": "town_architecture",
+            "aliases": [
+              "城镇",
+              "村镇",
+              "建筑",
+              "城堡"
+            ],
+            "evidenceRanges": [
+              {
+                "startSec": 4,
+                "endSec": 6
+              },
+              {
+                "startSec": 8,
+                "endSec": 12
+              },
+              {
+                "startSec": 14,
+                "endSec": 16.14
+              }
+            ]
+          }
+        ],
+        "expectedMethodFacts": [
+          {
+            "id": "wide_establishing",
+            "aliases": [
+              "全景",
+              "远景",
+              "广角",
+              "航拍"
+            ],
+            "evidenceRanges": [
+              {
+                "startSec": 0,
+                "endSec": 16.14
+              }
+            ]
+          },
+          {
+            "id": "location_montage",
+            "aliases": [
+              "蒙太奇",
+              "多地点",
+              "景观切换",
+              "场景切换"
+            ],
+            "evidenceRanges": [
+              {
+                "startSec": 0,
+                "endSec": 16.14
+              }
+            ]
+          }
+        ],
+        "forbiddenClaims": [
+          "室内访谈",
+          "人物对话"
+        ],
+        "minExpectedContentFacts": 2,
+        "minExpectedMethodFacts": 1
+      },
+      {
+        "id": "sample_expression_methods_8",
+        "assetId": "sample_video_8",
+        "prompt": "分析样片如何建立注意力、揭示信息、组织运镜与节奏，并给出有证据的可迁移创作方法。不要机械复制镜头数量。",
+        "minMethodObservations": 2,
+        "minTransferableKnowledge": 1,
+        "expectedContentFacts": [
+          {
+            "id": "flowers",
+            "aliases": [
+              "花朵",
+              "花卉",
+              "樱花",
+              "郁金香",
+              "荷花"
+            ],
+            "evidenceRanges": [
+              {
+                "startSec": 0,
+                "endSec": 15.67
+              }
+            ]
+          },
+          {
+            "id": "spring_nature",
+            "aliases": [
+              "春天",
+              "春季",
+              "春日",
+              "自然景色"
+            ],
+            "evidenceRanges": [
+              {
+                "startSec": 0,
+                "endSec": 15.67
+              }
+            ]
+          },
+          {
+            "id": "onscreen_text",
+            "aliases": [
+              "字幕",
+              "文字",
+              "文案"
+            ],
+            "evidenceRanges": [
+              {
+                "startSec": 0,
+                "endSec": 15.67
+              }
+            ]
+          }
+        ],
+        "expectedMethodFacts": [
+          {
+            "id": "flower_closeups",
+            "aliases": [
+              "特写",
+              "近景",
+              "浅景深",
+              "虚化"
+            ],
+            "evidenceRanges": [
+              {
+                "startSec": 2,
+                "endSec": 4
+              },
+              {
+                "startSec": 8,
+                "endSec": 15.67
+              }
+            ]
+          },
+          {
+            "id": "seasonal_montage",
+            "aliases": [
+              "蒙太奇",
+              "花卉切换",
+              "色彩切换",
+              "多种花"
+            ],
+            "evidenceRanges": [
+              {
+                "startSec": 0,
+                "endSec": 15.67
+              }
+            ]
+          }
+        ],
+        "forbiddenClaims": [
+          "城市车流",
+          "室内会议"
+        ],
+        "minExpectedContentFacts": 2,
+        "minExpectedMethodFacts": 1
+      }
+    ]
+  },
+  "failureLedger": {
+    "version": "v2-evaluation-failure-ledger.v1",
+    "entries": [
+      {
+        "rootCause": "model_reconfirm",
+        "status": "needs_live_rerun",
+        "verification": "profile:live",
+        "references": [
+          "case:subtitle_local_edit",
+          "case:transition_local_edit"
+        ]
+      },
+      {
+        "rootCause": "model_intent_no_patch",
+        "status": "needs_live_rerun",
+        "verification": "profile:live",
+        "references": [
+          "case:scene_content_edit"
+        ]
+      },
+      {
+        "rootCause": "model_scope_choice",
+        "status": "needs_live_rerun",
+        "verification": "profile:stability",
+        "references": [
+          "case:edit_then_dry_render"
+        ]
+      },
+      {
+        "rootCause": "model_requirement_memory_mix",
+        "status": "needs_live_rerun",
+        "verification": "profile:live",
+        "references": [
+          "case:confirmed_requirement_reaches_planner"
+        ]
+      },
+      {
+        "rootCause": "model_memory_write",
+        "status": "needs_live_rerun",
+        "verification": "profile:live",
+        "references": [
+          "case:explicit_user_preference",
+          "case:tentative_preference_is_candidate"
+        ]
+      },
+      {
+        "rootCause": "model_state_action_missing",
+        "status": "needs_live_rerun",
+        "verification": "profile:live",
+        "references": [
+          "case:requirement_lifecycle"
+        ]
+      },
+      {
+        "rootCause": "model_render_refusal",
+        "status": "needs_real_media",
+        "verification": "profile:canary",
+        "references": [
+          "case:canary_text_initial",
+          "case:canary_caption_rerender",
+          "case:canary_brief_rerender"
+        ]
+      },
+      {
+        "rootCause": "retrieval_limit",
+        "status": "deferred",
+        "verification": "profile:memory_retrieval",
+        "references": [
+          "query:q_multiple_relevant"
+        ]
+      }
+    ]
+  },
+  "reviewRuleRegistry": {
+    "version": "v2-evaluation-review-rules.v1",
+    "rules": [
+      {
+        "name": "tool receipt reply truth",
+        "layer": "invariant",
+        "reverseCase": "工具失败或部分成功时不得保留执行前的完成声明",
+        "verification": "director_multiturn"
+      },
+      {
+        "name": "revision scope isolation",
+        "layer": "invariant",
+        "reverseCase": "局部修订不得修改目标范围之外的镜头、字幕、素材或转场",
+        "verification": "timeline_service"
+      },
+      {
+        "name": "server resource binding",
+        "layer": "protocol",
+        "reverseCase": "模型不得覆盖素材、草稿、revision、用户和 Provider 参数",
+        "verification": "material_resolver"
+      },
+      {
+        "name": "semantic outcome review",
+        "layer": "semantic",
+        "reverseCase": "语义正确的改写不能因未命中预设词而判失败",
+        "verification": "revision_outcome"
+      },
+      {
+        "name": "delivery authorization",
+        "layer": "invariant",
+        "reverseCase": "正式交付必须来自当前轮明确授权，历史文本不能自行触发执行",
+        "verification": "director_multiturn"
+      },
+      {
+        "name": "multimodal input ownership",
+        "layer": "protocol",
+        "reverseCase": "图片像素和样例事实由服务端绑定，模型只引用权威素材 ID",
+        "verification": "structured_protocol"
+      }
+    ]
+  },
+  "manualRubric": {
+    "version": "v2-manual-rubric.v1",
+    "dimensions": [
+      {
+        "id": "plan_coherence_score10",
+        "label": "方案叙事连贯性",
+        "description": "总纲、镜头职责、节奏和收束是否围绕同一创作方向。",
+        "min": 0,
+        "max": 10,
+        "anchors": {
+          "0": "割裂且不可用",
+          "2": "多数镜头与总纲冲突",
+          "5": "主线可辨但多处衔接生硬",
+          "8": "整体连贯，仅有轻微节奏问题",
+          "10": "方向、镜头职责与收束高度统一"
+        }
+      },
+      {
+        "id": "reference_use_quality_score10",
+        "label": "图片参考运用质量",
+        "description": "是否保留原图身份和环境事实并合理扩展动作。",
+        "min": 0,
+        "max": 10,
+        "anchors": {
+          "0": "未使用或完全脱离参考",
+          "2": "只保留少量泛化文字事实",
+          "5": "能辨认参考但扩展机械",
+          "8": "身份与环境稳定且动作合理",
+          "10": "参考融合自然并显著服务叙事"
+        }
+      },
+      {
+        "id": "sample_method_transfer_score10",
+        "label": "样例方法迁移质量",
+        "description": "是否迁移表现方法而非机械复制镜头数量与内容。",
+        "min": 0,
+        "max": 10,
+        "anchors": {
+          "0": "未使用或错误复刻",
+          "2": "只复制表面结构",
+          "5": "迁移一部分方法但理由薄弱",
+          "8": "多种方法与新任务合理结合",
+          "10": "方法、时机和目的均实现高质量迁移"
+        }
+      },
+      {
+        "id": "video_narrative_coherence_score10",
+        "label": "成片叙事连贯性",
+        "description": "跨镜头主体、环境、动作和情绪是否延续。",
+        "min": 0,
+        "max": 10,
+        "anchors": {
+          "0": "完全割裂",
+          "2": "多数镜头像独立片段",
+          "5": "主线可辨但连续性一般",
+          "8": "主体、动作和情绪基本连续",
+          "10": "叙事与视听推进完整统一"
+        }
+      },
+      {
+        "id": "visual_quality_score10",
+        "label": "成片视觉质量",
+        "description": "运动自然度、构图、清晰度、视觉瑕疵和转场完整性。",
+        "min": 0,
+        "max": 10,
+        "anchors": {
+          "0": "无法观看",
+          "2": "严重错位、重复或破图",
+          "5": "基本可看但瑕疵明显",
+          "8": "运动和构图稳定，仅有轻微瑕疵",
+          "10": "视觉完成度高且无明显瑕疵"
+        }
+      },
+      {
+        "id": "edit_fidelity_score10",
+        "label": "二次编辑忠实度",
+        "description": "目标修改是否落实且无关内容是否保持。",
+        "min": 0,
+        "max": 10,
+        "anchors": {
+          "0": "目标未改且破坏原方案",
+          "2": "只实现少量要求并引入明显回归",
+          "5": "主要修改完成但存在范围漂移",
+          "8": "目标准确落实且无关内容基本保持",
+          "10": "精准局部修改，无任何非目标变化"
+        }
+      }
+    ]
+  },
+  "summary": {
+    "agentSuites": 4,
+    "agentCases": 34,
+    "agentTurns": 67,
+    "retrievalSuites": 1,
+    "retrievalQueries": 25,
+    "mediaTasks": 12,
+    "sampleTasks": 2,
+    "deterministicChecks": 17,
+    "canaryRenderRuns": 5,
+    "maxProviderSubmissions": 20,
+    "maxGeneratedSeconds": 60
+  },
+  "builtAt": "2026-08-12T05:35:47.262Z",
+  "datasetHash": "cbc4a4074051b5020f203dcf9806f7239ddfa190bbaa02b1d6aaf2f63db5a691"
+}

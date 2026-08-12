@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -14,17 +13,7 @@ process.env.DPL304_LOCAL_DATA_DIR = dataDir
 process.env.RENDER_COMPONENTS_DIR = path.join(dataDir, 'render-components')
 
 try {
-  // 0. Dataset shape gate: the sci-fi suite must contain at least 50 turns.
-  const suite = JSON.parse(await readFile(
-    new URL('../evals/v2-agent/sci-fi-timeline-editing.v1.json', import.meta.url),
-    'utf8',
-  )) as { cases: Array<{ id: string; category: string; turns: Array<{ prompt: string; expected: { tools?: string[]; kind?: string } }> }> }
-  const turnCount = suite.cases.reduce((sum, item) => sum + item.turns.length, 0)
-  assert.ok(turnCount >= 50, `sci-fi suite must have >= 50 turns, got ${turnCount}`)
-  assert.ok(new Set(suite.cases.map((item) => item.category)).size >= 4)
-  assert.ok(suite.cases.every((item) => item.turns.every((turn) => Array.isArray(turn.expected.tools) && turn.expected.kind)))
-
-  // 1. A five-scene sci-fi base timeline with two material jobs and captions.
+  // A five-scene sci-fi base timeline with two material jobs and captions.
   const base = {
     schema_version: 'remotion_timeline_spec.v1',
     task_id: 'sci_fi_base',

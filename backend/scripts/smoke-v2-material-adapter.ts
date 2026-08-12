@@ -18,6 +18,7 @@ const request = {
   jobId: 'job_generate_video',
   shotId: 'shot_001',
   type: 'generate_video' as const,
+  durationSec: 5,
   prompt: 'mock generated video',
   outputAssetId: 'generated_video_asset',
 }

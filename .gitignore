@@ -49,6 +49,7 @@ backend/uploads/
 backend/renders/
 backend/v2-renders/
 backend/data/
+backend/evaluation/reports/
 tmp/
 output/
 
