@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 
 import type { InputAttachment } from '@/stores/creationStore'
+import type { DirectorTimelineRevisionIntent, DirectorTimelineRevisionReceipt } from '@shared/types/director-stream'
 interface OutlineSegment {
   id?: string
   title?: string
@@ -15,6 +16,7 @@ export type DirectorMessageKind =
   | 'progress'
   | 'error'
   | 'generation'
+  | 'revision'
 
 export type DirectorMessageStatus = 'pending' | 'streaming' | 'done' | 'error'
 
@@ -27,6 +29,10 @@ export interface DirectorChatMessage {
   outline?: OutlineSegment[]
   thoughts?: string[]
   recoverySuggestions?: Array<{ label: string; prompt: string }>
+  revisionIntent?: DirectorTimelineRevisionIntent
+  revisionConfirmationId?: string
+  revisionReceipt?: DirectorTimelineRevisionReceipt
+  revisionDecisionStatus?: 'pending' | 'confirming' | 'rejected'
   createdAt: number
   status?: DirectorMessageStatus
 }

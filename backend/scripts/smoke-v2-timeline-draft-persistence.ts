@@ -146,10 +146,47 @@ assert.equal(resolvedPending.revision, unrelatedSave.revision + 1)
 assert.deepEqual(resolvedPending.pendingTimelineRevisions, [])
 const resolvedSource = await repository.getRevision(draft.id, resolvedPending.revision, 1)
 assert.ok(resolvedSource)
-const abandoned = await repository.markPendingRevision({
+const blockedDeliverySpec = {
+  ...resolvedSource.spec,
+  material_jobs: [{
+    id: 'missing_user_material', scene_id: resolvedSource.spec.scenes[0]!.id,
+    type: 'request_user_material' as const, status: 'planned' as const,
+  }],
+}
+const blockedDelivery = await repository.saveDraft({
   draftId: draft.id,
   userId: 1,
   baseRevision: resolvedPending.revision,
+  spec: blockedDeliverySpec,
+  kind: 'user_edit',
+})
+let blockedDeliveryExecuted = false
+await assert.rejects(
+  executeV2TimelineDraftRun({
+    repository,
+    draftId: draft.id,
+    revision: blockedDelivery.revision,
+    userId: 1,
+    idempotencyKey: `blocked-delivery-render-${Date.now()}`,
+    runTimeline: async () => {
+      blockedDeliveryExecuted = true
+      throw new Error('blocked delivery must not execute')
+    },
+  }),
+  /仍需要用户素材/,
+)
+assert.equal(blockedDeliveryExecuted, false, 'direct HTTP/runner calls must use the same delivery preflight')
+const renderableAgain = await repository.saveDraft({
+  draftId: draft.id,
+  userId: 1,
+  baseRevision: blockedDelivery.revision,
+  spec: resolvedSource.spec,
+  kind: 'user_edit',
+})
+const abandoned = await repository.markPendingRevision({
+  draftId: draft.id,
+  userId: 1,
+  baseRevision: renderableAgain.revision,
   callId: 'abandoned_patch_call',
   instruction: 'an edit the user no longer wants',
 })
@@ -157,16 +194,16 @@ assert.equal(abandoned?.pendingTimelineRevisions.length, 1)
 const dismissed = await repository.dismissPendingRevision({
   draftId: draft.id,
   userId: 1,
-  baseRevision: resolvedPending.revision,
+  baseRevision: renderableAgain.revision,
   callId: 'abandoned_patch_call',
 })
-assert.equal(dismissed?.revision, resolvedPending.revision, 'dismissal must not create a fake timeline revision')
+assert.equal(dismissed?.revision, renderableAgain.revision, 'dismissal must not create a fake timeline revision')
 assert.deepEqual(dismissed?.pendingTimelineRevisions, [])
 await assert.rejects(
   repository.dismissPendingRevision({
     draftId: draft.id,
     userId: 1,
-    baseRevision: resolvedPending.revision,
+    baseRevision: renderableAgain.revision,
     callId: 'unknown_pending_call',
   }),
   /pending timeline revision/i,
@@ -195,7 +232,7 @@ await repository.completeRenderRun({
 
 const reloaded = await repository.getDraft(draft.id, 1)
 assert.ok(reloaded)
-assert.equal(reloaded.revision, resolvedPending.revision)
+assert.equal(reloaded.revision, renderableAgain.revision)
 assert.equal(reloaded.spec.scenes[0]?.title, '用户保存的草稿镜头')
 assert.notEqual(reloaded.spec.scenes[0]?.title, resolvedSpec.scenes[0]?.title)
 
@@ -203,7 +240,7 @@ let receivedOverride: unknown
 const executed = await executeV2TimelineDraftRun({
   repository,
   draftId: draft.id,
-  revision: resolvedPending.revision,
+  revision: renderableAgain.revision,
   userId: 1,
   idempotencyKey: `persistence-render-${Date.now()}`,
   runTimeline: async (input) => {
@@ -226,7 +263,7 @@ const executed = await executeV2TimelineDraftRun({
 })
 assert.deepEqual(receivedOverride, resolvedSource.spec, 'RenderRun must consume the saved revision as its exact override')
 assert.equal(executed.draftId, draft.id)
-assert.equal(executed.draftRevision, resolvedPending.revision)
+assert.equal(executed.draftRevision, renderableAgain.revision)
 assert.equal(executed.outputUrl?.includes(executed.renderRunId), true)
 
 const concurrentDraft = await repository.createDraft({

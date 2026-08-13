@@ -13,11 +13,21 @@ export interface InputAttachment {
   tags?: string[]
 }
 
+export interface AttachmentUpload {
+  id: string
+  name: string
+  type: InputAttachment['type']
+  status: 'uploading' | 'failed'
+  error?: string
+  file?: File
+}
+
 interface CreationState {
   sampleUrl: string
   sampleName: string
   inputText: string
   attachments: InputAttachment[]
+  attachmentUploads: AttachmentUpload[]
   pendingAttachmentIds: string[]
   materialsSnapshotAuthoritative: boolean
   sampleSnapshotAuthoritative: boolean
@@ -38,6 +48,11 @@ interface CreationState {
   acceptServerMaterials: (materials: DirectorMaterialContext[], acknowledgeLocalChanges?: boolean) => void
   setInputText: (text: string) => void
   addAttachment: (item: InputAttachment) => void
+  beginAttachmentUpload: (item: Omit<AttachmentUpload, 'status' | 'error'>) => void
+  completeAttachmentUpload: (id: string) => void
+  failAttachmentUpload: (id: string, error: string) => void
+  retryAttachmentUpload: (id: string) => void
+  removeAttachmentUpload: (id: string) => void
   removeAttachment: (id: string) => void
   clearInputTray: () => void
   setAspectRatio: (aspectRatio: DirectorAspectRatio) => void
@@ -67,6 +82,7 @@ export const useCreationStore = create<CreationState>((set, get) => ({
   sampleName: '',
   inputText: '',
   attachments: [],
+  attachmentUploads: [],
   pendingAttachmentIds: [],
   materialsSnapshotAuthoritative: false,
   sampleSnapshotAuthoritative: false,
@@ -158,6 +174,26 @@ export const useCreationStore = create<CreationState>((set, get) => ({
       materialsSnapshotAuthoritative: true,
     }))
   },
+  beginAttachmentUpload: (item) => set((state) => ({
+    attachmentUploads: [
+      ...state.attachmentUploads.filter((upload) => upload.id !== item.id),
+      { ...item, status: 'uploading' },
+    ],
+  })),
+  completeAttachmentUpload: (id) => set((state) => ({
+    attachmentUploads: state.attachmentUploads.filter((upload) => upload.id !== id),
+  })),
+  failAttachmentUpload: (id, error) => set((state) => ({
+    attachmentUploads: state.attachmentUploads.map((upload) =>
+      upload.id === id ? { ...upload, status: 'failed', error } : upload),
+  })),
+  retryAttachmentUpload: (id) => set((state) => ({
+    attachmentUploads: state.attachmentUploads.map((upload) =>
+      upload.id === id ? { ...upload, status: 'uploading', error: undefined } : upload),
+  })),
+  removeAttachmentUpload: (id) => set((state) => ({
+    attachmentUploads: state.attachmentUploads.filter((upload) => upload.id !== id),
+  })),
   removeAttachment: (id) =>
     set((s) => ({
       attachments: s.attachments.filter((a) => a.id !== id),
@@ -185,6 +221,7 @@ export const useCreationStore = create<CreationState>((set, get) => ({
       inputText: inputText ?? '',
       isSampleParsed: isSampleParsed ?? false,
       pendingAttachmentIds: [],
+      attachmentUploads: [],
       materialsSnapshotAuthoritative: false,
       sampleSnapshotAuthoritative: false,
       showSampleInInputTray: false,

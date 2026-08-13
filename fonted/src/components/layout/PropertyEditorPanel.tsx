@@ -1,15 +1,18 @@
 import { SlidersHorizontal } from 'lucide-react'
 
 import { V2SamplePropertyInspector } from '@/components/layout/V2SamplePropertyInspector'
+import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { v2TransitionDisplayText } from '@/lib/v2-timeline-ui'
 import {
   buildV2PlanPresentation,
   resolveV2PlanSceneIdFromClip,
+  v2DeliveryStateLabel,
   type V2PlanScenePresentation,
   type V2PlanVisibleText,
 } from '@/services/director/v2DirectorDraftWorkspace'
 import { useEditorStore } from '@/stores/editorStore'
+import { useCreationStore } from '@/stores/creationStore'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 
 /** V2-only inspector. Sample facts are read-only; timeline scene text stays editable. */
@@ -24,6 +27,7 @@ function V2TimelinePropertyInspector() {
   const preview = useV2TimelineStore((state) => state.preview)
   const selectedClipId = useV2TimelineStore((state) => state.selectedClipId)
   const updateSpec = useV2TimelineStore((state) => state.updateSpec)
+  const setInputText = useCreationStore((state) => state.setInputText)
   const sceneId = spec ? resolveV2PlanSceneIdFromClip(spec, selectedClipId) : undefined
   const scene = sceneId ? spec?.scenes.find((item) => item.id === sceneId) : undefined
   const presentation = spec ? buildV2PlanPresentation(spec, preview?.review.scenes) : undefined
@@ -40,7 +44,7 @@ function V2TimelinePropertyInspector() {
           <SlidersHorizontal className="h-4 w-4 text-violet-300" />
           <div>
             <h2 className="text-sm font-semibold text-zinc-100">V2 创作详情</h2>
-            <p className="mt-0.5 text-[10px] text-zinc-500">查看模型计划，并补充本镜头的修改要求</p>
+            <p className="mt-0.5 text-[10px] text-zinc-500">查看模型计划，并记录不会自动执行的镜头备注</p>
           </div>
         </div>
         {!spec ? (
@@ -56,8 +60,17 @@ function V2TimelinePropertyInspector() {
             <Detail label="镜头内容" value={sceneFacts?.description ?? review?.description_zh ?? review?.source_zh} />
             {sceneFacts ? <SceneFacts scene={sceneFacts} selectedOverlayId={selectedOverlayId} /> : null}
             <label className="block space-y-1.5">
-              <span className="text-[10px] font-medium text-zinc-500">我的修改要求</span>
+              <span className="text-[10px] font-medium text-zinc-500">镜头备注（不会自动执行）</span>
               <Textarea value={scene.note ?? ''} placeholder="例如：保留主体，改为更克制的字幕和更慢的运镜" className="min-h-[96px] text-xs" onChange={(event) => updateSpec((current) => ({ ...current, scenes: current.scenes.map((item) => item.id === scene.id ? { ...item, note: event.target.value } : item) }))} />
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={!scene.note?.trim()}
+                onClick={() => setInputText(`请修改镜头“${sceneFacts?.title ?? scene.id}”：${scene.note?.trim()}。保留未提及内容不变。`)}
+              >
+                将备注带入对话
+              </Button>
             </label>
           </div>
         )}
@@ -80,7 +93,8 @@ function SceneFacts({
         <div className="grid grid-cols-2 gap-2 text-xs">
           <Fact label="画面方式" value={sceneTypeLabel(scene.sceneType)} />
           <Fact label="镜头职责" value={visualRoleLabel(scene.visualRole)} />
-          <Fact label="素材/生成" value={scene.assetLabel ?? materialPlanLabel(scene)} />
+          <Fact label="素材/生成" value={scene.sourceLabel} />
+          <Fact label="交付状态" value={v2DeliveryStateLabel(scene.deliveryState)} />
           <Fact label="镜头运动" value={motionLabel(scene.motion)} />
         </div>
         {scene.materialPlan?.prompt ? (
@@ -193,15 +207,6 @@ function motionLabel(motion: V2PlanScenePresentation['motion']) {
     pan_left: '向左平移',
     pan_right: '向右平移',
   }[motion]
-}
-
-function materialPlanLabel(scene: V2PlanScenePresentation) {
-  if (!scene.materialPlan) return 'Remotion 直接编排'
-  return {
-    reuse_asset: '复用已有素材',
-    generate_video: '计划生成 AI 视频',
-    request_user_material: '等待用户素材',
-  }[scene.materialPlan.type]
 }
 
 function overlayTypeLabel(type: V2PlanVisibleText['type']) {

@@ -8,6 +8,7 @@ import { v2TransitionDisplayText } from '@/lib/v2-timeline-ui'
 import {
   buildV2PlanPresentation,
   resolveV2PlanSceneIdFromClip,
+  v2DeliveryStateLabel,
   type V2PlanScenePresentation,
   type V2PlanVisibleText,
 } from '@/services/director/v2DirectorDraftWorkspace'
@@ -135,6 +136,7 @@ function V2PlanReview({
             <h4 className="text-base font-semibold text-zinc-100">{active.title}</h4>
             <FactBadge>{formatTimeRange(active.startSec, active.startSec + active.durationSec)}</FactBadge>
             <FactBadge>{sceneTypeLabel(active.sceneType)}</FactBadge>
+            <FactBadge>{v2DeliveryStateLabel(active.deliveryState)}</FactBadge>
           </div>
           <p className="mt-2 text-sm leading-6 text-zinc-300">
             {active.description ?? '该镜头尚未填写创作说明。'}
@@ -145,7 +147,7 @@ function V2PlanReview({
           <div className="grid gap-2 text-xs text-zinc-300 sm:grid-cols-2">
             <PlanFact label="画面方式" value={sceneTypeLabel(active.sceneType)} />
             <PlanFact label="镜头职责" value={visualRoleLabel(active.visualRole)} />
-            <PlanFact label="素材来源" value={active.assetLabel ?? materialPlanLabel(active)} />
+            <PlanFact label="素材来源" value={active.sourceLabel} />
             <PlanFact label="镜头运动" value={motionLabel(active.motion)} />
           </div>
           {active.materialPlan?.prompt ? (
@@ -277,15 +279,6 @@ function motionLabel(motion: V2PlanScenePresentation['motion']) {
     pan_left: '向左平移',
     pan_right: '向右平移',
   }[motion]
-}
-
-function materialPlanLabel(scene: V2PlanScenePresentation) {
-  if (!scene.materialPlan) return 'Remotion 直接编排'
-  return {
-    reuse_asset: '复用已有素材',
-    generate_video: '计划生成 AI 视频',
-    request_user_material: '等待用户素材',
-  }[scene.materialPlan.type]
 }
 
 function overlayTypeLabel(type: V2PlanVisibleText['type']) {

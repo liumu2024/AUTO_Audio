@@ -32,6 +32,7 @@ import {
 import {
   deleteV2TimelineDraft,
   getV2TimelineDraft,
+  getV2TimelineDraftReadiness,
   getV2TimelineDrafts,
   postV2TimelineDraftPreview,
   postV2TimelineDraftRun,
@@ -72,6 +73,7 @@ app.post('/api/v2/sample/analyze', postV2SampleAnalyze)
 app.post('/api/v2/timeline-drafts/preview', postV2TimelineDraftPreview)
 app.get('/api/v2/timeline-drafts', getV2TimelineDrafts)
 app.get('/api/v2/timeline-drafts/:draftId', getV2TimelineDraft)
+app.get('/api/v2/timeline-drafts/:draftId/readiness', getV2TimelineDraftReadiness)
 app.put('/api/v2/timeline-drafts/:draftId', putV2TimelineDraft)
 app.post('/api/v2/timeline-drafts/:draftId/runs', postV2TimelineDraftRun)
 app.get('/api/v2/timeline-drafts/:draftId/runs/:runId', getV2TimelineDraftRun)

@@ -1,4 +1,38 @@
 import type { DirectorContext } from './director-context.js';
+import type { DirectorTimelineRevisionIntent } from './director-stream.js';
+import type { DirectorConversationRuntime } from '../lib/director-understanding.js';
+export interface DirectorPendingTimelineRevisionConfirmation {
+    confirmationId: string;
+    draftId: string;
+    baseRevision: number;
+    originalTurnRequestId: string;
+    originalRequest: string;
+    intent: 'revise' | 'execute';
+    skillRequests: Array<{
+        skillId: string;
+        purpose: string;
+    }>;
+    /** Requirement action refs already committed by the proposal turn. */
+    resolvedStateActionRefs: string[];
+    toolRequests: Array<{
+        ref: string;
+        toolId: string;
+        skillId: string;
+        arguments: Record<string, unknown>;
+        requestedMode: 'preview' | 'execute';
+        dependsOn: string[];
+    }>;
+    revisionIntents: DirectorTimelineRevisionIntent[];
+    /** Planner-affecting facts frozen when the user reviewed this proposal. */
+    executionContext: {
+        context: DirectorContext;
+        runtime: DirectorConversationRuntime;
+        confirmedRequirements: ConfirmedRequirement[];
+        selectedItemId?: string;
+        recalledCreativeMemories: string[];
+        recalledCreativeKnowledge: string[];
+    };
+}
 export type DirectorWorkspaceTurnRole = 'user' | 'assistant' | 'system';
 export interface DirectorWorkspaceTurn {
     role: DirectorWorkspaceTurnRole;
@@ -38,6 +72,8 @@ export interface DirectorWorkspaceState {
         callId: string;
         baseRevision: number;
     }>;
+    /** Server-validated revision plan waiting for an explicit UI decision. */
+    pendingTimelineRevisionConfirmation?: DirectorPendingTimelineRevisionConfirmation;
     rollingSummary: string;
     turns: DirectorWorkspaceTurn[];
     responseId?: string;

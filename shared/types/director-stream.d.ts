@@ -3,6 +3,30 @@ import type { DirectorSessionState } from './director-state.js';
 import type { DirectorWorkspaceState } from './director-workspace-session.js';
 import type { RemotionTimelineSpecV1 } from './remotion-timeline-spec.v1.js';
 export type DirectorSurfaceMode = 'smalltalk' | 'help' | 'capability_intro' | 'creative_guide' | 'task' | 'edit' | 'repair' | 'unknown';
+export interface DirectorTimelineRevisionIntent {
+    callId: string;
+    originalRequest: string;
+    instruction: string;
+    scope: 'subtitle' | 'scene' | 'structure' | 'visual_strategy' | 'transition' | 'global';
+    targetIds: string[];
+    globalMode?: 'brief_update' | 'full_replan';
+    durationMode?: 'preserve_range' | 'resize_timeline';
+    expectedImpact: string;
+    protectedBoundary: string;
+}
+export interface DirectorTimelineRevisionReceipt extends DirectorTimelineRevisionIntent {
+    status: 'succeeded' | 'failed' | 'skipped';
+    summary: string;
+    revision?: number;
+    actualDiff?: {
+        scenes: string[];
+        visibleText: string[];
+        transitions: string[];
+        audio: string[];
+        other: string[];
+        hasAudienceFacingChange: boolean;
+    };
+}
 export type DirectorAgentStreamEvent = {
     type: 'turn_receipt';
     turnRequestId: string;
@@ -48,6 +72,9 @@ export type DirectorAgentStreamEvent = {
     requestedMode: 'preview' | 'execute';
     effectiveMode: 'preview' | 'execute';
     modeNormalized: boolean;
+    revisionIntent?: DirectorTimelineRevisionIntent;
+    /** One server-owned decision id may cover several revision cards in the same plan. */
+    revisionConfirmationId?: string;
 } | {
     type: 'tool_started';
     callId: string;
@@ -70,6 +97,7 @@ export type DirectorAgentStreamEvent = {
     toolId: string;
     ok: boolean;
     summary: string;
+    revisionReceipt?: DirectorTimelineRevisionReceipt;
     result?: Record<string, unknown>;
     draft?: {
         draftId: string;

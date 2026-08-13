@@ -35,6 +35,10 @@ export interface DirectorAgentChatPayload {
   workspaceSessionId?: string
   turnRequestId?: string
   workspaceStateRevision?: number
+  timelineRevisionDecision?: {
+    confirmationId: string
+    action: 'confirm' | 'reject'
+  }
 }
 
 export interface DirectorWorkspaceSessionResponse {
@@ -136,6 +140,15 @@ export interface V2TimelineDraftDto {
   pendingTimelineRevisions?: Array<{ instruction: string; callId: string; baseRevision: number }>
   createdAt: string
   updatedAt: string
+}
+
+export interface V2TimelineDraftReadinessDto {
+  draftId: string
+  revision: number
+  status: 'ready' | 'blocked'
+  missing: Array<{ code: string; description: string }>
+  alternatives: string[]
+  generationJobCount: number
 }
 
 export interface V2TimelineDraftRevisionSummaryDto {
@@ -465,6 +478,12 @@ export async function previewV2TimelineDraft(
 export async function getV2TimelineDraft(draftId: string) {
   return request<{ draft: V2TimelineDraftDetailDto }>(
     `/api/v2/timeline-drafts/${encodeURIComponent(draftId)}`,
+  )
+}
+
+export async function getV2TimelineDraftReadiness(draftId: string, revision: number) {
+  return request<V2TimelineDraftReadinessDto>(
+    `/api/v2/timeline-drafts/${encodeURIComponent(draftId)}/readiness?revision=${revision}`,
   )
 }
 

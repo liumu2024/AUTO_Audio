@@ -38,6 +38,24 @@ try {
   const execute = async function* () {
     executions += 1
     yield { type: 'thought', title: '处理中', content: '仅首次执行可见' } as const
+    yield {
+      type: 'tool_proposed', callId: 'patch_call', toolId: 'timeline.patch',
+      requestedMode: 'preview', effectiveMode: 'preview', modeNormalized: false,
+      revisionIntent: {
+        callId: 'patch_call', originalRequest: '修改字幕', instruction: '修改字幕', scope: 'subtitle',
+        targetIds: ['caption_1'], expectedImpact: '目标字幕', protectedBoundary: '其他内容保持不变',
+      },
+    } as const
+    yield {
+      type: 'tool_result', actionRef: 'patch', status: 'succeeded', callId: 'patch_call',
+      toolId: 'timeline.patch', ok: true, summary: '字幕已修改',
+      revisionReceipt: {
+        callId: 'patch_call', originalRequest: '修改字幕', instruction: '修改字幕', scope: 'subtitle',
+        targetIds: ['caption_1'], expectedImpact: '目标字幕', protectedBoundary: '其他内容保持不变',
+        status: 'succeeded', summary: '字幕已修改',
+        actualDiff: { scenes: [], visibleText: ['caption_1'], transitions: [], audio: [], other: [], hasAudienceFacingChange: true },
+      },
+    } as const
     yield { type: 'assistant_reply', message: '方案已完成' } as const
     yield { type: 'done' } as const
   }
@@ -63,7 +81,11 @@ try {
   assert.equal(executions, 1)
   assert.deepEqual(
     replayEvents.map((event) => event.type),
-    ['turn_receipt', 'assistant_reply', 'done'],
+    ['turn_receipt', 'tool_proposed', 'tool_result', 'assistant_reply', 'done'],
+  )
+  assert.equal(
+    replayEvents.find((event) => event.type === 'tool_result')?.revisionReceipt?.actualDiff?.visibleText[0],
+    'caption_1',
   )
   assert.equal(replayEvents[0]?.type === 'turn_receipt' && replayEvents[0].status, 'replayed')
 

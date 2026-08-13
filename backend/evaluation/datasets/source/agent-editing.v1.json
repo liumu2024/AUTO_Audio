@@ -94,7 +94,8 @@
       "fixture": "draft",
       "metricIds": ["scenario_goal_completion_rate", "independent_action_completion_rate", "dependency_execution_accuracy_rate", "artifact_requirement_realization_rate"],
       "turns": [
-        { "prompt": "把第三镜头字幕改为“安心，不止在门前”，修改成功后渲染。", "expected": { "tools": ["timeline.patch", "timeline.render"], "kind": "execute", "toolSuccess": true, "dryRender": true, "draftChange": true, "timeline": { "requiredVisibleText": ["安心，不止在门前"] } } }
+        { "prompt": "把第三镜头字幕改为“安心，不止在门前”，其他内容不变。", "expected": { "tools": ["timeline.patch"], "kind": "revise", "toolSuccess": true, "draftChange": true, "revisionScope": "subtitle", "timeline": { "requiredVisibleText": ["安心，不止在门前"] } } },
+        { "prompt": "正式渲染刚才确认后的版本。", "expected": { "tools": ["timeline.render"], "kind": "execute", "toolSuccess": true, "dryRender": true, "draftChange": false } }
       ]
     },
     {

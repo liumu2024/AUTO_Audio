@@ -27,6 +27,8 @@ npm.cmd run eval:v2:run -- --profile stability
 默认及 live/stability 均禁止视频生成 Provider。`live` 调用 Director、Planner、图片理解与离线回复 Judge，但 `V2_VIDEO_GENERATION_PROVIDER=none`；`stability` 只对 manifest 中列出的关键 case 连续运行三次。
 报告同时记录 Git commit、工作树是否干净和 diff hash；live、stability、canary 在启动前要求 clean worktree，结束时再次核对 commit 与 diff hash，避免先产生 Provider 费用再失败，或把混合代码结果归到错误 commit。
 
+局部修订评测遵循正式 UI 的两阶段协议：首轮只收集并持久化 `timeline.patch` 提案，确认没有 Tool 提前执行后，运行器才模拟同一用户点击“确认执行”，并以确认后的真实 revision、Receipt 和 Trace 计分。只有 case 明确期望 `timeline.patch` 时才会确认；意外提案不会被评测器自动批准。修改与正式渲染仍是两个独立用户意图，评测数据不会用一次确认同时授权高成本渲染。
+
 少量真实成片只能显式执行：
 
 ```powershell

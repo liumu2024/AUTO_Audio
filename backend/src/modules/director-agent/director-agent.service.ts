@@ -19,7 +19,7 @@ import {
   deliveryAuthorizationFromDirectorDecision,
   pendingDismissalAuthorizationFromDirectorDecision,
 } from '../../pipeline-v2/agent-tools/authorization.js'
-import { routeDirectorIntentWithLlm } from './llm-intent-router.js'
+import { routeDirectorIntentWithLlm, type LlmIntentRouterOutput } from './llm-intent-router.js'
 import {
   applyCreativeMemoryActions,
   searchCreativeMemories,
@@ -47,7 +47,8 @@ import type {
   DirectorContextSlots,
   DirectorEffectiveCreativeConfig,
 } from '../../../../shared/types/director-context.js'
-import type { DirectorAgentStreamEvent } from '../../../../shared/types/director-stream.js'
+import type { DirectorAgentStreamEvent, DirectorTimelineRevisionIntent } from '../../../../shared/types/director-stream.js'
+import { buildV2TimelineRevisionIntent } from '../../pipeline-v2/timeline-revision-receipt.js'
 
 const workspaceSessions = createDirectorWorkspaceSessionRepository()
 const timelineDrafts = createV2TimelineDraftRepository()
@@ -165,7 +166,7 @@ function intentForWorkspace(input: {
 
 function stateDiff(before: DirectorWorkspaceState, after: DirectorWorkspaceState) {
   const changed: string[] = []
-  for (const key of ['draftId', 'baseRevision', 'selectedItemId', 'pendingQuestion', 'pendingTimelineRevisions', 'responseId'] as const) {
+  for (const key of ['draftId', 'baseRevision', 'selectedItemId', 'pendingQuestion', 'pendingTimelineRevisions', 'pendingTimelineRevisionConfirmation', 'responseId'] as const) {
     if (before[key] !== after[key]) changed.push(key)
   }
   if (JSON.stringify(before.context.slots) !== JSON.stringify(after.context.slots)) changed.push('context.slots')
@@ -326,7 +327,9 @@ export async function* streamDirectorAgentChat(
     yield { type: 'done' }
     return
   }
-  let workspaceState = persisted
+  // Confirmation/rejection must operate on the server-owned proposal snapshot;
+  // UI context arriving with the decision is not a new workspace observation.
+  let workspaceState = persisted && !input.timelineRevisionDecision
     ? applyDirectorWorkspacePatch(before, runtimeObservationPatch(input))
     : before
   if (workspaceState.draftId) {
@@ -404,6 +407,78 @@ export async function* streamDirectorAgentChat(
     context: compactDirectorWorkspaceContext(workspaceState),
     runtime: effectiveRuntime,
   })
+  const pendingRevisionDecision = input.timelineRevisionDecision
+  const pendingRevisionConfirmation = workspaceState.pendingTimelineRevisionConfirmation
+  if (pendingRevisionDecision && (
+    !pendingRevisionConfirmation
+    || pendingRevisionConfirmation.confirmationId !== pendingRevisionDecision.confirmationId
+  )) {
+    yield { type: 'error', message: '待确认的修改已变化或不存在，请基于当前方案重新提出修改。' }
+    yield { type: 'done' }
+    return
+  }
+  if (pendingRevisionDecision?.action === 'confirm' && pendingRevisionConfirmation) {
+    const currentDraft = await timelineDrafts.getDraft(pendingRevisionConfirmation.draftId, userId)
+    if (
+      !currentDraft
+      || currentDraft.revision !== pendingRevisionConfirmation.baseRevision
+      || workspaceState.draftId !== pendingRevisionConfirmation.draftId
+      || workspaceState.baseRevision !== pendingRevisionConfirmation.baseRevision
+    ) {
+      const assistantMessage = '草稿版本已变化，这项旧修改提案没有执行。请基于当前方案重新提出修改。'
+      workspaceState = applyDirectorWorkspacePatch(before, {
+        pendingTimelineRevisionConfirmation: null,
+        ...(currentDraft && before.draftId === pendingRevisionConfirmation.draftId
+          ? { draftId: currentDraft.id, baseRevision: currentDraft.revision }
+          : {}),
+      })
+      workspaceState = appendDirectorWorkspaceTurn(workspaceState, {
+        role: 'assistant', content: assistantMessage, at: new Date().toISOString(), intent: 'revise', outcome: 'revision_confirmation_stale',
+      })
+      const saved = await (dependencies.saveWorkspace ?? workspaceSessions.save)({
+        id, userId, state: compactDirectorWorkspaceTurns(workspaceState), expectedStateRevision: before.stateRevision,
+      })
+      await trace.writeJson('00-director-turn', 'turn-result.json', {
+        router_called: false, core_model_called: false, tool_called: false, action: 'revision_confirmation_stale',
+        expected_draft_id: pendingRevisionConfirmation.draftId,
+        expected_revision: pendingRevisionConfirmation.baseRevision,
+        actual_revision: currentDraft?.revision ?? null,
+      })
+      yield { type: 'assistant_reply', message: assistantMessage }
+      yield { type: 'error', message: assistantMessage }
+      yield {
+        type: 'workspace_session', workspaceSessionId: id, turnRequestId,
+        stateRevision: saved.state.stateRevision, state: saved.state, traceDir: trace.rootDir, modelCalled: false,
+      }
+      yield { type: 'done' }
+      return
+    }
+  }
+  if (pendingRevisionDecision?.action === 'reject' && pendingRevisionConfirmation) {
+    const assistantMessage = '已取消这次修改提案，当前草稿没有变化。你可以补充新的目标或保留项后重新提出修改。'
+    workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+      pendingTimelineRevisionConfirmation: null,
+    })
+    workspaceState = appendDirectorWorkspaceTurn(workspaceState, {
+      role: 'user', content: input.prompt, at: new Date().toISOString(), intent: 'revise', outcome: 'revision_rejected',
+    })
+    workspaceState = appendDirectorWorkspaceTurn(workspaceState, {
+      role: 'assistant', content: assistantMessage, at: new Date().toISOString(), intent: 'revise', outcome: 'revision_rejected',
+    })
+    const saved = await (dependencies.saveWorkspace ?? workspaceSessions.save)({
+      id, userId, state: compactDirectorWorkspaceTurns(workspaceState), expectedStateRevision: before.stateRevision,
+    })
+    await trace.writeJson('00-director-turn', 'turn-result.json', {
+      router_called: false, core_model_called: false, tool_called: false, action: 'revision_rejected',
+    })
+    yield { type: 'assistant_reply', message: assistantMessage }
+    yield {
+      type: 'workspace_session', workspaceSessionId: id, turnRequestId,
+      stateRevision: saved.state.stateRevision, state: saved.state, traceDir: trace.rootDir, modelCalled: false,
+    }
+    yield { type: 'done' }
+    return
+  }
   const surface = routeConversationSurface(input)
 
   yield {
@@ -442,16 +517,21 @@ export async function* streamDirectorAgentChat(
   }
   await wait(20)
 
+  const confirmedRevisionProposal = pendingRevisionDecision?.action === 'confirm'
+    ? pendingRevisionConfirmation
+    : undefined
   let creativeMemoryRetrieval = { active: [], candidate: [], audit: [] } as Awaited<ReturnType<typeof searchCreativeMemories>>
   let creativeMemoryRetrievalError: string | undefined
-  try {
-    creativeMemoryRetrieval = await searchCreativeMemories({
-      userId,
-      draftId: workspaceState.draftId,
-      query: input.prompt,
-    })
-  } catch (error) {
-    creativeMemoryRetrievalError = error instanceof Error ? error.message : String(error)
+  if (!confirmedRevisionProposal) {
+    try {
+      creativeMemoryRetrieval = await searchCreativeMemories({
+        userId,
+        draftId: workspaceState.draftId,
+        query: input.prompt,
+      })
+    } catch (error) {
+      creativeMemoryRetrievalError = error instanceof Error ? error.message : String(error)
+    }
   }
   await trace.writeJson('00-director-turn', 'creative-memory-retrieval.json', {
     query: input.prompt,
@@ -476,10 +556,12 @@ export async function* streamDirectorAgentChat(
   })
   let creativeKnowledgeRetrieval = { items: [], audit: [] } as Awaited<ReturnType<typeof searchCreativeKnowledge>>
   let creativeKnowledgeRetrievalError: string | undefined
-  try {
-    creativeKnowledgeRetrieval = await searchCreativeKnowledge({ query: input.prompt })
-  } catch (error) {
-    creativeKnowledgeRetrievalError = error instanceof Error ? error.message : String(error)
+  if (!confirmedRevisionProposal) {
+    try {
+      creativeKnowledgeRetrieval = await searchCreativeKnowledge({ query: input.prompt })
+    } catch (error) {
+      creativeKnowledgeRetrievalError = error instanceof Error ? error.message : String(error)
+    }
   }
   await trace.writeJson('00-director-turn', 'creative-knowledge-retrieval.json', {
     query: input.prompt,
@@ -493,7 +575,30 @@ export async function* streamDirectorAgentChat(
     audit: creativeKnowledgeRetrieval.audit,
     error: creativeKnowledgeRetrievalError ?? null,
   })
-  const routed = await routeDirectorIntentWithLlm({
+  const routed: LlmIntentRouterOutput = confirmedRevisionProposal
+    ? {
+        source: 'context_fallback',
+        modelCalled: false,
+        result: {
+          intent: 'revise_timeline',
+          confidence: 1,
+          contentDomain: workspaceState.context.slots.contentDomain,
+          slotsPatch: deriveRuntimeSlotStatus(effectiveRuntime),
+          missingSlots: [],
+          requiresConfirmation: false,
+          nextAction: 'REVISE_TIMELINE',
+          executionEffect: 'draft_change',
+          assistantMessage: '正在执行已确认的修改提案。',
+          skillRequests: confirmedRevisionProposal.skillRequests,
+          toolRequests: confirmedRevisionProposal.toolRequests,
+        },
+        publicThoughts: ['已读取服务端保存的修改提案；本轮不重新解释修改范围。'],
+        conversationIntent: confirmedRevisionProposal.intent,
+        stateActions: [],
+        memoryActions: [],
+        missingInformation: [],
+      }
+    : await routeDirectorIntentWithLlm({
     ...input,
     runtime: effectiveRuntime,
     currentTurnMaterialIds: workspaceState.recentVisualMaterialIds,
@@ -505,7 +610,7 @@ export async function* streamDirectorAgentChat(
     retrievedCreativeMemories: creativeMemoryRetrieval,
     previousResponseId:
       workspaceState.responseContinuityDisabled ? undefined : workspaceState.responseId,
-  })
+      })
   await trace.writeJson('00-director-turn', 'model-call.json', {
     source: routed.source,
     model_called: routed.modelCalled,
@@ -638,13 +743,67 @@ export async function* streamDirectorAgentChat(
     intent: routed.conversationIntent ?? 'chat',
     skillRequests: routed.result.skillRequests,
     toolRequests: modelToolProposals,
-    stateActionRefs: routed.stateActions.map((item) => item.ref),
+    stateActionRefs: confirmedRevisionProposal?.resolvedStateActionRefs
+      ?? routed.stateActions.map((item) => item.ref),
     callIdContext: {
       workspaceSessionId: id,
-      turnRequestId,
+      turnRequestId: confirmedRevisionProposal?.originalTurnRequestId ?? turnRequestId,
     },
   })
   const requestedTools = executionPlan.toolRequests
+  const revisionIntents = requestedTools.flatMap((request): DirectorTimelineRevisionIntent[] => {
+    if (request.toolId !== 'timeline.patch') return []
+    const confirmed = confirmedRevisionProposal?.revisionIntents.find((item) => item.callId === request.callId)
+    const intent = confirmed ?? buildV2TimelineRevisionIntent({
+      callId: request.callId,
+      userRequest: input.prompt,
+      arguments: request.arguments,
+    })
+    return intent ? [intent] : []
+  })
+  const invalidUnconfirmedRevisionPlan = !confirmedRevisionProposal
+    && revisionIntents.length > 0
+    && (
+      executionPlan.rejectedSkills.length > 0
+      || executionPlan.rejectedTools.length > 0
+      || !executionPlan.stages.some((stage) => stage.toolRequest.toolId === 'timeline.patch')
+    )
+  const awaitsRevisionConfirmation = !confirmedRevisionProposal
+    && revisionIntents.length > 0
+    && !invalidUnconfirmedRevisionPlan
+  if (awaitsRevisionConfirmation) {
+    workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+      pendingTimelineRevisionConfirmation: {
+        confirmationId: revisionIntents[0]!.callId,
+        draftId: workspaceState.draftId!,
+        baseRevision: workspaceState.baseRevision!,
+        originalTurnRequestId: turnRequestId,
+        originalRequest: input.prompt,
+        intent: routed.conversationIntent === 'execute' ? 'execute' : 'revise',
+        skillRequests: executionPlan.selectedSkills,
+        resolvedStateActionRefs: routed.stateActions.map((item) => item.ref),
+        toolRequests: executionPlan.stages
+          .filter(({ toolRequest }) => toolRequest.toolId !== 'timeline.render')
+          .map(({ toolRequest }) => ({
+          ref: toolRequest.ref,
+          toolId: toolRequest.toolId,
+          skillId: toolRequest.skillId,
+          arguments: toolRequest.arguments,
+          requestedMode: toolRequest.requestedMode,
+          dependsOn: toolRequest.dependsOn,
+        })),
+        revisionIntents,
+        executionContext: {
+          context: workspaceState.context,
+          runtime: effectiveRuntime,
+          confirmedRequirements: workspaceState.confirmedRequirements,
+          selectedItemId: workspaceState.selectedItemId,
+          recalledCreativeMemories: creativeMemoryRetrieval.active.map((item) => item.memory.statement),
+          recalledCreativeKnowledge: creativeKnowledgeRetrieval.items.map((item) => item.knowledge.statement),
+        },
+      },
+    })
+  }
   await trace.writeJson('00-director-turn', 'skill-tool-execution-plan.json', {
     requested_skills: routed.result.skillRequests ?? [],
     model_tool_proposals: modelToolProposals,
@@ -695,6 +854,18 @@ export async function* streamDirectorAgentChat(
     })(),
     pendingRevisions: workspaceState.pendingTimelineRevisions ?? [],
   })
+  const executionPrompt = confirmedRevisionProposal?.originalRequest ?? input.prompt
+  const executionContext = confirmedRevisionProposal?.executionContext
+  const dispatchWorkspace = executionContext
+    ? {
+        ...workspaceState,
+        context: executionContext.context,
+        confirmedRequirements: executionContext.confirmedRequirements,
+        draftId: confirmedRevisionProposal.draftId,
+        baseRevision: confirmedRevisionProposal.baseRevision,
+        selectedItemId: executionContext.selectedItemId,
+      }
+    : workspaceState
   if (shouldExecute) {
     for (const request of requestedTools) {
       const rejected = executionPlan.rejectedTools.find((item) => item.callId === request.callId)
@@ -702,6 +873,7 @@ export async function* streamDirectorAgentChat(
       const failedDependency = request.dependsOn
         .map((ref) => actionReceipts.find((receipt) => receipt.ref === ref))
         .find((receipt) => receipt?.status !== 'succeeded')
+      const revisionIntent = revisionIntents.find((item) => item.callId === request.callId)
       yield {
         type: 'tool_proposed',
         callId: request.callId,
@@ -709,10 +881,24 @@ export async function* streamDirectorAgentChat(
         requestedMode: request.requestedMode,
         effectiveMode: stage?.modeResolution.effectiveMode ?? request.requestedMode,
         modeNormalized: stage?.modeResolution.normalized ?? false,
+        revisionIntent,
+        revisionConfirmationId: revisionIntent
+          ? confirmedRevisionProposal?.confirmationId ?? (awaitsRevisionConfirmation ? revisionIntents[0]!.callId : undefined)
+          : undefined,
       }
+      if (awaitsRevisionConfirmation) continue
       let result: V2AgentToolResult
       let didDispatch = false
-      if (failedDependency) {
+      if (invalidUnconfirmedRevisionPlan) {
+        result = {
+          callId: request.callId,
+          toolId: request.toolId,
+          ok: false,
+          gate: 'revision_confirmation',
+          summary: '修改提案包含未通过协议校验的动作；为避免部分执行，本轮没有运行任何 Tool。',
+          recovery: '请基于当前草稿重新提出一组完整、可确认的修改。',
+        }
+      } else if (failedDependency) {
         result = {
           callId: request.callId,
           toolId: request.toolId,
@@ -741,25 +927,23 @@ export async function* streamDirectorAgentChat(
           let dispatchError: unknown
           void (dependencies.dispatchTool ?? dispatchV2AgentTool)({
             stage,
-            prompt: input.prompt,
+            prompt: executionPrompt,
             requestInstruction:
               typeof request.arguments?.instruction === 'string'
                 ? request.arguments.instruction
                 : undefined,
             userId,
-            context: workspaceState.context,
-            runtime: effectiveRuntime,
-            workspace: workspaceState,
+            context: executionContext?.context ?? workspaceState.context,
+            runtime: executionContext?.runtime ?? effectiveRuntime,
+            workspace: dispatchWorkspace,
             authorization: request.toolId === 'timeline.pending.dismiss'
               ? pendingDismissalAuthorization
               : deliveryAuthorization,
             traceSessionId: id,
-            recalledCreativeMemories: creativeMemoryRetrieval.active.map(
-              (item) => item.memory.statement,
-            ),
-            recalledCreativeKnowledge: creativeKnowledgeRetrieval.items.map(
-              (item) => item.knowledge.statement,
-            ),
+            recalledCreativeMemories: executionContext?.recalledCreativeMemories
+              ?? creativeMemoryRetrieval.active.map((item) => item.memory.statement),
+            recalledCreativeKnowledge: executionContext?.recalledCreativeKnowledge
+              ?? creativeKnowledgeRetrieval.items.map((item) => item.knowledge.statement),
             authorizedDraftComponentIds: request.dependsOn.flatMap((ref) => {
               const dependencyRequest = requestedTools.find((item) => item.ref === ref)
               const dependencyResult = dependencyRequest
@@ -835,7 +1019,7 @@ export async function* streamDirectorAgentChat(
           pendingTimelineRevisions: marked.pendingTimelineRevisions,
         })
       }
-      const receiptStatus = failedDependency
+      const receiptStatus: 'skipped' | 'succeeded' | 'failed' = failedDependency
         ? 'skipped'
         : result.ok
           ? 'succeeded'
@@ -922,6 +1106,18 @@ export async function* streamDirectorAgentChat(
             : workspaceState.pendingTimelineRevisions
           : workspaceState.pendingTimelineRevisions,
       })
+      const revisionActualDiff = result.output?.revisionActualDiff
+      const revisionReceipt = revisionIntent
+        ? {
+            ...revisionIntent,
+            status: receiptStatus,
+            summary: result.summary,
+            revision: result.draft?.revision,
+            ...(revisionActualDiff && typeof revisionActualDiff === 'object'
+              ? { actualDiff: revisionActualDiff as NonNullable<Extract<DirectorAgentStreamEvent, { type: 'tool_result' }>['revisionReceipt']>['actualDiff'] }
+              : {}),
+          }
+        : undefined
       yield {
         type: 'tool_result',
         actionRef: request.ref,
@@ -930,6 +1126,7 @@ export async function* streamDirectorAgentChat(
         toolId: result.toolId,
         ok: result.ok,
         summary: result.summary,
+        revisionReceipt,
         result: result.output,
         draft: result.draft
           ? {
@@ -943,12 +1140,19 @@ export async function* streamDirectorAgentChat(
       }
     }
   }
+  if (confirmedRevisionProposal) {
+    workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+      pendingTimelineRevisionConfirmation: null,
+    })
+  }
   const shouldReportToolOutcome = dispatchedToolCount > 0
     || (toolResults.length > 0 && routed.conversationIntent !== 'chat' && routed.conversationIntent !== 'clarify')
   const toolConfirmation = shouldReportToolOutcome
     ? toolOutcomeConfirmation(toolResults, actionReceipts, requestedTools)
     : ''
-  const modelAssistantMessage = shouldReportToolOutcome
+  const modelAssistantMessage = awaitsRevisionConfirmation
+    ? `修改范围已解析并保存，尚未执行。请先核对修改目标与保护边界，再选择确认执行或取消。${requestedTools.some((request) => request.toolId === 'timeline.render') ? '正式渲染不包含在本次修改确认中，修改完成后仍需单独确认导出。' : ''}`
+    : shouldReportToolOutcome
     ? toolConfirmation
     : routed.result.assistantMessage
   const requirementMessage = !stateAction
@@ -1010,7 +1214,7 @@ export async function* streamDirectorAgentChat(
     return
   }
   await trace.writeJson('00-director-turn', 'turn-result.json', {
-    router_called: true,
+    router_called: !confirmedRevisionProposal,
     core_model_called: routed.modelCalled,
     planner_called: toolResults.some((result) => result.plannerInvoked),
     tool_called: dispatchedToolCount > 0,

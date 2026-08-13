@@ -15,6 +15,11 @@ export interface DirectorAgentChatRequest {
   turnRequestId?: string
   /** Last server workspace revision observed by this browser. */
   workspaceStateRevision?: number
+  /** Explicit decision for the exact server-validated revision proposal. */
+  timelineRevisionDecision?: {
+    confirmationId: string
+    action: 'confirm' | 'reject'
+  }
   /** Stable browser workspace id; the server creates a V2 session when absent. */
   workspaceSessionId?: string
   /** Injected by the controller from the authenticated/request user boundary. */

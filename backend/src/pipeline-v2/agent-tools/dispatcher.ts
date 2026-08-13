@@ -14,6 +14,7 @@ import { buildV2TimelineRevisionContext } from '../timeline-revision-context.js'
 import { normalizeV2TimelineSelection } from '../timeline-selection.js'
 import {
   buildDirectorTimelineFacts,
+  describeV2TimelineSpecDiff,
   evaluateV2TimelineRevisionCommit,
   verifyV2TimelinePendingResolution,
 } from '../timeline-revision-outcome-review.js'
@@ -634,6 +635,9 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       draft: { id: draft.id, revision: draft.revision, spec: draft.spec, traceDir: preview.traceDir, pendingTimelineRevisions: draft.pendingTimelineRevisions },
       output: {
         timelineFacts: buildDirectorTimelineFacts(draft.revision, draft.spec),
+        ...(request.toolId === 'timeline.patch' && existing
+          ? { revisionActualDiff: describeV2TimelineSpecDiff(existing.spec, draft.spec) }
+          : {}),
         validation,
         componentDegradations: settled.degradations,
         selectedItemId,

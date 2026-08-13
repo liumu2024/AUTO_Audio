@@ -50,7 +50,9 @@ export interface V2PlanScenePresentation extends V2PlanSceneCard {
   visualRole?: RemotionTimelineSpecV1['scenes'][number]['visual_role']
   assetLabel?: string
   assetSource?: RemotionTimelineSpecV1['assets'][number]['source']
+  sourceLabel: string
   motion?: RemotionTimelineSpecV1['scenes'][number]['motion']
+  deliveryState: 'user_material' | 'generated' | 'pending' | 'blocked' | 'programmatic'
   materialPlan?: {
     type: RemotionTimelineSpecV1['material_jobs'][number]['type']
     status: RemotionTimelineSpecV1['material_jobs'][number]['status']
@@ -142,6 +144,10 @@ export function buildV2PlanPresentation(
       const sceneEnd = scene.start_sec + scene.duration_sec
       const asset = scene.asset_id ? assets.get(scene.asset_id) : undefined
       const materialJob = materialJobs.get(scene.id)
+      const outputAsset = materialJob?.output_asset_id
+        ? assets.get(materialJob.output_asset_id)
+        : undefined
+      const deliveredAsset = outputAsset ?? asset
       const transition = transitions.get(scene.id)
       const visibleTexts = spec.overlays
         .filter((overlay) => {
@@ -182,9 +188,39 @@ export function buildV2PlanPresentation(
         ...card,
         sceneType: scene.type,
         visualRole: scene.visual_role,
-        assetLabel: scene.creative_intent?.material_label ?? asset?.label ?? asset?.id,
-        assetSource: asset?.source,
+        assetLabel: deliveredAsset?.label ?? deliveredAsset?.id,
+        assetSource: deliveredAsset?.source,
+        sourceLabel: v2AuthoritativeSourceLabel({
+          asset: deliveredAsset,
+          outputAssetAvailable: outputAsset != null,
+          materialJob,
+          sceneType: scene.type,
+        }),
         motion: scene.motion,
+        deliveryState:
+          materialJob?.status === 'failed'
+            ? 'blocked'
+            : materialJob?.status === 'fulfilled' && !outputAsset
+              ? 'blocked'
+            : materialJob?.status === 'planned'
+              ? materialJob.type === 'request_user_material'
+                ? 'blocked'
+                : materialJob.type === 'generate_video'
+                  ? 'pending'
+                  : 'user_material'
+              : materialJob?.status === 'fulfilled'
+                ? outputAsset?.source === 'user_asset'
+                  ? 'user_material'
+                  : outputAsset?.source === 'generated_asset' || materialJob.type === 'generate_video'
+                    ? 'generated'
+                    : 'programmatic'
+                : scene.type === 'remotion_card'
+                  ? 'programmatic'
+                  : asset?.source === 'user_asset'
+                    ? 'user_material'
+                    : asset?.source === 'generated_asset'
+                      ? 'generated'
+                      : 'programmatic',
         materialPlan: materialJob
           ? {
               type: materialJob.type,
@@ -210,6 +246,46 @@ export function buildV2PlanPresentation(
     height: spec.canvas.height,
     scenes,
   }
+}
+
+function v2AuthoritativeSourceLabel(input: {
+  asset?: RemotionTimelineSpecV1['assets'][number]
+  outputAssetAvailable: boolean
+  materialJob?: RemotionTimelineSpecV1['material_jobs'][number]
+  sceneType: RemotionTimelineSpecV1['scenes'][number]['type']
+}) {
+  if (input.materialJob?.status === 'failed') return '交付失败'
+  if (input.materialJob?.status === 'fulfilled' && !input.outputAssetAvailable) {
+    return '交付失败（缺少产物）'
+  }
+  if (input.materialJob?.status === 'planned') {
+    return input.materialJob.type === 'request_user_material'
+      ? '用户素材（待补）'
+      : input.materialJob.type === 'generate_video'
+        ? 'AI 生成素材（待生成）'
+        : '素材复用（待完成）'
+  }
+  if (input.asset) {
+    const kind = {
+      user_asset: '用户素材',
+      generated_asset: 'AI 生成素材',
+      stock_asset: '库存素材',
+      local_fixture: '本地素材',
+      fallback_asset: '兜底素材',
+    }[input.asset.source]
+    return `${kind} · ${input.asset.label ?? input.asset.id}`
+  }
+  return input.sceneType === 'remotion_card' ? '程序化画面' : '未绑定素材'
+}
+
+export function v2DeliveryStateLabel(state: V2PlanScenePresentation['deliveryState']) {
+  return {
+    user_material: '用户素材',
+    generated: '已生成',
+    pending: '待生成 · 当前不是最终画面',
+    blocked: '失败或缺素材 · 暂不可导出',
+    programmatic: '程序化画面',
+  }[state]
 }
 
 /** Maps scene, overlay, or transition timeline selection back to its owning V2 scene. */
@@ -281,6 +357,7 @@ export function startNewV2DraftWorkspace(): void {
     sampleName: '',
     inputText: '',
     attachments: [],
+    attachmentUploads: [],
     pendingAttachmentIds: [],
     materialsSnapshotAuthoritative: false,
     sampleSnapshotAuthoritative: false,

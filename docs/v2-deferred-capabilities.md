@@ -1,18 +1,41 @@
-# V2 Deferred Capabilities
+# V2 暂缓能力台账
 
-This document records V2 interfaces that deliberately do **not** execute in the current release. Planned tools are excluded from the director's available tool catalog, so the model cannot claim they ran.
+> 重新基线日期：2026-08-13
+>
+> 配套主结论见 [全链路产品尽调](./v2-user-requirement-execution.md)。
+> 本台账只记录**可以暂缓建设的能力及其解除条件**，不重复主报告的市场、旅程和风险分析。
 
-| Capability | Current state | Target Tool / Skill | V2 extension point | Preconditions | Acceptance case | Non-negotiable boundary |
-| --- | --- | --- | --- | --- | --- | --- |
-| Long-term creative memory | Controllable write + keyword retrieval implemented; hybrid flow deferred | `memory.search`, `memory.propose_write` | `CreativeMemoryRecord`, chunks, hybrid retrieval result | Explicit consent; scope and ownership filtering | Confirmed preference is retrieved as a labeled suggestion, never silently applied | Current prompt and current V2 draft always win; unconfirmed memories do not affect a project |
-| Hybrid memory retrieval | Keyword recall implemented; vector recall / fusion / rerank / conflict resolution deferred | `memory.search` | filter → keyword/vector recall → fusion → small rerank → dedupe/conflict resolution | Embedding provider and persistent store | Large corpus returns 3–5 source-labelled, relevant memories | No raw historical chat used as hidden instruction |
-| Project audio plan | Interface defined, not implemented | `audio.plan`, `audio.mix` | `V2AudioAssetDescriptor` and V2 audio clips | Licensed/user assets and audio policy | BGM, embedded generated sound and independent tracks are distinguishable | Generated-video embedded audio is never misreported as editable project BGM |
-| TTS narration and subtitle alignment | Interface defined, not implemented | `audio.generate_tts`, `audio.align` | `V2SubtitleNarrationAlignment` | TTS provider with duration/word timing | Caption narration fits caption and scene ranges; large mismatch returns to revision | No speech generation without explicit authorization |
+## 使用边界
 
-## Future retrieval contract
+“暂缓”只适用于内部演示或单一、受控的设计合作环境。它不表示风险消失，更不可以被用来支撑企业或公开多用户售卖。
 
-Retrieval must first apply owner/project permissions and structured constraints (format, industry, aspect ratio, visual strategy), then hybrid keyword/vector recall, fusion ranking, small-candidate semantic reranking, deduplication and conflict resolution. Return only a few editable suggestions with their source and confidence.
+| 编号 | 可暂缓能力 | 暂缓的前提 | 解除暂缓的触发条件 |
+| --- | --- | --- | --- |
+| D-01 | 云端对象存储、跨机器素材迁移和长期归档 | 仅使用非敏感测试素材、单机受控演示，且不承诺客户历史可恢复。 | 任何真实客户素材、跨设备访问、外部分享或留存承诺。 |
+| D-02 | 分布式队列、跨进程任务恢复和自动弹性伸缩 | 少量人工看守的内部任务，允许演示失败后重跑。 | 外部客户等待生成/渲染、任务费用需要核对、或需要关闭应用后继续执行。 |
+| D-03 | 高并发容量建设与复杂限流配额 | 固定少量试点席位，已对 provider 成功率/时延/成本做实测。 | 同时存在多个客户团队、时延承诺、付费配额或 provider 限额触发。 |
+| D-04 | 完整计费、支付、发票与组织账单 | 以免费或人工报价的设计合作验证问题。 | 收取可重复费用、按量转嫁模型成本或需要核对客户余额。 |
+| D-05 | 多模型市场、完整音频链和通用编辑器功能广度 | 试点任务限定为已有素材的短视频改版，不宣传尚未可用能力。 | 访谈证实这些能力是目标客群的主要购买理由，并且有可复核的质量/成本基线。 |
+| D-06 | 完整客户审阅门户、复杂评论流和企业协作套件 | 设计合作由人工运营收集审核意见，先验证“修订合同/回执”字段。 | 审核人愿意持续使用产品内反馈，且人工运营成为瓶颈。 |
+| D-07 | SSO、RBAC、审批、品牌资产库、DAM 与组织级审计 | **仅限完全受信任的单一内部操作者；不适用于外部多人。** | 任何外部设计合作的真实素材、多个客户、品牌审核或企业采购。届时身份和项目访问边界不可暂缓。 |
+| D-08 | 复杂 BI、预测和自动满意度评分 | 已手工记录真实任务的接受/拒绝、时长、轮数与成本。 | 已收集足够的真实标签，且明确知道哪个运营决策需要自动化。 |
 
-## Subtitle narration contract
+## 已登记的后续里程碑
 
-For subtitle-style narration: lock visible caption text → generate TTS → obtain actual duration and word timings → validate caption/audio/scene ranges → make small timing adjustments or return a revision request for large deviation. FFmpeg may normalize/mix existing audio but cannot synthesize speech.
+以下工作不是当前 P0 的补丁，不与本轮协议混合实施：
+
+1. **P1 交互恢复性**：结构化不满意原因与第二次同类失败澄清；版本冲突时保留未发送文本并展示服务端 revision；样例、素材和偏好的来源/启用状态；Provider/Worker 真实取消、状态查询和恢复。
+2. **轻量检索升级**：继续保留当前 BM25。只有扩充语料后的评测仍证明无关召回显著，才先增加相对 Top-1 截断；向量检索或 Reranker 独立评估、独立提交。
+3. **Revision fragment**：维持“最后独立实施”。先冻结完整 revision 的 token、首次成功率、repair 与 scope drift 基线，再一次性将修订模型输出切换为 scope fragment；前端、数据库、Renderer 仍只接收完整 Timeline，不保留生产双协议。
+
+## 不在本台账内的 P0
+
+以下项即使暂不建设大规模基础设施，也不能被称为“以后再说”：
+
+- 不能把未执行或仅写入备注的操作显示为“已修改”；
+- 每次对外试点修订都要有目标、范围、保留项、实际结果和失败状态；
+- 用户素材发送给外部服务前要有清楚告知和可追踪同意；
+- 任何外部用户使用前，需要真实的身份、项目访问和资产访问边界；
+- 真正使用生成 provider 前，需要测出成功率、时延、成本、取消与失败恢复。
+
+本台账应在每次从“内部演示”升级到“受控试点”或“公开售卖”前复核；满足触发条件的条目必须转入明确的发布计划，而非继续无限期暂缓。

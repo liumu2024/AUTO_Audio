@@ -4,7 +4,7 @@
   "sourceHashes": {
     "manifest.v1.json": "0c17ef9766ce23a0050b02b8f65e1a6b2075cd6a3589c9a68818ca841d43dc76",
     "agent-core.v1.json": "714da269bef7f8d42b5c18b7be4ae9954314c9ca6110f2abac02f6825731584b",
-    "agent-editing.v1.json": "5343b0eb0b0544b0c79ee00c6bb4a5b2fdd7c08f1ee0ad9889140996b04dac26",
+    "agent-editing.v1.json": "04e54029cc1511127cb45395320e82a7ac8021401ce1ef3cd5e8d3b3696d003d",
     "agent-multimodal.v1.json": "5cc55695673a3dcd024539427f497735ff562b02c0993173c85cd26da6725825",
     "agent-canary.v1.json": "45b95d2ed0b20a1dadd4da94cd37f0ee00865c6c81e7fa94b6990a3559fde1cd",
     "memory-retrieval.v1.json": "d8cc1f4cb4304ab2c498f73b79bbc1220607443e37dc7b05f1f4aa2908d0cfd1",
@@ -1661,21 +1661,32 @@
             ],
             "turns": [
               {
-                "prompt": "把第三镜头字幕改为“安心，不止在门前”，修改成功后渲染。",
+                "prompt": "把第三镜头字幕改为“安心，不止在门前”，其他内容不变。",
                 "expected": {
                   "tools": [
-                    "timeline.patch",
-                    "timeline.render"
+                    "timeline.patch"
                   ],
-                  "kind": "execute",
+                  "kind": "revise",
                   "toolSuccess": true,
-                  "dryRender": true,
                   "draftChange": true,
+                  "revisionScope": "subtitle",
                   "timeline": {
                     "requiredVisibleText": [
                       "安心，不止在门前"
                     ]
                   }
+                }
+              },
+              {
+                "prompt": "正式渲染刚才确认后的版本。",
+                "expected": {
+                  "tools": [
+                    "timeline.render"
+                  ],
+                  "kind": "execute",
+                  "toolSuccess": true,
+                  "dryRender": true,
+                  "draftChange": false
                 }
               }
             ]
@@ -3743,7 +3754,7 @@
   "summary": {
     "agentSuites": 4,
     "agentCases": 34,
-    "agentTurns": 67,
+    "agentTurns": 68,
     "retrievalSuites": 1,
     "retrievalQueries": 25,
     "mediaTasks": 12,
@@ -3753,6 +3764,6 @@
     "maxProviderSubmissions": 20,
     "maxGeneratedSeconds": 60
   },
-  "builtAt": "2026-08-12T05:35:47.262Z",
-  "datasetHash": "cbc4a4074051b5020f203dcf9806f7239ddfa190bbaa02b1d6aaf2f63db5a691"
+  "builtAt": "2026-08-13T17:48:41.745Z",
+  "datasetHash": "564db94b90dafc46954160b02ca233b4fbeaecb8d19906b8d8bcd8085ac1e4da"
 }

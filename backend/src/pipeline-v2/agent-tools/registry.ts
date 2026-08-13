@@ -3,11 +3,14 @@ import { z } from 'zod'
 import type { DirectorConversationRuntime } from '../../../../shared/lib/director-understanding.js'
 import type { DirectorContext } from '../../../../shared/types/director-context.js'
 import type { DirectorWorkspaceState } from '../../../../shared/types/director-workspace-session.js'
-import { materialJobMissingRequiredOutput } from '../../../../shared/lib/remotion-timeline-validator.js'
 import { REMOTION_TIMELINE_TRANSITION_TYPES } from '../../../../shared/types/remotion-timeline-spec.v1.js'
 import type { RemotionTimelineSpecV1 } from '../../../../shared/types/remotion-timeline-spec.v1.js'
-import { env } from '../../config/env.js'
-import { evaluateExternalPublicationReadiness } from '../../modules/upload/asset-publisher.js'
+import {
+  evaluateV2TimelineDeliveryReadiness,
+  type V2TimelineDeliveryReadiness,
+} from '../timeline-delivery-readiness.js'
+
+export { evaluateV2TimelineDeliveryReadiness, type V2TimelineDeliveryReadiness }
 
 export type V2AgentToolStatus = 'available' | 'planned' | 'disabled'
 export type V2AgentToolMode = 'preview' | 'execute'
@@ -168,60 +171,24 @@ export function evaluateV2AgentToolReadiness(input: {
   if (input.toolId === 'timeline.render' && !hasDraft) {
     return blocked('draft_missing', '当前没有可交付的草稿。', ['timeline.plan'])
   }
-  if (input.toolId === 'timeline.render' && input.workspace?.pendingTimelineRevisions?.length) {
+  if (input.toolId === 'timeline.render' && !input.timelineSpec && input.workspace?.pendingTimelineRevisions?.length) {
     return blocked(
       'timeline_revision_pending',
       `仍有 ${input.workspace.pendingTimelineRevisions.length} 项方案修改尚未落实：${input.workspace.pendingTimelineRevisions[0]!.instruction}`,
-      ['timeline.patch'],
+      ['timeline.patch', 'timeline.pending.dismiss'],
     )
   }
   if (input.toolId === 'timeline.render' && input.timelineSpec) {
-    const missing: V2AgentToolReadiness['missing'] = []
-    const assetById = new Map(input.timelineSpec.assets.map((asset) => [asset.id, asset]))
-    const assetIds = new Set(assetById.keys())
-    for (const job of input.timelineSpec.material_jobs) {
-      if (materialJobMissingRequiredOutput(job, assetIds)) {
-        missing.push({
-          code: 'material_output_missing',
-          description: `镜头 ${job.scene_id} 的素材任务没有可用产物。`,
-        })
-        continue
-      }
-      if (job.status === 'failed') {
-        missing.push({
-          code: 'material_generation_failed',
-          description: `镜头 ${job.scene_id} 的素材任务已经失败，需要修订或重新规划后再执行。`,
-        })
-        continue
-      }
-      if (job.status === 'fulfilled') {
-        continue
-      }
-      if (job.type === 'request_user_material') {
-        missing.push({ code: 'user_material_required', description: `镜头 ${job.scene_id} 仍需要用户素材。` })
-        continue
-      }
-      if (job.type !== 'generate_video') continue
-      if (env.v2VideoGenerationProvider !== 'ark-seedance') {
-        missing.push({ code: 'generation_provider_unavailable', description: `镜头 ${job.scene_id} 需要生成视频，但当前未配置视频生成 Provider。` })
-      }
-      if (!job.input_asset_id) continue
-      const asset = assetById.get(job.input_asset_id)
-      if (!asset) {
-        missing.push({ code: 'generation_input_missing', description: `镜头 ${job.scene_id} 引用的生成输入素材不存在。` })
-        continue
-      }
-      const publication = evaluateExternalPublicationReadiness(asset.src)
-      if (!publication.ready) {
-        missing.push({ code: 'generation_input_unreachable', description: `${job.input_asset_id}：${publication.reason}` })
-      }
-    }
-    if (missing.length > 0) {
+    const delivery = evaluateV2TimelineDeliveryReadiness({
+      timelineSpec: input.timelineSpec,
+      pendingTimelineRevisions: input.workspace?.pendingTimelineRevisions,
+    })
+    if (delivery.status === 'blocked') {
       return {
         toolId: input.toolId,
         status: 'blocked',
-        missing,
-        alternatives: ['修改方案中的素材生成方式', '配置外部素材发布后重试'],
+        missing: delivery.missing,
+        alternatives: delivery.alternatives,
       }
     }
   }

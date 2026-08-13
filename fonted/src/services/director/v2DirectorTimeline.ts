@@ -351,15 +351,27 @@ export async function saveV2DirectorTimelineDraft(): Promise<api.V2TimelineDraft
 
 export async function renderV2DirectorTimeline(
   input: V2DirectorTimelineInput,
+  confirmedDraft?: { draftId: string; revision: number },
 ): Promise<api.V2TimelineDraftRunResult> {
   useEditorStore.getState().enterV2Workspace()
-  if (useV2TimelineStore.getState().hasLocalEdits) {
+  if (confirmedDraft) {
+    const confirmedState = useV2TimelineStore.getState()
+    if (
+      confirmedState.draftId !== confirmedDraft.draftId
+      || confirmedState.draftRevision !== confirmedDraft.revision
+      || confirmedState.hasLocalEdits
+    ) throw new Error('当前草稿已在确认后发生变化，请重新执行导出预飞检查。')
+  } else if (useV2TimelineStore.getState().hasLocalEdits) {
     await saveV2DirectorTimelineDraft()
   }
   const current = useV2TimelineStore.getState()
   if (!current.draftId || !current.draftRevision || !current.spec) {
     throw new Error('请先生成并保存 V2 Timeline 草稿。')
   }
+  if (confirmedDraft && (
+    current.draftId !== confirmedDraft.draftId
+    || current.draftRevision !== confirmedDraft.revision
+  )) throw new Error('当前草稿版本与已确认版本不一致。')
   const taskStore = useTaskStore.getState()
   taskStore.startTask(input.prompt || 'V2 Timeline render', current.draftId)
   taskStore.updateProgress(10, '准备 V2 渲染', '[V2] 正在准备素材和 timeline spec。')

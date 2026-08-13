@@ -4,6 +4,11 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { env } from '@/config/env'
 import {
+  getV2TimelineDraftReadiness,
+  type V2TimelineDraftDto,
+  type V2TimelineDraftReadinessDto,
+} from '@/lib/api'
+import {
   renderV2DirectorTimeline,
   saveV2DirectorTimelineDraft,
   v2MaterialsFromAttachments,
@@ -20,7 +25,8 @@ export function EditorHeader() {
   const projectName = useEditorStore((s) => s.projectName)
   const v2Spec = useV2TimelineStore((s) => s.spec)
   const v2HasLocalEdits = useV2TimelineStore((s) => s.hasLocalEdits)
-  const pendingTimelineRevisions = useV2TimelineStore((s) => s.pendingTimelineRevisions)
+  const draftRevision = useV2TimelineStore((s) => s.draftRevision)
+  const renderedOutputUrl = useV2TimelineStore((s) => s.renderedOutputUrl)
   const activeTaskId = useTaskStore((s) => s.activeTaskId)
   const backendReady = useTaskStore((s) => s.backendReady)
   const isTaskRunning = useTaskStore((s) => s.isTaskRunning)
@@ -29,6 +35,7 @@ export function EditorHeader() {
   const isAnalyzing = useCreationStore((s) => s.isAnalyzing)
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [preflight, setPreflight] = useState<V2TimelineDraftReadinessDto | null>(null)
 
   const handleNewDraft = () => {
     if (saving || exporting || isTaskRunning || copilotLoading || isDirectorSending || isAnalyzing) return
@@ -40,19 +47,19 @@ export function EditorHeader() {
     startNewV2DraftWorkspace()
   }
 
-  const saveCurrentWork = async (): Promise<boolean> => {
+  const saveCurrentWork = async (): Promise<V2TimelineDraftDto | null> => {
     const taskStore = useTaskStore.getState()
     const v2Timeline = useV2TimelineStore.getState()
     if (!v2Timeline.spec) {
       taskStore.addLog('[编辑] 请先在对话中生成 V2 Timeline 方案。')
-      return false
+      return null
     }
 
     const draft = await saveV2DirectorTimelineDraft()
     taskStore.addLog(
       `[编辑] V2 Timeline 草稿已保存为 revision ${draft.revision}。导出会使用这个不可变 revision。`,
     )
-    return true
+    return draft
   }
 
   const handleSave = async () => {
@@ -68,10 +75,6 @@ export function EditorHeader() {
   const handleExport = async () => {
     if (saving || exporting) return
     const taskStore = useTaskStore.getState()
-    if (pendingTimelineRevisions.length) {
-      taskStore.addLog(`[导出] 仍有方案修改尚未落实：${pendingTimelineRevisions[0]!.instruction}`)
-      return
-    }
     const taskId = useTaskStore.getState().activeTaskId
     if (!taskId) {
       taskStore.addLog('[导出] 导出失败：当前没有活跃任务。')
@@ -88,9 +91,44 @@ export function EditorHeader() {
 
     setExporting(true)
     try {
-      const saved = await saveCurrentWork()
-      if (!saved) return
+      const current = useV2TimelineStore.getState()
+      const confirmed = preflight?.status === 'ready'
+        && preflight.draftId === current.draftId
+        && preflight.revision === current.draftRevision
+        && !current.hasLocalEdits
+        && current.pendingTimelineRevisions.length === 0
+      if (!confirmed) {
+        const saved = await saveCurrentWork()
+        if (!saved) return
+        const readiness = await getV2TimelineDraftReadiness(saved.draftId, saved.revision)
+        setPreflight(readiness)
+        if (readiness.status === 'blocked') {
+          taskStore.addLog(`[导出预飞检查] ${readiness.missing.map((item) => item.description).join('；')}`)
+        } else {
+          taskStore.addLog(`[导出预飞检查] revision ${readiness.revision} 可执行；有 ${readiness.generationJobCount} 个生成任务待解析，未命中复用时才会调用 Provider。请再次确认导出。`)
+        }
+        return
+      }
+      const confirmedReadiness = await getV2TimelineDraftReadiness(
+        preflight!.draftId,
+        preflight!.revision,
+      )
+      if (confirmedReadiness.status === 'blocked') {
+        setPreflight(confirmedReadiness)
+        taskStore.addLog(`[导出预飞检查] 状态已变化：${confirmedReadiness.missing.map((item) => item.description).join('；')}`)
+        return
+      }
       const creation = useCreationStore.getState()
+      const latest = useV2TimelineStore.getState()
+      if (
+        latest.draftId !== preflight!.draftId
+        || latest.draftRevision !== preflight!.revision
+        || latest.hasLocalEdits
+      ) {
+        setPreflight(null)
+        taskStore.addLog('[导出预飞检查] 当前草稿已变化，请重新确认导出。')
+        return
+      }
       await renderV2DirectorTimeline({
         taskId,
         prompt: creation.inputText || '导出当前 V2 Timeline 成片',
@@ -99,7 +137,8 @@ export function EditorHeader() {
         aspectRatio: creation.aspectRatio,
         durationSec: creation.durationSec,
         materials: v2MaterialsFromAttachments(creation.attachments),
-      })
+      }, { draftId: preflight!.draftId, revision: preflight!.revision })
+      setPreflight(null)
     } catch (error) {
       taskStore.addLog(`[导出] 提交失败：${error instanceof Error ? error.message : String(error)}`)
     } finally {
@@ -111,7 +150,6 @@ export function EditorHeader() {
     saving || exporting || !v2Spec
   const exportDisabled =
     saving || exporting || isTaskRunning || copilotLoading || !activeTaskId || !v2Spec
-    || pendingTimelineRevisions.length > 0
   const newDraftDisabled =
     saving || exporting || isTaskRunning || copilotLoading || isDirectorSending || isAnalyzing
 
@@ -130,6 +168,15 @@ export function EditorHeader() {
         <h1 className="truncate text-sm font-medium text-zinc-300">
           {projectName}
         </h1>
+        {v2Spec ? (
+          <p className="text-[10px] text-zinc-500">
+            {v2HasLocalEdits
+              ? '未保存修改'
+              : renderedOutputUrl
+                ? `已渲染 v${draftRevision}`
+                : `已保存 v${draftRevision}`}
+          </p>
+        ) : null}
       </div>
 
       <div className="flex items-center gap-2">
@@ -169,9 +216,27 @@ export function EditorHeader() {
           onClick={() => void handleExport()}
           title="渲染当前 V2 Timeline 成片"
         >
-          {exporting ? '导出中' : '导出成片'}
+          {exporting ? '检查中' : preflight?.status === 'ready' ? '确认导出' : '导出成片'}
         </Button>
       </div>
+      {preflight ? (
+        <aside className="absolute right-4 top-16 z-50 w-96 rounded-lg border border-zinc-700 bg-zinc-950 p-4 shadow-xl">
+          <div className="flex items-center justify-between gap-3">
+            <strong className="text-sm text-zinc-100">导出预飞检查 · revision {preflight.revision}</strong>
+            <button type="button" className="text-xs text-zinc-400" onClick={() => setPreflight(null)}>关闭</button>
+          </div>
+          {preflight.status === 'ready' ? (
+            <p className="mt-2 text-xs leading-5 text-emerald-300">
+              可渲染；有 {preflight.generationJobCount} 个生成任务待解析，未命中复用时才会调用 Provider。再次点击“确认导出”才会开始。
+            </p>
+          ) : (
+            <div className="mt-2 space-y-2 text-xs leading-5 text-amber-300">
+              {preflight.missing.map((item) => <p key={`${item.code}:${item.description}`}>{item.description}</p>)}
+              {preflight.alternatives.length ? <p className="text-zinc-400">下一步：{preflight.alternatives.join('；')}</p> : null}
+            </div>
+          )}
+        </aside>
+      ) : null}
     </header>
   )
 }

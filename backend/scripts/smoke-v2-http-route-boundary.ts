@@ -25,6 +25,12 @@ assert.doesNotMatch(
   /director\/workspaces\/:workspaceSessionId\/outcomes/,
   'workspace mutations must only pass through the serialized Director turn boundary',
 )
+const draftControllerSource = readFileSync(resolve(backendRoot, 'src/pipeline-v2/timeline-draft-controller.ts'), 'utf8')
+assert.match(
+  draftControllerSource,
+  /postV2TimelineDraftRun[\s\S]*V2TimelineDeliveryBlockedError/,
+  'the formal HTTP RenderRun endpoint must translate the shared delivery preflight error',
+)
 
 async function waitForHealthyServer(): Promise<void> {
   const deadline = Date.now() + 10_000
@@ -49,6 +55,7 @@ try {
   await waitForHealthyServer()
 
   await expectStatus('/api/v2/timeline-drafts', 200)
+  await expectStatus('/api/v2/timeline-drafts/missing/readiness', 404)
   await expectStatus('/api/v2/sample/analyze', 400, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

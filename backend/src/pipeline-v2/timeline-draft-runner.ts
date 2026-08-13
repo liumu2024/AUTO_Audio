@@ -21,6 +21,7 @@ import {
 } from './idempotency-repository.js'
 import type { V2TimelineDraftRepository, V2TimelineRenderRunRecord } from './timeline-draft-repository.js'
 import { V2TimelinePendingRevisionError } from './timeline-draft-repository.js'
+import { evaluateV2TimelineDeliveryReadiness, type V2TimelineDeliveryReadiness } from './timeline-delivery-readiness.js'
 
 export interface V2TimelineDraftRunExecutionResult {
   ok: boolean
@@ -54,6 +55,12 @@ export class V2TimelineIdempotencyRunningError extends Error {
 export class V2TimelineIdempotencyFailedError extends Error {
   constructor(readonly renderRunId: string, message: string) {
     super(message)
+  }
+}
+
+export class V2TimelineDeliveryBlockedError extends Error {
+  constructor(readonly readiness: V2TimelineDeliveryReadiness) {
+    super(readiness.missing.map((item) => item.description).join('；') || 'V2 timeline delivery is blocked.')
   }
 }
 
@@ -107,9 +114,15 @@ async function executeV2TimelineDraftRunOnce(
     input.repository.getRevision(input.draftId, input.revision, input.userId),
   ])
   if (!draft || !source) throw new Error('V2 timeline draft revision not found.')
-  if (draft.pendingTimelineRevisions.length > 0) {
+  const readiness = evaluateV2TimelineDeliveryReadiness({
+    timelineSpec: source.spec,
+    pendingTimelineRevisions: draft.pendingTimelineRevisions,
+    videoGenerationAvailable: input.materialAdapter || input.runTimeline ? true : undefined,
+  })
+  if (readiness.missing.some((item) => item.code === 'timeline_revision_pending')) {
     throw new V2TimelinePendingRevisionError(draft.pendingTimelineRevisions)
   }
+  if (readiness.status === 'blocked') throw new V2TimelineDeliveryBlockedError(readiness)
   const runId = `v2_run_${Date.now()}_${randomUUID().slice(0, 8)}`
   const idempotency = input.idempotency ?? createV2IdempotencyRepository()
   const operation = 'timeline.render'

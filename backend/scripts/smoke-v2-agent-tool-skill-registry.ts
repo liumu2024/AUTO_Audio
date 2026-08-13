@@ -19,6 +19,7 @@ import {
 import {
   bindV2AgentToolArguments,
   evaluateV2AgentToolReadiness,
+  evaluateV2TimelineDeliveryReadiness,
   findV2AgentTool,
   listV2AgentToolCards,
   validateV2AgentToolRequest,
@@ -386,6 +387,19 @@ const localImageReadiness = evaluateV2AgentToolReadiness({
 })
 assert.equal(localImageReadiness.status, 'blocked')
 assert.ok(localImageReadiness.missing.some((item) => item.code === 'generation_input_unreachable'))
+const directDeliveryReadiness = evaluateV2TimelineDeliveryReadiness({
+  timelineSpec: localImageGenerationSpec,
+  pendingTimelineRevisions: [],
+})
+assert.equal(directDeliveryReadiness.status, 'blocked')
+assert.equal(directDeliveryReadiness.generationJobCount, 1)
+assert.ok(directDeliveryReadiness.missing.some((item) => item.code === 'generation_input_unreachable'))
+const pendingDeliveryReadiness = evaluateV2TimelineDeliveryReadiness({
+  timelineSpec: base,
+  pendingTimelineRevisions: [{ callId: 'patch_pending', instruction: '修改第二镜头', baseRevision: 1 }],
+})
+assert.equal(pendingDeliveryReadiness.status, 'blocked')
+assert.ok(pendingDeliveryReadiness.missing.some((item) => item.code === 'timeline_revision_pending'))
 const localImageFallbackSpec: RemotionTimelineSpecV1 = {
   ...localImageGenerationSpec,
   assets: [

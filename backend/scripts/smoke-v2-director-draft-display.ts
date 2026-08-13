@@ -146,6 +146,74 @@ assert.equal(presentation.scenes[0]?.visibleTexts[0]?.maxLinesSource, 'track_def
 assert.equal(presentation.scenes[0]?.visibleTexts[0]?.enterAnimation, 'fade')
 assert.equal(presentation.scenes[0]?.visibleTexts[1]?.enterAnimation, 'slide_up_fade')
 assert.equal(presentation.scenes[0]?.transitionAfter?.type, 'fade')
+assert.equal(presentation.scenes[0]?.deliveryState, 'programmatic')
+assert.equal(presentation.scenes[0]?.sourceLabel, '程序化画面')
+const pendingGenerationPresentation = buildV2PlanPresentation({
+  ...spec,
+  assets: [{ id: 'generated_scene_1', type: 'video', source: 'generated_asset', src: 'generated://pending' }],
+  scenes: spec.scenes.map((scene, index) => index === 0
+    ? { ...scene, type: 'ai_video' as const, asset_id: 'generated_scene_1' }
+    : scene),
+  material_jobs: [{
+    id: 'generate_scene_1',
+    scene_id: 'scene_1',
+    type: 'generate_video',
+    status: 'planned',
+    prompt: '生成真实动态镜头',
+    output_asset_id: 'generated_scene_1',
+  }],
+})
+assert.equal(pendingGenerationPresentation.scenes[0]?.deliveryState, 'pending')
+const missingGeneratedOutputPresentation = buildV2PlanPresentation({
+  ...spec,
+  assets: [{ id: 'fallback_scene_1', type: 'image', source: 'fallback_asset', src: '/fallback/scene-1.png' }],
+  scenes: spec.scenes.map((scene, index) => index === 0
+    ? { ...scene, type: 'image_motion' as const, asset_id: 'fallback_scene_1' }
+    : scene),
+  material_jobs: [{
+    id: 'generate_scene_1',
+    scene_id: 'scene_1',
+    type: 'generate_video',
+    status: 'fulfilled',
+    prompt: '生成真实动态镜头',
+    output_asset_id: 'missing_generated_scene_1',
+  }],
+})
+assert.equal(missingGeneratedOutputPresentation.scenes[0]?.deliveryState, 'blocked')
+assert.equal(missingGeneratedOutputPresentation.scenes[0]?.sourceLabel, '交付失败（缺少产物）')
+const fulfilledGeneratedReusePresentation = buildV2PlanPresentation({
+  ...spec,
+  assets: [{ id: 'generated_scene_1', type: 'video', source: 'generated_asset', src: '/generated/scene-1.mp4' }],
+  scenes: spec.scenes.map((scene, index) => index === 0
+    ? { ...scene, type: 'ai_video' as const, asset_id: 'generated_scene_1' }
+    : scene),
+  material_jobs: [{
+    id: 'reuse_generated_scene_1', scene_id: 'scene_1', type: 'reuse_asset', status: 'fulfilled',
+    output_asset_id: 'generated_scene_1',
+  }],
+})
+assert.equal(
+  fulfilledGeneratedReusePresentation.scenes[0]?.deliveryState,
+  'generated',
+  'fulfilled reuse must reflect the output asset provenance',
+)
+assert.equal(
+  fulfilledGeneratedReusePresentation.scenes[0]?.sourceLabel,
+  'AI 生成素材 · generated_scene_1',
+)
+const stockPresentation = buildV2PlanPresentation({
+  ...spec,
+  assets: [{ id: 'stock_scene_1', type: 'video', source: 'stock_asset', src: '/stock/scene-1.mp4', label: 'Stock clip' }],
+  scenes: spec.scenes.map((scene, index) => index === 0
+    ? {
+        ...scene, type: 'user_video' as const, asset_id: 'stock_scene_1',
+        creative_intent: { ...scene.creative_intent!, material_label: 'AI masterpiece' },
+      }
+    : scene),
+})
+assert.equal(stockPresentation.scenes[0]?.deliveryState, 'programmatic')
+assert.equal(stockPresentation.scenes[0]?.assetLabel, 'Stock clip')
+assert.equal(stockPresentation.scenes[0]?.sourceLabel, '库存素材 · Stock clip')
 assert.equal(v2TransitionDisplayText({
   id: 'transition_slide',
   from_scene_id: 'scene_1',

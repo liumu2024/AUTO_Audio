@@ -57,10 +57,12 @@ function AttachmentChips({ items }: { items: InputAttachment[] }) {
 
 interface DirectorChatMessageBubbleProps {
   message: DirectorChatMessage
+  onRevisionDecision?: (input: { confirmationId: string; action: 'confirm' | 'reject' }) => void
 }
 
 export function DirectorChatMessageBubble({
   message,
+  onRevisionDecision,
 }: DirectorChatMessageBubbleProps) {
   const setInputText = useCreationStore((s) => s.setInputText)
   const isUser = message.role === 'user'
@@ -140,6 +142,66 @@ export function DirectorChatMessageBubble({
 
           {message.attachments?.length ? (
             <AttachmentChips items={message.attachments} />
+          ) : null}
+
+          {message.revisionIntent && !message.revisionReceipt ? (
+            <div className="mt-2 space-y-1.5 rounded-lg border border-violet-500/20 bg-black/20 p-2 text-[11px] text-zinc-300">
+              <p><span className="text-zinc-500">原始要求：</span>{message.revisionIntent.originalRequest}</p>
+              <p><span className="text-zinc-500">范围：</span>{message.revisionIntent.scope}</p>
+              <p><span className="text-zinc-500">目标：</span>{message.revisionIntent.targetIds.join('、') || '全片'}</p>
+              <p><span className="text-zinc-500">修改指令：</span>{message.revisionIntent.instruction}</p>
+              <p><span className="text-zinc-500">预计影响：</span>{message.revisionIntent.expectedImpact}</p>
+              <p><span className="text-zinc-500">保护边界：</span>{message.revisionIntent.protectedBoundary}</p>
+              <div className="flex flex-wrap gap-1.5">
+                <button type="button" disabled={message.revisionDecisionStatus === 'confirming'}
+                  className="rounded border border-emerald-400/30 px-2 py-1 text-emerald-200 disabled:opacity-50"
+                  onClick={() => onRevisionDecision?.({ confirmationId: message.revisionConfirmationId ?? message.revisionIntent!.callId, action: 'confirm' })}>
+                  确认执行
+                </button>
+                <button type="button" disabled={message.revisionDecisionStatus === 'confirming'}
+                  className="rounded border border-zinc-500/30 px-2 py-1 text-zinc-300 disabled:opacity-50"
+                  onClick={() => onRevisionDecision?.({ confirmationId: message.revisionConfirmationId ?? message.revisionIntent!.callId, action: 'reject' })}>
+                  取消提案
+                </button>
+                <button type="button" className="rounded border border-violet-400/25 px-2 py-1 text-violet-200"
+                  onClick={() => setInputText(`请重新理解这次修改。原要求：${message.revisionIntent!.originalRequest}`)}>
+                  纠正后重提
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {message.revisionReceipt ? (
+            <div className="mt-2 space-y-1.5 rounded-lg border border-violet-500/20 bg-black/20 p-2 text-[11px] text-zinc-300">
+              <p><span className="text-zinc-500">原始要求：</span>{message.revisionReceipt.originalRequest}</p>
+              <p><span className="text-zinc-500">范围：</span>{message.revisionReceipt.scope}</p>
+              <p><span className="text-zinc-500">目标：</span>{message.revisionReceipt.targetIds.join('、') || '全片'}</p>
+              <p><span className="text-zinc-500">修改指令：</span>{message.revisionReceipt.instruction}</p>
+              <p><span className="text-zinc-500">预计影响：</span>{message.revisionReceipt.expectedImpact}</p>
+              <p><span className="text-zinc-500">保护边界：</span>{message.revisionReceipt.protectedBoundary}</p>
+              <p><span className="text-zinc-500">执行回执：</span>{message.revisionReceipt.summary}</p>
+              {message.revisionReceipt.actualDiff ? (
+                <details>
+                  <summary className="cursor-pointer text-violet-200">实际变化</summary>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-4 text-zinc-400">
+                    {[
+                      ...message.revisionReceipt.actualDiff.scenes,
+                      ...message.revisionReceipt.actualDiff.visibleText,
+                      ...message.revisionReceipt.actualDiff.transitions,
+                      ...message.revisionReceipt.actualDiff.audio,
+                      ...message.revisionReceipt.actualDiff.other,
+                    ].map((line) => <li key={line}>{line}</li>)}
+                  </ul>
+                </details>
+              ) : null}
+              <button
+                type="button"
+                className="rounded border border-violet-400/25 px-2 py-1 text-violet-200 hover:bg-violet-500/10"
+                onClick={() => setInputText(`请纠正刚才的修改理解。原要求：${message.revisionReceipt!.originalRequest}`)}
+              >
+                纠正修改理解
+              </button>
+            </div>
           ) : null}
 
 

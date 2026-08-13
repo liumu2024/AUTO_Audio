@@ -243,6 +243,8 @@ export function DirectorChatPanel() {
   const abortRef = useRef<AbortController | null>(null)
   const streamCancelRef = useRef(false)
   const workspaceRevisionsRef = useRef(new Map<string, number>())
+  const activeProgressMessageIdRef = useRef<string | null>(null)
+  const revisionMessageIdsRef = useRef(new Map<string, string>())
   useEffect(() => {
     const workspaceSessionId = browserWorkspaceSessionId()
     void getDirectorWorkspaceSession(workspaceSessionId)
@@ -255,6 +257,20 @@ export function DirectorChatPanel() {
           false,
           session.state.pendingTimelineRevisions ?? [],
         )
+        for (const intent of session.state.pendingTimelineRevisionConfirmation?.revisionIntents ?? []) {
+          if (revisionMessageIdsRef.current.has(intent.callId)) continue
+          const messageId = addAssistantMessage({
+            content: '已恢复一项尚未执行的修改提案，请核对后确认。',
+            kind: 'revision',
+            status: 'done',
+          })
+          revisionMessageIdsRef.current.set(intent.callId, messageId)
+          updateMessage(messageId, {
+            revisionIntent: intent,
+            revisionConfirmationId: session.state.pendingTimelineRevisionConfirmation!.confirmationId,
+            revisionDecisionStatus: 'pending',
+          })
+        }
         await restoreWorkspaceDraft({
           workspace: session.state,
           loadDraft: async (draftId) => (await getV2TimelineDraft(draftId)).draft,
@@ -268,32 +284,48 @@ export function DirectorChatPanel() {
       .catch(() => {
         // A missing/unavailable session must not block a new V2 discussion.
       })
-  }, [])
-  const activeProgressMessageIdRef = useRef<string | null>(null)
+  }, [addAssistantMessage, updateMessage])
 
   const ingestDroppedFiles = useCallback((files: FileList | null) => {
     if (!files?.length) return
     const store = useCreationStore.getState()
-
-    void (async () => {
-      const uploadWorkspaceSessionId = browserWorkspaceSessionId()
-      for (const file of Array.from(files)) {
-        const type = attachmentTypeFromMime(file.type)
-        if (!type) continue
-        const material = await useMaterialLibraryStore.getState().addFromFileWithHash(file)
-        if (browserWorkspaceSessionId() !== uploadWorkspaceSessionId) continue
-
-        store.addAttachment({
-          id: `att_${material.id}`,
-          name: material.name,
-          type,
-          url: material.url,
-          source: 'upload',
-          materialId: material.id,
-          tags: material.tags,
-        })
-      }
-    })()
+    const uploadWorkspaceSessionId = browserWorkspaceSessionId()
+    const uploads = Array.from(files).flatMap((file) => {
+      const type = attachmentTypeFromMime(file.type)
+      if (!type) return []
+      return [{ id: `upload_${crypto.randomUUID()}`, name: file.name, type, file }]
+    })
+    for (const upload of uploads) store.beginAttachmentUpload(upload)
+    for (const upload of uploads) {
+      void (async () => {
+        try {
+          const material = await useMaterialLibraryStore.getState().addFromFileWithHash(upload.file)
+          if (browserWorkspaceSessionId() !== uploadWorkspaceSessionId) {
+            store.completeAttachmentUpload(upload.id)
+            return
+          }
+          store.addAttachment({
+            id: `att_${material.id}`,
+            name: material.name,
+            type: upload.type,
+            url: material.url,
+            source: 'upload',
+            materialId: material.id,
+            tags: material.tags,
+          })
+          store.completeAttachmentUpload(upload.id)
+        } catch (error) {
+          if (browserWorkspaceSessionId() !== uploadWorkspaceSessionId) {
+            store.completeAttachmentUpload(upload.id)
+            return
+          }
+          store.failAttachmentUpload(
+            upload.id,
+            error instanceof Error ? error.message : '上传失败',
+          )
+        }
+      })()
+    }
   }, [])
 
   const onDragEnter = (e: React.DragEvent) => {
@@ -318,14 +350,24 @@ export function DirectorChatPanel() {
     ingestDroppedFiles(e.dataTransfer.files)
   }
 
-  const handleSend = async (text: string) => {
+  const handleSend = async (
+    text: string,
+    timelineRevisionDecision?: { confirmationId: string; action: 'confirm' | 'reject' },
+  ) => {
     const creationSnapshot = useCreationStore.getState()
+    if (!timelineRevisionDecision && creationSnapshot.attachmentUploads.length > 0) return
     const prompt = text.trim()
-    const pendingAttachmentIdsSnapshot = [...creationSnapshot.pendingAttachmentIds]
-    const contextMaterialsAuthoritative = creationSnapshot.materialsSnapshotAuthoritative
-    const contextSampleAuthoritative = creationSnapshot.sampleSnapshotAuthoritative
+    const pendingAttachmentIdsSnapshot = timelineRevisionDecision
+      ? []
+      : [...creationSnapshot.pendingAttachmentIds]
+    const contextMaterialsAuthoritative = timelineRevisionDecision
+      ? false
+      : creationSnapshot.materialsSnapshotAuthoritative
+    const contextSampleAuthoritative = timelineRevisionDecision
+      ? false
+      : creationSnapshot.sampleSnapshotAuthoritative
     const showSampleInInputTraySnapshot = creationSnapshot.showSampleInInputTray
-    clearInputTray()
+    if (!timelineRevisionDecision) clearInputTray()
     const effectiveSampleUrl = creationSnapshot.sampleUrl
     const effectiveSampleName = creationSnapshot.sampleName
     const contextAttachments = [...creationSnapshot.attachments]
@@ -393,7 +435,7 @@ export function DirectorChatPanel() {
             ? '解析样例视频，识别导演结构和可复用风格'
             : '根据当前创作意图和附件生成一版时间线方案'),
       attachments: [
-        ...(effectiveSampleUrl && showSampleInInputTraySnapshot
+        ...(!timelineRevisionDecision && effectiveSampleUrl && showSampleInInputTraySnapshot
           ? [
               {
                 id: 'sample_video',
@@ -438,6 +480,7 @@ export function DirectorChatPanel() {
           turnRequestId,
           workspaceStateRevision,
           workspaceSessionId: requestWorkspaceSessionId,
+          timelineRevisionDecision,
           context: directorContext,
           runtime: {
             backendEnabled: true,
@@ -489,6 +532,20 @@ export function DirectorChatPanel() {
                 ? `后端已提案：${event.toolId}；调用范围由 ${event.requestedMode} 归一为 ${event.effectiveMode}。`
                 : `后端已提案：${event.toolId}（${event.effectiveMode}）。`,
             )
+            if (event.revisionIntent) {
+              const existingMessageId = revisionMessageIdsRef.current.get(event.callId)
+              const messageId = existingMessageId ?? addAssistantMessage({
+                content: '修改范围已解析，尚未执行。请核对后确认。',
+                kind: 'revision',
+                status: 'done',
+              })
+              revisionMessageIdsRef.current.set(event.callId, messageId)
+              updateMessage(messageId, {
+                revisionIntent: event.revisionIntent,
+                revisionConfirmationId: event.revisionConfirmationId,
+                revisionDecisionStatus: timelineRevisionDecision?.action === 'confirm' ? 'confirming' : 'pending',
+              })
+            }
           }
           if (event.type === 'tool_started') {
             debugThoughts.push(`后端正在执行：${event.toolId}。`)
@@ -507,6 +564,19 @@ export function DirectorChatPanel() {
             )
           }
           if (event.type === 'tool_result') {
+            if (event.revisionReceipt) {
+              const revisionMessageId = revisionMessageIdsRef.current.get(event.callId)
+              if (revisionMessageId) {
+                updateMessage(revisionMessageId, {
+                  content: event.ok ? '修改已按服务端回执完成。' : '修改未完成。',
+                  revisionIntent: undefined,
+                  revisionReceipt: event.revisionReceipt,
+                  revisionDecisionStatus: undefined,
+                  status: event.ok ? 'done' : 'error',
+                })
+                revisionMessageIdsRef.current.delete(event.callId)
+              }
+            }
             if (event.toolId === 'timeline.render') {
               if (event.ok && isTimelineDraftRunResult(event.result)) {
                 useV2TimelineStore.getState().setResult(event.result, prompt)
@@ -564,7 +634,7 @@ export function DirectorChatPanel() {
     } catch (e) {
       if (streamCancelRef.current) {
         updateMessage(thinkingId, {
-          content: '导演分析已中止',
+          content: '已停止等待本轮结果。后台模型或工具可能仍在执行；重新打开当前草稿可同步已保存结果。',
           kind: 'text',
           status: 'done',
         })
@@ -594,6 +664,24 @@ export function DirectorChatPanel() {
     }
   }
 
+  const handleRevisionDecision = (decision: { confirmationId: string; action: 'confirm' | 'reject' }) => {
+    const messages = useDirectorChatStore.getState().messages
+      .filter((message) => message.revisionConfirmationId === decision.confirmationId)
+    for (const message of messages) {
+      updateMessage(message.id, {
+        revisionDecisionStatus: decision.action === 'confirm' ? 'confirming' : 'rejected',
+        content: decision.action === 'confirm' ? '正在执行已确认的修改。' : '修改提案已取消。',
+      })
+      if (decision.action === 'reject' && message.revisionIntent) {
+        revisionMessageIdsRef.current.delete(message.revisionIntent.callId)
+      }
+    }
+    void handleSend(
+      decision.action === 'confirm' ? '确认执行已解析的修改提案。' : '取消已解析的修改提案。',
+      decision,
+    )
+  }
+
   const handleCancelDirectorStream = () => {
     if (!abortRef.current) return
     streamCancelRef.current = true
@@ -601,12 +689,12 @@ export function DirectorChatPanel() {
     const progressId = activeProgressMessageIdRef.current
     if (progressId) {
       updateMessage(progressId, {
-        content: '导演分析已中止',
+        content: '已停止等待本轮结果。后台模型或工具可能仍在执行；重新打开当前草稿可同步已保存结果。',
         kind: 'text',
         status: 'done',
       })
     } else {
-      addAssistantMessage({ content: '导演分析已中止' })
+      addAssistantMessage({ content: '已停止等待本轮结果。后台模型或工具可能仍在执行；重新打开当前草稿可同步已保存结果。' })
     }
     setSending(false)
   }
@@ -619,10 +707,10 @@ export function DirectorChatPanel() {
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
     >
-      <DirectorChatThread />
+      <DirectorChatThread onRevisionDecision={handleRevisionDecision} />
       <ChatInput
         disabled={busy}
-        busyLabel={isSending ? '中止导演分析' : '后台处理中'}
+        busyLabel={isSending ? '停止等待' : '后台处理中'}
         onCancel={isSending ? handleCancelDirectorStream : undefined}
         onSend={handleSend}
       />

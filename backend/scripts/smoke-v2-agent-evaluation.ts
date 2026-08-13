@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 
 import {
   evaluateTimelineRequirements,
+  resolveEvaluationRevisionConfirmation,
   summarizeEvaluation,
   type EvaluationTurnResult,
 } from '../src/evaluation-v2/agent-evaluation.js'
@@ -14,6 +15,23 @@ const suite = JSON.parse(
 assert.ok(suite.cases.length >= 10)
 assert.ok(new Set(suite.cases.map((item) => item.category)).size >= 8)
 assert.equal(suite.cases.flatMap((item) => item.turns).some((turn) => 'actions' in turn.expected), false)
+
+const pendingConfirmation = {
+  confirmationId: 'confirm_patch_1',
+  draftId: 'draft_1',
+  baseRevision: 2,
+} as const
+assert.equal(
+  resolveEvaluationRevisionConfirmation(['timeline.patch'], pendingConfirmation),
+  'confirm_patch_1',
+  'an edit evaluation must simulate the explicit UI confirmation before measuring the result',
+)
+assert.equal(
+  resolveEvaluationRevisionConfirmation([], pendingConfirmation),
+  undefined,
+  'an unexpected proposal must never be auto-confirmed by the evaluation harness',
+)
+assert.equal(resolveEvaluationRevisionConfirmation(['timeline.patch'], undefined), undefined)
 
 const base: EvaluationTurnResult = {
   caseId: 'smoke',

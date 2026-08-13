@@ -10,7 +10,7 @@ import { MaterialLibraryPickerDialog } from '@/components/sidebar/MaterialLibrar
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { browserWorkspaceSessionId } from '@/services/director/workspaceSessionLifecycle'
-import type { InputAttachment } from '@/stores/creationStore'
+import type { AttachmentUpload, InputAttachment } from '@/stores/creationStore'
 import { useCreationStore } from '@/stores/creationStore'
 import { useMaterialLibraryStore } from '@/stores/materialLibraryStore'
 
@@ -30,6 +30,7 @@ export function ChatInput({
   const sampleUrl = useCreationStore((s) => s.sampleUrl)
   const sampleName = useCreationStore((s) => s.sampleName)
   const attachments = useCreationStore((s) => s.attachments)
+  const attachmentUploads = useCreationStore((s) => s.attachmentUploads)
   const pendingAttachmentIds = useCreationStore((s) => s.pendingAttachmentIds)
   const showSampleInInputTray = useCreationStore((s) => s.showSampleInInputTray)
   const isSampleParsed = useCreationStore((s) => s.isSampleParsed)
@@ -39,6 +40,11 @@ export function ChatInput({
   const setStyleIntensity = useCreationStore((s) => s.setStyleIntensity)
   const clearSample = useCreationStore((s) => s.clearSample)
   const addAttachment = useCreationStore((s) => s.addAttachment)
+  const beginAttachmentUpload = useCreationStore((s) => s.beginAttachmentUpload)
+  const completeAttachmentUpload = useCreationStore((s) => s.completeAttachmentUpload)
+  const failAttachmentUpload = useCreationStore((s) => s.failAttachmentUpload)
+  const retryAttachmentUpload = useCreationStore((s) => s.retryAttachmentUpload)
+  const removeAttachmentUpload = useCreationStore((s) => s.removeAttachmentUpload)
   const removeAttachment = useCreationStore((s) => s.removeAttachment)
   const addFromFileWithHash = useMaterialLibraryStore((s) => s.addFromFileWithHash)
 
@@ -50,37 +56,68 @@ export function ChatInput({
   const placeholder =
     '描述想生成的视频；可选上传样例作风格参考，或上传图片 / 视频 / 音频作创作素材...'
 
-  const ingestFiles = useCallback(
-    (files: FileList | File[] | null) => {
-      if (!files?.length) return
-      void (async () => {
-        const uploadWorkspaceSessionId = browserWorkspaceSessionId()
-        for (const file of Array.from(files)) {
-          const mime = file.type
-          let type: 'video' | 'image' | 'audio' = 'image'
-          if (mime.startsWith('video/')) type = 'video'
-          else if (mime.startsWith('audio/')) type = 'audio'
-          else if (!mime.startsWith('image/')) continue
+  const uploadFile = useCallback(async (
+    upload: Pick<AttachmentUpload, 'id' | 'file' | 'type'>,
+    uploadWorkspaceSessionId: string,
+  ) => {
+    if (!upload.file) return
+    try {
+      const material = await addFromFileWithHash(upload.file)
+      if (browserWorkspaceSessionId() !== uploadWorkspaceSessionId) {
+        completeAttachmentUpload(upload.id)
+        return
+      }
+      addAttachment({
+        id: `att_${material.id}`,
+        name: material.name,
+        type: upload.type,
+        url: material.url,
+        source: 'upload',
+        materialId: material.id,
+        tags: material.tags,
+      })
+      completeAttachmentUpload(upload.id)
+    } catch (error) {
+      if (browserWorkspaceSessionId() !== uploadWorkspaceSessionId) {
+        completeAttachmentUpload(upload.id)
+        return
+      }
+      failAttachmentUpload(
+        upload.id,
+        error instanceof Error ? error.message : '上传失败',
+      )
+    }
+  }, [addAttachment, addFromFileWithHash, completeAttachmentUpload, failAttachmentUpload])
 
-          const material = await addFromFileWithHash(file)
-          if (browserWorkspaceSessionId() !== uploadWorkspaceSessionId) continue
-          addAttachment({
-            id: `att_${material.id}`,
-            name: material.name,
-            type,
-            url: material.url,
-            source: 'upload',
-            materialId: material.id,
-            tags: material.tags,
-          })
-        }
-      })()
-    },
-    [
-      addAttachment,
-      addFromFileWithHash,
-    ],
-  )
+  const ingestFiles = useCallback((files: FileList | File[] | null) => {
+    if (!files?.length) return
+    const uploadWorkspaceSessionId = browserWorkspaceSessionId()
+    const uploads = Array.from(files).flatMap((file) => {
+      const mime = file.type
+      const type = mime.startsWith('video/')
+        ? 'video'
+        : mime.startsWith('audio/')
+          ? 'audio'
+          : mime.startsWith('image/')
+            ? 'image'
+            : undefined
+      if (!type) return []
+      return [{
+        id: `upload_${crypto.randomUUID()}`,
+        name: file.name,
+        type,
+        file,
+      } satisfies Omit<AttachmentUpload, 'status' | 'error'>]
+    })
+    for (const upload of uploads) beginAttachmentUpload(upload)
+    for (const upload of uploads) void uploadFile(upload, uploadWorkspaceSessionId)
+  }, [beginAttachmentUpload, uploadFile])
+
+  const retryUpload = useCallback((upload: AttachmentUpload) => {
+    if (!upload.file) return
+    retryAttachmentUpload(upload.id)
+    void uploadFile(upload, browserWorkspaceSessionId())
+  }, [retryAttachmentUpload, uploadFile])
 
   const previewItems: AttachmentPreviewItem[] = useMemo(() => {
     const items: AttachmentPreviewItem[] = []
@@ -115,14 +152,14 @@ export function ChatInput({
   }
 
   const sendText = (text: string) => {
-    if (disabled) return
+    if (disabled || attachmentUploads.length > 0) return
     void onSend(text)
     setDraft('')
   }
 
   const handleSend = () => {
     const text = draft.trim()
-    if (disabled) return
+    if (disabled || attachmentUploads.length > 0) return
     if (!text && previewItems.length === 0) return
     sendText(text)
   }
@@ -144,6 +181,23 @@ export function ChatInput({
           )}
         >
           <AttachmentPreviewStrip items={previewItems} onRemove={handleRemove} />
+          {attachmentUploads.length ? (
+            <div className="space-y-1 border-b border-zinc-800/60 px-3 py-2 text-[11px]">
+              {attachmentUploads.map((upload) => (
+                <div key={upload.id} className="flex items-center justify-between gap-2 text-zinc-400">
+                  <span className="min-w-0 truncate">
+                    {upload.name} · {upload.status === 'uploading' ? '上传中' : `上传失败${upload.error ? `：${upload.error}` : ''}`}
+                  </span>
+                  {upload.status === 'failed' ? (
+                    <span className="flex shrink-0 gap-2">
+                      <button type="button" className="text-violet-300 hover:text-violet-200" onClick={() => retryUpload(upload)}>重试</button>
+                      <button type="button" className="text-zinc-500 hover:text-zinc-300" onClick={() => removeAttachmentUpload(upload.id)}>移除</button>
+                    </span>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
 
           <textarea
             value={draft}
@@ -236,10 +290,11 @@ export function ChatInput({
                 disabled && onCancel
                   ? false
                   : disabled ||
+                    attachmentUploads.length > 0 ||
                     (!draft.trim() && previewItems.length === 0)
               }
               onClick={disabled && onCancel ? onCancel : handleSend}
-              aria-label={disabled && onCancel ? '中止' : '发送'}
+              aria-label={disabled && onCancel ? '停止等待' : '发送'}
               title={disabled && onCancel ? busyLabel : '发送'}
             >
               {disabled && onCancel ? (

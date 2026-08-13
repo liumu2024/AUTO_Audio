@@ -6,6 +6,7 @@ import { v2PlannerInputFromRequest } from './controller.js'
 import { previewV2RemotionTimeline } from './remotion-timeline-service.js'
 import {
   executeV2TimelineDraftRun,
+  V2TimelineDeliveryBlockedError,
   V2TimelineIdempotencyFailedError,
   V2TimelineIdempotencyRunningError,
 } from './timeline-draft-runner.js'
@@ -16,6 +17,7 @@ import {
 } from './idempotency-repository.js'
 import { ensureTimelineRenderComponentVisualEvidence } from '../modules/render-components/component-authoring-agent.js'
 import { RENDER_COMPONENT_VISUAL_POLICY_VERSION } from '../modules/render-components/component-registry.js'
+import { evaluateV2TimelineDeliveryReadiness } from './timeline-delivery-readiness.js'
 import { V2_TIMELINE_PLANNER_PROTOCOL_VERSION } from './remotion-timeline-llm-planner.js'
 import { buildV2TimelineRevisionContext } from './timeline-revision-context.js'
 import {
@@ -36,8 +38,9 @@ function userIdFrom(req: Request): number {
 }
 
 function revisionValue(value: unknown): number | null {
-  return typeof value === 'number' && Number.isInteger(value) && value > 0
-    ? value
+  const parsed = typeof value === 'string' && value.trim() ? Number(value) : value
+  return typeof parsed === 'number' && Number.isInteger(parsed) && parsed > 0
+    ? parsed
     : null
 }
 
@@ -304,6 +307,31 @@ export async function getV2TimelineDraft(req: Request, res: Response): Promise<v
   res.json({ draft: { ...draftDto(draft), ...draftHistoryDto(draft) } })
 }
 
+export async function getV2TimelineDraftReadiness(req: Request, res: Response): Promise<void> {
+  const draft = await repository.getDraft(String(req.params.draftId), userIdFrom(req))
+  if (!draft) {
+    res.status(404).json({ error: 'V2 timeline draft not found.' })
+    return
+  }
+  const requestedRevision = revisionValue(req.query.revision)
+  if (requestedRevision && requestedRevision !== draft.revision) {
+    res.status(409).json({
+      error: 'V2 timeline draft revision changed before readiness check.',
+      expectedRevision: requestedRevision,
+      actualRevision: draft.revision,
+    })
+    return
+  }
+  res.json({
+    draftId: draft.id,
+    revision: draft.revision,
+    ...evaluateV2TimelineDeliveryReadiness({
+      timelineSpec: draft.spec,
+      pendingTimelineRevisions: draft.pendingTimelineRevisions,
+    }),
+  })
+}
+
 export async function getV2TimelineDrafts(req: Request, res: Response): Promise<void> {
   const drafts = await repository.listDrafts(userIdFrom(req), limitValue(req.query.limit))
   res.json({ drafts: drafts.map(draftHistoryDto) })
@@ -407,6 +435,10 @@ export async function postV2TimelineDraftRun(req: Request, res: Response): Promi
   try {
     res.json(await executeV2TimelineDraftRun({ repository, draftId, revision, userId, idempotencyKey }))
   } catch (error) {
+    if (error instanceof V2TimelineDeliveryBlockedError) {
+      res.status(422).json({ error: error.message, code: 'V2_TIMELINE_DELIVERY_BLOCKED', ...error.readiness })
+      return
+    }
     if (error instanceof Error && error.message === 'V2 timeline draft revision not found.') {
       res.status(404).json({ error: error.message })
       return

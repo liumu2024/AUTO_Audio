@@ -31,6 +31,13 @@ const runtime = {
 }
 const sessionId = `v2_multiturn_${Date.now()}`
 const requests: Array<Record<string, unknown>> = []
+const originalProposalContext = {
+  ...baseContext,
+  materials: [{
+    id: 'mat_proposal', type: 'image' as const, name: 'proposal.png',
+    url: '/uploads/proposal.png', tags: ['proposal'],
+  }],
+}
 const replies = [
   {
     id: 'resp_1',
@@ -152,7 +159,11 @@ const replies = [
     id: 'resp_11',
     output_text: JSON.stringify({
       replyDraft: '我会创作并应用这个转场。', intent: 'revise', creativeConfigDelta: {},
-      stateActions: [], memoryActions: [], skillRequests: [],
+      stateActions: [{
+        ref: 'revision_requirement',
+        kind: 'requirements.update',
+        operations: [{ operation: 'add', statement: 'Use a particle transition only after confirmation.' }],
+      }], memoryActions: [], skillRequests: [],
       toolRequests: [
         {
           ref: 'author_transition', toolId: 'render.author', skillId: 'v2-render-delivery',
@@ -162,10 +173,43 @@ const replies = [
         {
           ref: 'apply_transition', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring',
           arguments: { scope: 'transition', transitionIds: ['transition_random'], instruction: '使用刚创作的粒子转场' },
-          requestedMode: 'preview', dependsOn: ['author_transition'],
+          requestedMode: 'preview', dependsOn: ['revision_requirement', 'author_transition'],
         },
       ],
       missingInformation: [],
+    }),
+  },
+  {
+    id: 'resp_stale_revision_confirmation',
+    output_text: JSON.stringify({
+      replyDraft: '我会修改这个转场。', intent: 'revise', creativeConfigDelta: {},
+      stateActions: [], memoryActions: [], skillRequests: [],
+      toolRequests: [{
+        ref: 'stale_transition_patch', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring',
+        arguments: { scope: 'transition', transitionIds: ['transition_restore_target'], instruction: '改成滑动转场' },
+        requestedMode: 'preview', dependsOn: [],
+      }],
+      missingInformation: [],
+    }),
+  },
+  {
+    id: 'resp_cross_draft_confirmation',
+    output_text: JSON.stringify({
+      replyDraft: '我会修改这个转场。', intent: 'revise', creativeConfigDelta: {},
+      stateActions: [], memoryActions: [], skillRequests: [],
+      toolRequests: [{
+        ref: 'cross_draft_patch', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring',
+        arguments: { scope: 'transition', transitionIds: ['transition_restore_target'], instruction: '改成缩放转场' },
+        requestedMode: 'preview', dependsOn: [],
+      }],
+      missingInformation: [],
+    }),
+  },
+  {
+    id: 'resp_switch_draft',
+    output_text: JSON.stringify({
+      replyDraft: '已切换到另一份草稿。', intent: 'chat', creativeConfigDelta: {},
+      stateActions: [], memoryActions: [], skillRequests: [], toolRequests: [], missingInformation: [],
     }),
   },
   ...Array.from({ length: 3 }, (_, index) => ({
@@ -199,6 +243,7 @@ const replies = [
 const originalFetch = globalThis.fetch
 let dispatchCount = 0
 const authorizedDraftComponentsSeen: string[][] = []
+const dispatchedContextMaterialIds: string[][] = []
 globalThis.fetch = async (_url, init) => {
   requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
   const reply = replies.shift()
@@ -213,6 +258,7 @@ async function turn(
   failedRefs = new Set<string>(),
   contextMaterialsAuthoritative = false,
   contextSampleAuthoritative = false,
+  timelineRevisionDecision?: { confirmationId: string; action: 'confirm' | 'reject' },
 ) {
   const events = [] as Array<{ type: string; [key: string]: unknown }>
   const request = {
@@ -223,6 +269,7 @@ async function turn(
     userId: 1,
     contextMaterialsAuthoritative,
     contextSampleAuthoritative,
+    timelineRevisionDecision,
   }
   for await (const event of streamDirectorAgentChat(request, {
     dispatchTool: async (dispatchInput) => {
@@ -250,6 +297,7 @@ async function turn(
       }
       if (stage.toolRequest.ref === 'apply_transition') {
         authorizedDraftComponentsSeen.push(dispatchInput.authorizedDraftComponentIds ?? [])
+        dispatchedContextMaterialIds.push(dispatchInput.context.materials.map((item) => item.id))
       }
       const ok = !failedRefs.has(stage.toolRequest.ref)
       return {
@@ -305,6 +353,19 @@ const restoredDraft = await restoredDraftRepository.createDraft({
   plannerSource: 'deterministic',
   review: {},
   traceDir: 'director-restore-smoke',
+})
+const otherDraft = await restoredDraftRepository.createDraft({
+  userId: 1,
+  plannerInput: {
+    taskId: `director_other_${Date.now()}`,
+    prompt: 'other timeline',
+    creationMode: 'text_to_video',
+    plannerMode: 'deterministic',
+  },
+  spec: { ...restoredDraft.spec, task_id: `director_other_${Date.now()}` },
+  plannerSource: 'deterministic',
+  review: {},
+  traceDir: 'director-other-smoke',
 })
 
 try {
@@ -522,11 +583,128 @@ try {
     (negatedPersistence.find((event) => event.type === 'assistant_reply') as { message: string }).message,
     '当前是讨论模式；我不会记录任何偏好，也不会修改草稿。',
   )
-  await turn('创作一个粒子转场并应用到当前转场', {
-    ...baseContext,
-    currentTimeline: { kind: 'v2_timeline', status: 'saved', draftId: 'draft_1', currentRevision: 2 },
-  }, { hasV2Timeline: true, v2SceneCount: 3 })
+  const componentTurn = await turn('创作一个粒子转场并应用到当前转场', {
+    ...originalProposalContext,
+    currentTimeline: {
+      kind: 'v2_timeline', status: 'saved', draftId: restoredDraft.id, currentRevision: restoredDraft.revision,
+    },
+  }, { hasV2Timeline: true, v2SceneCount: 3 }, new Set(), true)
+  const proposedPatch = componentTurn.find((event) => (
+    event.type === 'tool_proposed' && event.toolId === 'timeline.patch'
+  )) as { callId: string; revisionIntent?: { scope?: string; targetIds?: string[] } }
+  assert.equal(proposedPatch.revisionIntent?.scope, 'transition')
+  assert.deepEqual(proposedPatch.revisionIntent?.targetIds, ['transition_random'])
+  assert.equal(
+    componentTurn.some((event) => event.type === 'tool_started' || event.type === 'tool_result'),
+    false,
+    'a parsed revision must wait for explicit confirmation before any Tool side effect',
+  )
+  const pendingConfirmation = (componentTurn.find((event) => event.type === 'workspace_session') as {
+    state: { pendingTimelineRevisionConfirmation?: { confirmationId: string; revisionIntents: unknown[] } }
+  }).state.pendingTimelineRevisionConfirmation
+  assert.equal(pendingConfirmation?.confirmationId, proposedPatch.callId)
+  assert.equal(pendingConfirmation?.revisionIntents.length, 1)
+  const confirmedComponentTurn = await turn(
+    'confirm the pending revision',
+    {
+      ...baseContext,
+      materials: [{
+        id: 'mat_late', type: 'image' as const, name: 'late.png',
+        url: '/uploads/late.png', tags: ['late'],
+      }],
+    },
+    {},
+    new Set(),
+    false,
+    false,
+    { confirmationId: proposedPatch.callId, action: 'confirm' },
+  )
+  const patchReceipt = confirmedComponentTurn.find((event) => (
+    event.type === 'tool_result' && event.toolId === 'timeline.patch'
+  )) as { revisionReceipt?: { status?: string; scope?: string } }
+  assert.equal(patchReceipt.revisionReceipt?.status, 'succeeded')
+  assert.equal(patchReceipt.revisionReceipt?.scope, 'transition')
   assert.deepEqual(authorizedDraftComponentsSeen, [['cmp_server_generated']])
+  assert.deepEqual(
+    dispatchedContextMaterialIds,
+    [['mat_proposal']],
+    'confirmation must execute with the context shown when the proposal was created',
+  )
+  assert.equal(
+    (confirmedComponentTurn.find((event) => event.type === 'workspace_session') as {
+      state: { pendingTimelineRevisionConfirmation?: unknown }
+    }).state.pendingTimelineRevisionConfirmation,
+    undefined,
+  )
+  const staleProposalTurn = await turn('把当前转场改成滑动', {
+    ...baseContext,
+    currentTimeline: {
+      kind: 'v2_timeline', status: 'saved', draftId: restoredDraft.id, currentRevision: restoredDraft.revision,
+    },
+  }, { hasV2Timeline: true, v2SceneCount: 2 })
+  const staleProposal = staleProposalTurn.find((event) => (
+    event.type === 'tool_proposed' && event.toolId === 'timeline.patch'
+  )) as { callId: string }
+  await restoredDraftRepository.saveDraft({
+    draftId: restoredDraft.id,
+    userId: 1,
+    baseRevision: restoredDraft.revision,
+    spec: { ...restoredDraft.spec, notes: ['advanced in another window'] },
+    kind: 'user_edit',
+  })
+  const dispatchCountBeforeStaleConfirmation = dispatchCount
+  const staleConfirmation = await turn(
+    '确认执行已解析的修改提案。',
+    baseContext,
+    {},
+    new Set(),
+    false,
+    false,
+    { confirmationId: staleProposal.callId, action: 'confirm' },
+  )
+  assert.equal(dispatchCount, dispatchCountBeforeStaleConfirmation)
+  assert.match(
+    String((staleConfirmation.find((event) => event.type === 'error') as { message: string }).message),
+    /草稿版本已变化.*重新提出修改/,
+  )
+  const latestRestoredDraft = await restoredDraftRepository.getDraft(restoredDraft.id, 1)
+  const crossDraftProposalTurn = await turn('把当前转场改成缩放', {
+    ...baseContext,
+    currentTimeline: {
+      kind: 'v2_timeline', status: 'saved', draftId: restoredDraft.id, currentRevision: latestRestoredDraft!.revision,
+    },
+  }, { hasV2Timeline: true, v2SceneCount: 2 })
+  const crossDraftProposal = crossDraftProposalTurn.find((event) => (
+    event.type === 'tool_proposed' && event.toolId === 'timeline.patch'
+  )) as { callId: string }
+  await turn('切换到另一份草稿继续查看', {
+    ...baseContext,
+    currentTimeline: {
+      kind: 'v2_timeline', status: 'saved', draftId: otherDraft.id, currentRevision: otherDraft.revision,
+    },
+  }, { hasV2Timeline: true, v2SceneCount: 2 })
+  const dispatchCountBeforeCrossDraftConfirmation = dispatchCount
+  const crossDraftConfirmation = await turn(
+    '确认执行已解析的修改提案。',
+    baseContext,
+    {},
+    new Set(),
+    false,
+    false,
+    { confirmationId: crossDraftProposal.callId, action: 'confirm' },
+  )
+  assert.equal(dispatchCount, dispatchCountBeforeCrossDraftConfirmation)
+  assert.match(
+    String((crossDraftConfirmation.find((event) => event.type === 'error') as { message: string }).message),
+    /草稿版本已变化.*重新提出修改/,
+  )
+  assert.equal(
+    (crossDraftConfirmation.find((event) => event.type === 'workspace_session') as {
+      state: { draftId?: string; baseRevision?: number }
+    }).state.draftId,
+    otherDraft.id,
+    'rejecting a stale proposal must preserve the draft the user has already switched to',
+  )
   const materialContext = {
     ...baseContext,
     materials: [{
@@ -589,10 +767,11 @@ try {
     state: { context: { sampleVideo?: unknown } }
   }).state
   assert.equal(clearedSampleState.context.sampleVideo, undefined, 'an explicit sample clear must persist')
-  assert.equal(requests.length, 18)
+  assert.equal(requests.length, 21)
 } finally {
   globalThis.fetch = originalFetch
   await restoredDraftRepository.deleteDraft(restoredDraft.id, 1)
+  await restoredDraftRepository.deleteDraft(otherDraft.id, 1)
 }
 
 console.log('[smoke] V2 director multi-turn session passed')

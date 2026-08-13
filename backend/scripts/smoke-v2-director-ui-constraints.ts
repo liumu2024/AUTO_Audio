@@ -8,6 +8,32 @@ import {
 import { useCreationStore } from '../../fonted/src/stores/creationStore.js'
 import { readFile } from 'node:fs/promises'
 
+const directorPanelSource = await readFile(
+  new URL('../../fonted/src/components/sidebar/DirectorChatPanel.tsx', import.meta.url),
+  'utf8',
+)
+assert.doesNotMatch(
+  directorPanelSource,
+  /revisionReceipt:\s*\{\s*\.\.\.event\.revisionIntent/s,
+  'the UI must not fabricate a terminal receipt from a proposal intent',
+)
+assert.match(directorPanelSource, /timelineRevisionDecision/)
+assert.match(
+  directorPanelSource,
+  /if \(!timelineRevisionDecision && creationSnapshot\.attachmentUploads\.length > 0\) return/,
+  'confirming a persisted revision proposal must not be blocked by an unrelated upload',
+)
+assert.match(
+  directorPanelSource,
+  /messages[\s\S]*\.filter\(\(message\) => message\.revisionConfirmationId === decision\.confirmationId\)/,
+  'one decision must update every revision card in the same persisted proposal',
+)
+assert.match(
+  directorPanelSource,
+  /if \(!timelineRevisionDecision\) clearInputTray\(\)/,
+  'a revision decision must not consume the normal chat input tray',
+)
+
 const context = buildDirectorContextFromUI({
   sampleUrl: '',
   attachments: [],
@@ -60,6 +86,7 @@ assert.equal(
 
 useCreationStore.setState({
   sampleUrl: '', sampleName: '', isSampleParsed: false,
+  attachmentUploads: [],
   attachments: [{
     id: 'att_uploaded_sample', materialId: 'uploaded_sample', name: 'sample.mp4',
     type: 'video', url: '/uploads/sample.mp4', source: 'upload',
@@ -67,6 +94,23 @@ useCreationStore.setState({
   pendingAttachmentIds: ['att_uploaded_sample'],
   materialsSnapshotAuthoritative: true,
 })
+
+useCreationStore.getState().beginAttachmentUpload({
+  id: 'upload_slow_image',
+  name: 'slow-image.png',
+  type: 'image',
+})
+assert.equal(
+  useCreationStore.getState().attachmentUploads[0]?.status,
+  'uploading',
+  'a selected file must become visible as uploading before the network request starts',
+)
+useCreationStore.getState().failAttachmentUpload('upload_slow_image', 'network unavailable')
+assert.equal(useCreationStore.getState().attachmentUploads[0]?.status, 'failed')
+useCreationStore.getState().retryAttachmentUpload('upload_slow_image')
+assert.equal(useCreationStore.getState().attachmentUploads[0]?.status, 'uploading')
+useCreationStore.getState().completeAttachmentUpload('upload_slow_image')
+assert.deepEqual(useCreationStore.getState().attachmentUploads, [])
 useCreationStore.getState().acceptServerSample({
   id: 'uploaded_sample', url: '/uploads/sample.mp4', name: 'sample.mp4', parsed: true,
 })
@@ -197,6 +241,31 @@ const editorHeaderSource = await readFile(
   new URL('../../fonted/src/components/layout/EditorHeader.tsx', import.meta.url),
   'utf8',
 )
+const chatInputSource = await readFile(
+  new URL('../../fonted/src/components/sidebar/ChatInput.tsx', import.meta.url),
+  'utf8',
+)
+const propertyEditorSource = await readFile(
+  new URL('../../fonted/src/components/layout/PropertyEditorPanel.tsx', import.meta.url),
+  'utf8',
+)
+const chatMessageSource = await readFile(
+  new URL('../../fonted/src/components/sidebar/DirectorChatMessage.tsx', import.meta.url),
+  'utf8',
+)
+assert.match(
+  chatInputSource,
+  /attachmentUploads\.length > 0[\s\S]*handleSend[\s\S]*attachmentUploads\.length > 0/,
+  'sending must wait until every queued upload is either available or explicitly removed',
+)
+assert.match(chatInputSource, /上传中[\s\S]*重试/)
+assert.match(propertyEditorSource, /镜头备注（不会自动执行）/)
+assert.match(propertyEditorSource, /将备注带入对话/)
+assert.match(propertyEditorSource, /setInputText/)
+assert.doesNotMatch(propertyEditorSource, /我的修改要求/)
+assert.match(chatPanelSource, /event\.revisionIntent[\s\S]*revisionReceipt/)
+assert.match(chatMessageSource, /实际变化[\s\S]*actualDiff/)
+assert.match(chatMessageSource, /纠正修改理解[\s\S]*setInputText/)
 assert.match(
   chatPanelSource,
   /event\.toolId === 'timeline\.render'[\s\S]*event\.result[\s\S]*setResult/,
@@ -279,10 +348,9 @@ assert.match(
   /applyDirectorWorkspaceContext\([\s\S]*event\.state\.pendingTimelineRevisions/,
   'workspace synchronization must deliver the pending revision gate to direct UI export',
 )
-assert.match(
-  editorHeaderSource,
-  /pendingTimelineRevisions[\s\S]*handleExport[\s\S]*仍有方案修改尚未落实[\s\S]*exportDisabled/,
-  'direct UI export must not render an older revision after a requested patch failed',
-)
+assert.match(editorHeaderSource, /getV2TimelineDraftReadiness[\s\S]*预飞检查/)
+assert.match(editorHeaderSource, /未保存修改[\s\S]*已保存 v/)
+assert.match(chatPanelSource, /停止等待本轮结果[\s\S]*后台模型或工具可能仍在执行/)
+assert.doesNotMatch(chatPanelSource, /导演分析已中止/)
 
 console.log('V2 director UI constraints smoke passed')

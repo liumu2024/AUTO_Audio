@@ -1410,6 +1410,44 @@ function exactSet(actual: string[], expected: string[]) {
   return JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort())
 }
 
+export function resolveEvaluationRevisionConfirmation(
+  expectedTools: string[],
+  pending: Pick<NonNullable<DirectorWorkspaceState['pendingTimelineRevisionConfirmation']>, 'confirmationId'> | undefined,
+): string | undefined {
+  return expectedTools.includes('timeline.patch') ? pending?.confirmationId : undefined
+}
+
+function mergeConfirmedEvaluationTurnResults(
+  proposal: Record<string, unknown>,
+  confirmation: Record<string, unknown>,
+): Record<string, unknown> {
+  const receipts = new Map<string, unknown>()
+  for (const value of [proposal.action_receipts, confirmation.action_receipts]) {
+    if (!Array.isArray(value)) continue
+    for (const receipt of value) {
+      const ref = receipt && typeof receipt === 'object' && typeof (receipt as { ref?: unknown }).ref === 'string'
+        ? (receipt as { ref: string }).ref
+        : `receipt_${receipts.size}`
+      receipts.set(ref, receipt)
+    }
+  }
+  return {
+    ...proposal,
+    ...confirmation,
+    source: proposal.source,
+    intent: proposal.intent,
+    action: proposal.action,
+    fallback_reason: proposal.fallback_reason,
+    requirement_changes: proposal.requirement_changes,
+    creative_memory_retrieval: proposal.creative_memory_retrieval,
+    creative_memory_requests: proposal.creative_memory_requests,
+    creative_memory_changes: proposal.creative_memory_changes,
+    creative_knowledge_retrieval: proposal.creative_knowledge_retrieval,
+    tool_requests: proposal.tool_requests,
+    action_receipts: [...receipts.values()],
+  }
+}
+
 function includesFact(value: string, fact: string) {
   const normalize = (text: string) => text.normalize('NFKC').replace(/\s+/g, '')
   return normalize(value).includes(normalize(fact))
@@ -1539,6 +1577,41 @@ export async function runV2AgentEvaluation(input: {
         })) {
           events.push(event)
         }
+        const proposalWorkspaceEvent = [...events].reverse().find(
+          (event) => event.type === 'workspace_session',
+        )
+        if (!proposalWorkspaceEvent || proposalWorkspaceEvent.type !== 'workspace_session') {
+          throw new Error(`${evaluationCase.id} turn ${turnIndex + 1} did not return workspace state.`)
+        }
+        const revisionConfirmationId = resolveEvaluationRevisionConfirmation(
+          testTurn.expected.tools,
+          proposalWorkspaceEvent.state.pendingTimelineRevisionConfirmation,
+        )
+        if (revisionConfirmationId) {
+          const proposalStartedRevision = events.some(
+            (event) => event.type === 'tool_started' && event.toolId === 'timeline.patch',
+          )
+          if (proposalStartedRevision) {
+            throw new Error(`${evaluationCase.id} turn ${turnIndex + 1} executed timeline.patch before confirmation.`)
+          }
+          const confirmedContext = proposalWorkspaceEvent.state.context
+          for await (const event of streamDirectorAgentChat({
+            workspaceSessionId,
+            turnRequestId: `r${run}_t${turnIndex + 1}_confirm`,
+            workspaceStateRevision: proposalWorkspaceEvent.stateRevision,
+            userId,
+            prompt: '确认执行已解析的修改提案。',
+            context: confirmedContext,
+            runtime: runtime(confirmedContext),
+            timelineRevisionDecision: { confirmationId: revisionConfirmationId, action: 'confirm' },
+          }, {
+            dispatchTool: testTurn.expected.dryRender
+              ? dryDispatcher(testTurn)
+              : input.dispatchTool ?? dispatchV2AgentTool,
+          })) {
+            events.push(event)
+          }
+        }
         const agentLatencyMs = Date.now() - started
         const workspaceEvent = [...events].reverse().find(
           (event) => event.type === 'workspace_session',
@@ -1547,9 +1620,15 @@ export async function runV2AgentEvaluation(input: {
           throw new Error(`${evaluationCase.id} turn ${turnIndex + 1} did not return workspace state.`)
         }
         const traceDir = workspaceEvent.traceDir
-        const turnResult = await readJson(
-          path.join(traceDir, '00-director-turn', 'turn-result.json'),
+        const proposalTurnResult = await readJson(
+          path.join(proposalWorkspaceEvent.traceDir, '00-director-turn', 'turn-result.json'),
         )
+        const turnResult = revisionConfirmationId
+          ? mergeConfirmedEvaluationTurnResults(
+              proposalTurnResult,
+              await readJson(path.join(traceDir, '00-director-turn', 'turn-result.json')),
+            )
+          : proposalTurnResult
         const replyEvent = [...events].reverse().find(
           (event) => event.type === 'assistant_reply',
         )
@@ -1559,11 +1638,11 @@ export async function runV2AgentEvaluation(input: {
             event.type === 'skill_selected'
           ))
           .map((event) => event.skillId)
-        const proposedTools = events
+        const proposedTools = [...new Set(events
           .filter((event): event is Extract<DirectorAgentStreamEvent, { type: 'tool_proposed' }> => (
             event.type === 'tool_proposed'
           ))
-          .map((event) => event.toolId)
+          .map((event) => event.toolId))]
         const executedTools = events
           .filter((event) => event.type === 'tool_started')
           .map((event) => event.toolId)
@@ -1808,7 +1887,7 @@ export async function runV2AgentEvaluation(input: {
         ).length
 
         const jsonRepair = await exists(
-          path.join(traceDir, '00-director-turn', 'model-json-repair-request.md'),
+          path.join(proposalWorkspaceEvent.traceDir, '00-director-turn', 'model-json-repair-request.md'),
         )
         const fallback = turnResult.source !== 'llm' || Boolean(turnResult.fallback_reason)
         let judgePass: boolean | undefined
@@ -1840,7 +1919,7 @@ export async function runV2AgentEvaluation(input: {
           judgeUsage = judged.judgeUsage
         }
 
-        const usageRoots = [traceDir]
+        const usageRoots = [...new Set([proposalWorkspaceEvent.traceDir, traceDir])]
         if (draftEvent?.type === 'tool_result' && draftEvent.draft?.traceDir) {
           usageRoots.push(draftEvent.draft.traceDir)
         }

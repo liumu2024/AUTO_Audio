@@ -48,11 +48,17 @@ function replayEvents(value: unknown): DirectorAgentStreamEvent[] {
   return Array.isArray(events) ? events as DirectorAgentStreamEvent[] : []
 }
 
-function isFinalEvent(event: DirectorAgentStreamEvent): boolean {
+function isTerminalEvent(event: DirectorAgentStreamEvent): boolean {
   return event.type === 'assistant_reply'
     || event.type === 'workspace_session'
     || event.type === 'done'
     || event.type === 'error'
+}
+
+function isReplayableEvent(event: DirectorAgentStreamEvent): boolean {
+  return event.type === 'tool_proposed'
+    || event.type === 'tool_result'
+    || isTerminalEvent(event)
 }
 
 export async function prepareDirectorTurn(
@@ -114,22 +120,24 @@ export async function* streamPreparedDirectorTurn(
     `${prepared.request.userId}:${prepared.request.workspaceSessionId}`,
   )
   try {
-    const finalEvents: DirectorAgentStreamEvent[] = []
+    const replayableEvents: DirectorAgentStreamEvent[] = []
+    const terminalEvents: DirectorAgentStreamEvent[] = []
     try {
       for await (const event of execute()) {
-        if (isFinalEvent(event)) finalEvents.push(event)
+        if (isReplayableEvent(event)) replayableEvents.push(event)
+        if (isTerminalEvent(event)) terminalEvents.push(event)
         else yield event
       }
-      const errorEvent = finalEvents.find((event) => event.type === 'error')
+      const errorEvent = terminalEvents.find((event) => event.type === 'error')
       await prepared.repository.update({
         id: receipt.id,
         status: errorEvent ? 'failed' : 'completed',
-        resultJson: { events: finalEvents },
+        resultJson: { events: replayableEvents },
         ...(errorEvent
           ? { failure: { code: 'request_rejected', message: errorEvent.message } }
           : {}),
       })
-      for (const event of finalEvents) yield event
+      for (const event of terminalEvents) yield event
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       const events: DirectorAgentStreamEvent[] = [{ type: 'error', message }, { type: 'done' }]
