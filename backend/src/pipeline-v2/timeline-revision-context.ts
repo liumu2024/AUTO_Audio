@@ -4,6 +4,7 @@ export interface V2TimelineRevisionContext {
   draft_id: string
   base_revision: number
   timeline: {
+    creative_brief?: RemotionTimelineSpecV1['creative_brief']
     canvas: RemotionTimelineSpecV1['canvas']
     assets: Array<Pick<RemotionTimelineSpecV1['assets'][number], 'id' | 'type' | 'source' | 'label'>>
     scenes: Array<Pick<
@@ -17,6 +18,7 @@ export interface V2TimelineRevisionContext {
     material_jobs: Array<Pick<
       RemotionTimelineSpecV1['material_jobs'][number],
       'id' | 'scene_id' | 'type' | 'status' | 'input_asset_id' | 'output_asset_id' | 'fallback_asset_id'
+      | 'prompt' | 'fallback_kind'
     >>
     audio?: RemotionTimelineSpecV1['audio']
   }
@@ -47,6 +49,7 @@ export function buildV2TimelineRevisionContext(input: {
     draft_id: input.draftId,
     base_revision: input.baseRevision,
     timeline: {
+      creative_brief: spec.creative_brief,
       canvas: spec.canvas,
       assets: spec.assets.map((asset) => ({
         id: asset.id,
@@ -79,6 +82,8 @@ export function buildV2TimelineRevisionContext(input: {
         input_asset_id: job.input_asset_id,
         output_asset_id: job.output_asset_id,
         fallback_asset_id: job.fallback_asset_id,
+        prompt: job.prompt,
+        fallback_kind: job.fallback_kind,
       })),
       // Persisted drafts can predate the array contract. Do not let malformed
       // optional audio metadata crash a revision; validation still reports it

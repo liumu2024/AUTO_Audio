@@ -76,6 +76,7 @@ export type DirectorAgentStreamEvent = {
         revision: number;
         spec: RemotionTimelineSpecV1;
         traceDir?: string;
+        pendingTimelineRevisions?: DirectorWorkspaceState['pendingTimelineRevisions'];
     };
 } | {
     type: 'assistant_reply';

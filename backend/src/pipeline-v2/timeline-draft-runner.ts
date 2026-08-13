@@ -20,6 +20,7 @@ import {
   type V2IdempotencyRepository,
 } from './idempotency-repository.js'
 import type { V2TimelineDraftRepository, V2TimelineRenderRunRecord } from './timeline-draft-repository.js'
+import { V2TimelinePendingRevisionError } from './timeline-draft-repository.js'
 
 export interface V2TimelineDraftRunExecutionResult {
   ok: boolean
@@ -106,6 +107,9 @@ async function executeV2TimelineDraftRunOnce(
     input.repository.getRevision(input.draftId, input.revision, input.userId),
   ])
   if (!draft || !source) throw new Error('V2 timeline draft revision not found.')
+  if (draft.pendingTimelineRevisions.length > 0) {
+    throw new V2TimelinePendingRevisionError(draft.pendingTimelineRevisions)
+  }
   const runId = `v2_run_${Date.now()}_${randomUUID().slice(0, 8)}`
   const idempotency = input.idempotency ?? createV2IdempotencyRepository()
   const operation = 'timeline.render'

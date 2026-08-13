@@ -158,6 +158,7 @@ export interface DirectorTimelineFacts {
             inputAssetId?: string;
             outputAssetId?: string;
             fallbackKind?: RemotionTimelineMaterialJob['fallback_kind'];
+            prompt?: string;
         }>;
     }>;
     visibleText: Array<{

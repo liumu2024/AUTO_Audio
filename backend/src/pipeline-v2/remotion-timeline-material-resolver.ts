@@ -720,6 +720,8 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
 export async function standardizeRemotionTimelineVideoAssets(input: {
   spec: RemotionTimelineSpecV1
   outputDir: string
+  /** Video assets already normalized by material resolution; keep their paths so reuse evidence stays valid. */
+  alreadyStandardizedAssetIds?: readonly string[]
 }): Promise<{
   spec: RemotionTimelineSpecV1
   standardized_assets: Array<{
@@ -730,10 +732,18 @@ export async function standardizeRemotionTimelineVideoAssets(input: {
   const spec = assertValidRemotionTimelineSpec(input.spec)
   const standardizedAssets: Array<{ id: string; src: string }> = []
   const assets: RemotionTimelineAsset[] = []
+  const alreadyStandardizedAssetIds = new Set(input.alreadyStandardizedAssetIds ?? [])
 
   for (const asset of spec.assets) {
-    if (asset.type !== 'video' || asset.src.startsWith('static:')) {
+    if (
+      asset.type !== 'video'
+      || asset.src.startsWith('static:')
+      || alreadyStandardizedAssetIds.has(asset.id)
+    ) {
       assets.push(asset)
+      if (asset.type === 'video' && alreadyStandardizedAssetIds.has(asset.id)) {
+        standardizedAssets.push({ id: asset.id, src: asset.src })
+      }
       continue
     }
     const standardized = await standardizeGeneratedVideoAsset({

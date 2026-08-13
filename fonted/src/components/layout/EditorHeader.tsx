@@ -20,6 +20,7 @@ export function EditorHeader() {
   const projectName = useEditorStore((s) => s.projectName)
   const v2Spec = useV2TimelineStore((s) => s.spec)
   const v2HasLocalEdits = useV2TimelineStore((s) => s.hasLocalEdits)
+  const pendingTimelineRevisions = useV2TimelineStore((s) => s.pendingTimelineRevisions)
   const activeTaskId = useTaskStore((s) => s.activeTaskId)
   const backendReady = useTaskStore((s) => s.backendReady)
   const isTaskRunning = useTaskStore((s) => s.isTaskRunning)
@@ -67,6 +68,10 @@ export function EditorHeader() {
   const handleExport = async () => {
     if (saving || exporting) return
     const taskStore = useTaskStore.getState()
+    if (pendingTimelineRevisions.length) {
+      taskStore.addLog(`[导出] 仍有方案修改尚未落实：${pendingTimelineRevisions[0]!.instruction}`)
+      return
+    }
     const taskId = useTaskStore.getState().activeTaskId
     if (!taskId) {
       taskStore.addLog('[导出] 导出失败：当前没有活跃任务。')
@@ -106,6 +111,7 @@ export function EditorHeader() {
     saving || exporting || !v2Spec
   const exportDisabled =
     saving || exporting || isTaskRunning || copilotLoading || !activeTaskId || !v2Spec
+    || pendingTimelineRevisions.length > 0
   const newDraftDisabled =
     saving || exporting || isTaskRunning || copilotLoading || isDirectorSending || isAnalyzing
 

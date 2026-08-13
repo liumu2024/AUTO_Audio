@@ -299,6 +299,8 @@ const revisionContext = buildV2TimelineRevisionContext({
   baseRevision: 7,
   spec: baseRevisionSpec,
 })
+assert.deepEqual(revisionContext.timeline.creative_brief, baseRevisionSpec.creative_brief)
+assert.equal(revisionContext.timeline.material_jobs[0]?.prompt, baseRevisionSpec.material_jobs[0]?.prompt)
 assert.equal(revisionContext.base_revision, 7)
 assert.equal(revisionContext.timeline.scenes[0]?.note, '首镜必须保留安静的开场停顿。')
 

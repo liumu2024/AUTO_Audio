@@ -49,29 +49,44 @@ const timelinePlanArgumentsSchema = z.object({
   instruction: z.string().trim().min(1).max(4_000).optional(),
 }).strict()
 const patchInstructionSchema = z.string().trim().min(1).max(4_000).optional()
+const resolvesPendingCallIdSchema = z.string().trim().min(1).max(200).optional()
 const timelinePatchArgumentsSchema = z.discriminatedUnion('scope', [
-  z.object({ scope: z.literal('subtitle'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema }).strict(),
-  z.object({ scope: z.literal('scene'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema }).strict(),
+  z.object({
+    scope: z.literal('subtitle'),
+    sceneId: z.string().trim().min(1).max(200).optional(),
+    overlayIds: z.array(z.string().trim().min(1).max(200)).min(1).max(20)
+      .refine((ids) => new Set(ids).size === ids.length, 'overlayIds must be unique.').optional(),
+    instruction: patchInstructionSchema,
+    resolvesPendingCallId: resolvesPendingCallIdSchema,
+  }).strict(),
+  z.object({ scope: z.literal('scene'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema, resolvesPendingCallId: resolvesPendingCallIdSchema }).strict(),
   z.object({
     scope: z.literal('structure'),
     sceneIds: z.array(z.string().trim().min(1).max(200)).min(1).max(20)
       .refine((ids) => new Set(ids).size === ids.length, 'sceneIds must be unique.'),
+    durationMode: z.enum(['preserve_range', 'resize_timeline']).default('preserve_range'),
     instruction: patchInstructionSchema,
+    resolvesPendingCallId: resolvesPendingCallIdSchema,
   }).strict(),
-  z.object({ scope: z.literal('visual_strategy'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema }).strict(),
+  z.object({ scope: z.literal('visual_strategy'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema, resolvesPendingCallId: resolvesPendingCallIdSchema }).strict(),
   z.object({
     scope: z.literal('transition'),
     transitionIds: z.array(z.string().trim().min(1).max(200)).min(1).max(20)
       .refine((ids) => new Set(ids).size === ids.length, 'transitionIds must be unique.'),
     instruction: patchInstructionSchema,
+    resolvesPendingCallId: resolvesPendingCallIdSchema,
   }).strict(),
   z.object({
     scope: z.literal('global'),
     mode: z.enum(['brief_update', 'full_replan']),
     instruction: patchInstructionSchema,
+    resolvesPendingCallId: resolvesPendingCallIdSchema,
   }).strict(),
 ])
 const timelineRenderArgumentsSchema = emptyArgumentsSchema
+const timelinePendingDismissArgumentsSchema = z.object({
+  callId: z.string().trim().min(1).max(200),
+}).strict()
 const renderAuthorArgumentsSchema = z.object({
   purpose: z.enum(['scene', 'transition']),
   displayName: z.string().trim().min(1).max(80),
@@ -90,6 +105,7 @@ const materialInspectInputSchema = jsonSchema(materialInspectArgumentsSchema)
 const timelinePlanInputSchema = jsonSchema(timelinePlanArgumentsSchema)
 const timelinePatchInputSchema = jsonSchema(timelinePatchArgumentsSchema)
 const timelineRenderInputSchema = jsonSchema(timelineRenderArgumentsSchema)
+const timelinePendingDismissInputSchema = jsonSchema(timelinePendingDismissArgumentsSchema)
 const renderAuthorInputSchema = jsonSchema(renderAuthorArgumentsSchema)
 
 const toolArgumentSchemas: Record<string, z.ZodType<Record<string, unknown>>> = {
@@ -97,6 +113,7 @@ const toolArgumentSchemas: Record<string, z.ZodType<Record<string, unknown>>> = 
   'material.inspect': materialInspectArgumentsSchema,
   'timeline.plan': timelinePlanArgumentsSchema,
   'timeline.patch': timelinePatchArgumentsSchema,
+  'timeline.pending.dismiss': timelinePendingDismissArgumentsSchema,
   'timeline.render': timelineRenderArgumentsSchema,
   'render.author': renderAuthorArgumentsSchema,
 }
@@ -112,7 +129,7 @@ export function evaluateV2AgentToolReadiness(input: {
   toolId: string
   context: DirectorContext
   runtime: DirectorConversationRuntime
-  workspace?: Pick<DirectorWorkspaceState, 'draftId' | 'baseRevision'>
+  workspace?: Pick<DirectorWorkspaceState, 'draftId' | 'baseRevision' | 'pendingTimelineRevisions'>
   authorizationGranted?: boolean
   timelineSpec?: RemotionTimelineSpecV1
 }): V2AgentToolReadiness {
@@ -139,11 +156,24 @@ export function evaluateV2AgentToolReadiness(input: {
   if (input.toolId === 'timeline.patch' && !hasDraft) {
     return blocked('draft_missing', '当前没有可修改的草稿。', ['timeline.plan'])
   }
+  if (input.toolId === 'timeline.pending.dismiss' && !hasDraft) {
+    return blocked('draft_missing', '当前没有可处理失败修订的草稿。', ['timeline.plan'])
+  }
+  if (input.toolId === 'timeline.pending.dismiss' && !input.workspace?.pendingTimelineRevisions?.length) {
+    return blocked('timeline_revision_not_pending', '当前草稿没有待放弃的失败修订。')
+  }
   if (input.toolId === 'timeline.plan' && hasDraft) {
     return blocked('draft_already_exists', '当前已有可编辑草稿；结构或内容调整必须创建修订版本。', ['timeline.patch'])
   }
   if (input.toolId === 'timeline.render' && !hasDraft) {
     return blocked('draft_missing', '当前没有可交付的草稿。', ['timeline.plan'])
+  }
+  if (input.toolId === 'timeline.render' && input.workspace?.pendingTimelineRevisions?.length) {
+    return blocked(
+      'timeline_revision_pending',
+      `仍有 ${input.workspace.pendingTimelineRevisions.length} 项方案修改尚未落实：${input.workspace.pendingTimelineRevisions[0]!.instruction}`,
+      ['timeline.patch'],
+    )
   }
   if (input.toolId === 'timeline.render' && input.timelineSpec) {
     const missing: V2AgentToolReadiness['missing'] = []
@@ -223,7 +253,8 @@ export const V2_AGENT_TOOLS: readonly V2AgentToolDefinition[] = [
   { id: 'sample.analyze', name: '分析样例', summary: '读取用户明确选择的样例，提取可复用的结构、节奏和风格事实。', status: 'available', effect: 'read', cost: 'low', skills: ['sample-reference-analysis'], inputSchema: sampleAnalyzeInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '确认样例有效后重试，或继续无样例规划。' },
   { id: 'material.inspect', name: '检查素材', summary: '检查已上传的 V2 候选素材与可用角色。', status: 'available', effect: 'read', cost: 'none', skills: ['v2-timeline-authoring'], inputSchema: materialInspectInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '补充可用素材或继续文生视频。' },
   { id: 'timeline.plan', name: '创建方案', summary: '根据当前 V2 输入创建完整可编辑时间线草稿。', status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'sample-reference-analysis'], inputSchema: timelinePlanInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保留当前会话事实，修正要求后重新规划。' },
-  { id: 'timeline.patch', name: '局部修订', summary: `按 V2 范围修订已有草稿：字幕（subtitle）、单镜头与相邻转场（scene）、连续镜头结构调整（structure）、单镜头视觉策略（visual_strategy）、一个或多个明确转场（transition）、整案重写（global）。内置转场为 ${REMOTION_TIMELINE_TRANSITION_TYPES.join('、')}；其他效果使用已注册或新创作的 transition custom_render。`, status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'subtitle-track-authoring'], inputSchema: timelinePatchInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保持基础版本，缩小或澄清修订范围后重试。' },
+  { id: 'timeline.patch', name: '局部修订', summary: `按 V2 范围修订已有草稿：字幕（subtitle）、单镜头内容（scene）、连续镜头结构调整（structure）、单镜头视觉呈现（visual_strategy）、一个或多个明确转场（transition）、全片总纲或整案重写（global）。内置转场为 ${REMOTION_TIMELINE_TRANSITION_TYPES.join('、')}；其他效果使用已注册或新创作的 transition custom_render。`, status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'subtitle-track-authoring'], inputSchema: timelinePatchInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保持基础版本，缩小或澄清修订范围后重试。' },
+  { id: 'timeline.pending.dismiss', name: '放弃失败修订', summary: '仅在用户明确放弃一项已记录的失败修改时，解除该项渲染门禁；不修改方案、不创建新 revision。', status: 'available', effect: 'draft', cost: 'none', skills: ['v2-timeline-authoring'], inputSchema: timelinePendingDismissInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '保留当前草稿与待处理项；请明确选择要放弃的失败修改。' },
   { id: 'timeline.render', name: '正式渲染', summary: '按已保存 V2 版本执行素材解析与 Remotion 交付。', status: 'available', effect: 'delivery', cost: 'external', skills: ['v2-render-delivery'], inputSchema: timelineRenderInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '保留草稿与失败原因，修复后由用户重新确认。' },
   { id: 'audio.plan', name: '规划音频', summary: '未来独立音频轨规划接口。', status: 'planned', effect: 'draft', cost: 'low', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },
   { id: 'audio.generate_tts', name: '生成旁白', summary: '未来 TTS 旁白生成接口。', status: 'planned', effect: 'delivery', cost: 'external', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },

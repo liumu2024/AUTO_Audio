@@ -22,6 +22,7 @@ export interface V2TimelineRevisionReviewVerdict {
 }
 
 export interface V2TimelineFactDigest {
+  creative_brief?: RemotionTimelineSpecV1['creative_brief']
   scenes: Array<{
     id: string
     title?: string
@@ -40,6 +41,7 @@ export interface V2TimelineFactDigest {
       input_asset_id?: string
       output_asset_id?: string
       fallback_kind?: RemotionTimelineSpecV1['material_jobs'][number]['fallback_kind']
+      prompt?: string
     }>
   }>
   visible_text: Array<{
@@ -166,6 +168,7 @@ export function describeV2TimelineSpecDiff(
   const audio = diffKeyedArray(base.audio ?? [], candidate.audio ?? [], (_clip, index) => String(index), 'audio')
   const other = [
     ...(JSON.stringify(base.canvas) !== JSON.stringify(candidate.canvas) ? ['canvas changed'] : []),
+    ...(JSON.stringify(base.creative_brief) !== JSON.stringify(candidate.creative_brief) ? ['creative_brief changed'] : []),
     ...diffKeyedArray(base.material_jobs, candidate.material_jobs, (job) => job.id, 'material_job'),
     ...(JSON.stringify(base.notes ?? []) !== JSON.stringify(candidate.notes ?? []) ? ['notes changed'] : []),
   ]
@@ -176,7 +179,8 @@ export function describeV2TimelineSpecDiff(
     audio,
     other,
     hasAudienceFacingChange:
-      scenes.length > 0 || visibleText.length > 0 || transitions.length > 0 || audio.length > 0,
+      scenes.length > 0 || visibleText.length > 0 || transitions.length > 0 || audio.length > 0
+      || other.some((line) => !line.startsWith('notes changed')),
   }
 }
 
@@ -192,6 +196,7 @@ function nonBlank(value: string | undefined) {
  */
 export function buildV2TimelineFactDigest(spec: RemotionTimelineSpecV1): V2TimelineFactDigest {
   return {
+    creative_brief: spec.creative_brief,
     scenes: spec.scenes.map((scene) => ({
       id: scene.id,
       title: nonBlank(scene.creative_intent?.title) ?? nonBlank(scene.title),
@@ -211,6 +216,7 @@ export function buildV2TimelineFactDigest(spec: RemotionTimelineSpecV1): V2Timel
         input_asset_id: job.input_asset_id,
         output_asset_id: job.output_asset_id,
         fallback_kind: job.fallback_kind,
+        prompt: job.prompt,
       })),
     })),
     visible_text: spec.overlays
@@ -271,6 +277,7 @@ export function buildDirectorTimelineFacts(
         inputAssetId: job.input_asset_id,
         outputAssetId: job.output_asset_id,
         fallbackKind: job.fallback_kind,
+        prompt: job.prompt,
       })),
     })),
     visibleText: digest.visible_text.map((item) => ({
@@ -341,12 +348,16 @@ export function evaluateV2TimelineRevisionCommit(input: {
   scope: V2TimelineRevisionScope
   sceneId?: string
   sceneIds?: string[]
+  overlayIds?: string[]
   transitionIds?: string[]
 }): V2TimelineRevisionCommitDecision {
   const comparable = (spec: RemotionTimelineSpecV1) => input.scope === 'subtitle'
     ? {
         caption_tracks: spec.caption_tracks ?? [],
-        overlays: spec.overlays.filter((overlay) => overlay.type === 'caption'),
+        overlays: spec.overlays.filter((overlay) =>
+          overlay.type === 'caption'
+          && (!input.sceneId || overlay.scene_id === input.sceneId)
+          && (!input.overlayIds?.length || input.overlayIds.includes(overlay.id))),
       }
     : input.scope === 'scene'
       ? (() => {
@@ -399,15 +410,16 @@ export function evaluateV2TimelineRevisionCommit(input: {
             })()
         : input.scope === 'global'
           ? {
-            canvas: spec.canvas,
-            assets: spec.assets,
-            scenes: spec.scenes,
-            transitions: spec.transitions,
-            overlays: spec.overlays,
-            material_jobs: spec.material_jobs,
-            audio: spec.audio ?? [],
-            render_policy: spec.render_policy,
-          }
+              creative_brief: spec.creative_brief,
+              canvas: spec.canvas,
+              assets: spec.assets,
+              scenes: spec.scenes,
+              transitions: spec.transitions,
+              overlays: spec.overlays,
+              material_jobs: spec.material_jobs,
+              audio: spec.audio ?? [],
+              render_policy: spec.render_policy,
+            }
           : (() => {
               throw new Error(`Unsupported revision scope: ${String(input.scope)}`)
             })()
@@ -467,7 +479,10 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
   revisionScope?: V2TimelineRevisionScope
   revisionSceneId?: string
   revisionSceneIds?: string[]
+  revisionOverlayIds?: string[]
   revisionTransitionIds?: string[]
+  revisionGlobalMode?: 'brief_update' | 'full_replan'
+  revisionDurationMode?: 'preserve_range' | 'resize_timeline'
 }) {
   const componentsById = new Map((input.availableComponents ?? []).map((item) => [item.id, item]))
   const effectiveTransitions = input.candidateDigest.transitions.map((transition) => {
@@ -497,6 +512,10 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
     'When the request is a presentation constraint (placement, line limit, non-repetition), evaluate the candidate\'s displayed text and geometry rather than treating the constraint itself as copy.',
     'When a sample is used for inspiration, reject copied sample-specific subject matter or copy; reusable rhythm and structure are allowed.',
     'Treat scene realization fields as authoritative: image_motion can only pan, zoom, or crop existing pixels and cannot create a new person, animal, vehicle, or environmental event. A newly invented visual element requires an ai_video scene backed by a generate_video material job (or an equivalent custom scene component whose registered effect explicitly implements it).',
+    'When the user supplies an image as a visual reference for a newly generated subject, action, event, or expanded environment, require the matching generate_video job to carry that server-owned image asset as input_asset_id. A textual resemblance without the actual reference binding is incomplete.',
+    'Judge image understanding against the requested use. The creative brief should retain concrete visible facts relevant to that use (for example subject appearance, clothing or distinctive objects; environment, composition and perspective; palette, lighting and visual style) without inventing facts. Do not require every category when it is not visible or relevant.',
+    'Scene content and visual strategy are different boundaries. A change to subject, location, action, event, or prop belongs in scene content and must be reflected consistently in both creative_intent and the scene material-job prompt. visual_strategy may change presentation such as palette, lighting, composition, camera motion, fit, background or asset realization, but must not smuggle new narrative facts only into a generation prompt. For an ai_video scene, a requested visual-strategy change must also reach that scene material-job prompt; changing editor metadata while reusing an unchanged generation request is incomplete.',
+    'For global brief_update, require creative_brief.direction to materially express the requested whole-video direction while direct scene timing, captions, assets and transitions stay unchanged. full_replan is the only global mode that may replace the whole plan.',
     'A remotion_card can fulfill only an intentional typography or motion-graphics scene. It cannot count as completed photographic or cinematic footage merely because its text describes the requested shot.',
     'When custom_render_component_id is present, that custom component defines the effective transition. The preset type and direction are fallback presentation settings only; do not require the custom effect name to appear in the preset type.',
     'Return JSON only. Do not reveal reasoning.',
@@ -519,7 +538,7 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
         ]
       : []),
     ...(input.revisionScope
-      ? [`Tool-authorized revision boundary: scope=${input.revisionScope}${input.revisionSceneId ? `, scene_id=${input.revisionSceneId}` : ''}${input.revisionSceneIds?.length ? `, scene_ids=${input.revisionSceneIds.join(',')}` : ''}${input.revisionTransitionIds?.length ? `, transition_ids=${input.revisionTransitionIds.join(',')}` : ''}. Any change outside this boundary is an unrelated change.`]
+      ? [`Tool-authorized revision boundary: scope=${input.revisionScope}${input.revisionGlobalMode ? `, global_mode=${input.revisionGlobalMode}` : ''}${input.revisionDurationMode ? `, duration_mode=${input.revisionDurationMode}` : ''}${input.revisionSceneId ? `, scene_id=${input.revisionSceneId}` : ''}${input.revisionSceneIds?.length ? `, scene_ids=${input.revisionSceneIds.join(',')}` : ''}${input.revisionOverlayIds?.length ? `, overlay_ids=${input.revisionOverlayIds.join(',')}` : ''}${input.revisionTransitionIds?.length ? `, transition_ids=${input.revisionTransitionIds.join(',')}` : ''}. Any change outside this boundary is an unrelated change.`]
       : []),
   ].join('\n')
 }
@@ -589,7 +608,10 @@ export async function reviewV2TimelineRevisionOutcome(input: {
   revisionScope?: V2TimelineRevisionScope
   revisionSceneId?: string
   revisionSceneIds?: string[]
+  revisionOverlayIds?: string[]
   revisionTransitionIds?: string[]
+  revisionGlobalMode?: 'brief_update' | 'full_replan'
+  revisionDurationMode?: 'preserve_range' | 'resize_timeline'
   assess?: (input: {
     prompt: string
     baseDigest: V2TimelineFactDigest
@@ -632,7 +654,10 @@ export async function reviewV2TimelineRevisionOutcome(input: {
     revisionScope: input.revisionScope,
     revisionSceneId: input.revisionSceneId,
     revisionSceneIds: input.revisionSceneIds,
+    revisionOverlayIds: input.revisionOverlayIds,
     revisionTransitionIds: input.revisionTransitionIds,
+    revisionGlobalMode: input.revisionGlobalMode,
+    revisionDurationMode: input.revisionDurationMode,
   })
   const requested = env.directorAgentStructuredOutputMode === 'auto'
   let raw: unknown
@@ -685,4 +710,25 @@ export async function reviewV2TimelineRevisionOutcome(input: {
       jsonRepair,
     },
   }
+}
+
+/**
+ * Proves that the final saved candidate already satisfies a server-owned
+ * failed instruction. No base spec is supplied so this check cannot authorize
+ * or synthesize another edit; it can only accept or reject the current state.
+ */
+export function verifyV2TimelinePendingResolution(input: {
+  instruction: string
+  candidateSpec: RemotionTimelineSpecV1
+  availableComponents?: V2TimelineAvailableComponents
+  confirmedContext?: string
+  assess?: Parameters<typeof reviewV2TimelineRevisionOutcome>[0]['assess']
+}) {
+  return reviewV2TimelineRevisionOutcome({
+    prompt: input.instruction,
+    candidateSpec: input.candidateSpec,
+    availableComponents: input.availableComponents,
+    confirmedContext: input.confirmedContext,
+    assess: input.assess,
+  })
 }

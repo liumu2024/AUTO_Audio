@@ -15,6 +15,12 @@ import { hydrateV2TimelineAssetIds } from './timeline-asset-id-hydration.js'
 
 export type V2StoredPlannerInput = V2PlannerInput & { imageSrc?: string }
 
+export interface V2PendingTimelineRevision {
+  callId: string
+  instruction: string
+  baseRevision: number
+}
+
 export interface V2TimelineDraftRecord {
   id: string
   userId: number
@@ -25,6 +31,7 @@ export interface V2TimelineDraftRecord {
   plannerSource?: string
   review?: unknown
   traceDir?: string
+  pendingTimelineRevisions: V2PendingTimelineRevision[]
   createdAt: Date
   updatedAt: Date
 }
@@ -93,6 +100,12 @@ export class V2TimelineRevisionConflictError extends Error {
 export class V2TimelineComponentReferenceError extends Error {
   constructor(readonly issues: string[]) {
     super(`Invalid timeline component reference: ${issues.join('; ')}`)
+  }
+}
+
+export class V2TimelinePendingRevisionError extends Error {
+  constructor(readonly pending: V2PendingTimelineRevision[]) {
+    super(`V2 timeline draft has a pending timeline revision: ${pending.map((item) => item.instruction).join('; ')}`)
   }
 }
 
@@ -174,6 +187,7 @@ function hydrateStoredTimelineSpec(
 
 function draftFromRow(row: Record<string, unknown>): V2TimelineDraftRecord {
   const plannerInput = row.plannerInputJson as V2StoredPlannerInput
+  const storedPending = Array.isArray(row.pendingRevisionJson) ? row.pendingRevisionJson : []
   return {
     id: String(row.id),
     userId: Number(row.userId),
@@ -184,6 +198,15 @@ function draftFromRow(row: Record<string, unknown>): V2TimelineDraftRecord {
     plannerSource: (row.plannerSource as string | null) ?? undefined,
     review: row.reviewJson ?? undefined,
     traceDir: (row.traceDir as string | null) ?? undefined,
+    pendingTimelineRevisions: storedPending.flatMap((item) => {
+      if (!item || typeof item !== 'object') return []
+      const value = item as Record<string, unknown>
+      return typeof value.callId === 'string'
+        && typeof value.instruction === 'string'
+        && Number.isInteger(value.baseRevision)
+        ? [{ callId: value.callId, instruction: value.instruction, baseRevision: Number(value.baseRevision) }]
+        : []
+    }),
     createdAt: row.createdAt as Date,
     updatedAt: row.updatedAt as Date,
   }
@@ -267,6 +290,8 @@ export interface SaveV2TimelineDraftInput {
   review?: unknown
   traceDir?: string
   authorizedDraftComponentIds?: readonly string[]
+  /** Exact failed Director patches that this successful revision resolves. */
+  resolvesPendingCallIds?: readonly string[]
 }
 
 export interface V2TimelineDraftRepository {
@@ -276,6 +301,20 @@ export interface V2TimelineDraftRepository {
   listDrafts(userId: number, limit?: number): Promise<V2TimelineDraftHistoryRecord[]>
   deleteDraft(draftId: string, userId: number): Promise<boolean>
   saveDraft(input: SaveV2TimelineDraftInput): Promise<V2TimelineDraftRecord>
+  markPendingRevision(input: {
+    draftId: string
+    userId: number
+    baseRevision: number
+    callId: string
+    replacesCallId?: string
+    instruction: string
+  }): Promise<V2TimelineDraftRecord | null>
+  dismissPendingRevision(input: {
+    draftId: string
+    userId: number
+    baseRevision: number
+    callId: string
+  }): Promise<V2TimelineDraftRecord | null>
   getRevision(
     draftId: string,
     revision: number,
@@ -404,6 +443,11 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
         )
       }
       const currentPlannerInput = current.plannerInputJson as unknown as V2StoredPlannerInput
+      const pending = draftFromRow(asRecord(current)).pendingTimelineRevisions
+      const resolvedPendingIds = new Set(input.resolvesPendingCallIds ?? [])
+      if ([...resolvedPendingIds].some((callId) => !pending.some((item) => item.callId === callId))) {
+        throw new V2TimelinePendingRevisionError(pending)
+      }
       const currentSpec = hydrateStoredTimelineSpec(
         current.specJson as unknown as RemotionTimelineSpecV1,
         currentPlannerInput,
@@ -423,7 +467,12 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
 
       const nextRevision = input.baseRevision + 1
       const updated = await prisma.v2TimelineDraft.updateMany({
-        where: { id: input.draftId, userId: input.userId, revision: input.baseRevision },
+        where: {
+          id: input.draftId,
+          userId: input.userId,
+          revision: input.baseRevision,
+          pendingRevisionJson: { equals: current.pendingRevisionJson as Prisma.InputJsonValue },
+        },
         data: {
           revision: nextRevision,
           creationMode: nextPlannerInput.creationMode ?? String(current.creationMode),
@@ -432,12 +481,14 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
           ...(input.plannerSource !== undefined ? { plannerSource: input.plannerSource } : {}),
           ...(input.review !== undefined ? { reviewJson: asJson(input.review) } : {}),
           ...(input.traceDir !== undefined ? { traceDir: input.traceDir } : {}),
+          pendingRevisionJson: asJson(pending.filter((item) => !resolvedPendingIds.has(item.callId))),
         },
       })
       if (updated.count !== 1) {
         const latest = await prisma.v2TimelineDraft.findFirst({
           where: { id: input.draftId, userId: input.userId },
         })
+        if (latest && Number(latest.revision) === input.baseRevision) return this.saveDraft(input)
         throw new V2TimelineRevisionConflictError(
           input.draftId,
           input.baseRevision,
@@ -461,6 +512,75 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
       })
       if (!draft) throw new Error('V2 timeline draft disappeared after save.')
       return draftFromRow(asRecord(draft))
+    },
+
+    async markPendingRevision(input) {
+      const current = await prisma.v2TimelineDraft.findFirst({
+        where: { id: input.draftId, userId: input.userId },
+      })
+      if (!current) return null
+      if (Number(current.revision) !== input.baseRevision) {
+        throw new V2TimelineRevisionConflictError(
+          input.draftId,
+          input.baseRevision,
+          Number(current.revision),
+        )
+      }
+      const pending = draftFromRow(asRecord(current)).pendingTimelineRevisions
+      const next = [
+        ...pending.filter((item) => item.callId !== input.callId && item.callId !== input.replacesCallId),
+        {
+          callId: input.callId,
+          instruction: input.instruction.trim(),
+          baseRevision: input.baseRevision,
+        },
+      ]
+      const updated = await prisma.v2TimelineDraft.updateMany({
+        where: {
+          id: input.draftId,
+          userId: input.userId,
+          revision: input.baseRevision,
+          pendingRevisionJson: { equals: current.pendingRevisionJson as Prisma.InputJsonValue },
+        },
+        data: { pendingRevisionJson: asJson(next) },
+      })
+      if (updated.count !== 1) {
+        const latest = await this.getDraft(input.draftId, input.userId)
+        if (!latest) return null
+        return this.markPendingRevision(input)
+      }
+      return this.getDraft(input.draftId, input.userId)
+    },
+
+    async dismissPendingRevision(input) {
+      const current = await prisma.v2TimelineDraft.findFirst({
+        where: { id: input.draftId, userId: input.userId },
+      })
+      if (!current) return null
+      if (Number(current.revision) !== input.baseRevision) {
+        throw new V2TimelineRevisionConflictError(
+          input.draftId,
+          input.baseRevision,
+          Number(current.revision),
+        )
+      }
+      const pending = draftFromRow(asRecord(current)).pendingTimelineRevisions
+      if (!pending.some((item) => item.callId === input.callId)) {
+        throw new V2TimelinePendingRevisionError(pending)
+      }
+      const updated = await prisma.v2TimelineDraft.updateMany({
+        where: {
+          id: input.draftId,
+          userId: input.userId,
+          revision: input.baseRevision,
+          pendingRevisionJson: { equals: current.pendingRevisionJson as Prisma.InputJsonValue },
+        },
+        data: {
+          pendingRevisionJson: asJson(pending.filter((item) => item.callId !== input.callId)),
+        },
+      })
+      if (updated.count !== 1) return this.dismissPendingRevision(input)
+      return this.getDraft(input.draftId, input.userId)
     },
 
     async getRevision(draftId, revision, userId) {

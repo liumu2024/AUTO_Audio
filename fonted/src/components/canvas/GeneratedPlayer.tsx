@@ -141,7 +141,7 @@ function V2PlanReview({
           </p>
         </section>
 
-        <PlanFactSection title="画面规划">
+        <PlanFactSection title="视觉呈现">
           <div className="grid gap-2 text-xs text-zinc-300 sm:grid-cols-2">
             <PlanFact label="画面方式" value={sceneTypeLabel(active.sceneType)} />
             <PlanFact label="镜头职责" value={visualRoleLabel(active.visualRole)} />
@@ -150,7 +150,7 @@ function V2PlanReview({
           </div>
           {active.materialPlan?.prompt ? (
             <p className="mt-2 rounded-md border border-zinc-800 bg-zinc-900/60 p-2 text-xs leading-5 text-zinc-400">
-              生成画面要求：{active.materialPlan.prompt}
+              AI 生成要求：{active.materialPlan.prompt}
             </p>
           ) : null}
         </PlanFactSection>

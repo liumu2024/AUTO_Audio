@@ -27,11 +27,12 @@ import { dispatchV2AgentTool } from '../src/pipeline-v2/agent-tools/dispatcher.j
 import { buildV2TimelinePlannerPrompt } from '../src/pipeline-v2/remotion-timeline-llm-planner.js'
 
 assert.deepEqual(listV2AgentToolCards().map((tool) => tool.id), [
-  'sample.analyze', 'material.inspect', 'timeline.plan', 'timeline.patch', 'timeline.render', 'render.author',
+  'sample.analyze', 'material.inspect', 'timeline.plan', 'timeline.patch', 'timeline.pending.dismiss', 'timeline.render', 'render.author',
 ])
 assert.equal(findV2AgentTool('sample.analyze')?.requiresExplicitAuthorization, false)
 assert.equal(findV2AgentTool('timeline.plan')?.requiresExplicitAuthorization, false)
 assert.equal(findV2AgentTool('timeline.patch')?.requiresExplicitAuthorization, false)
+assert.equal(findV2AgentTool('timeline.pending.dismiss')?.requiresExplicitAuthorization, true)
 assert.equal(findV2AgentTool('timeline.render')?.requiresExplicitAuthorization, true)
 assert.equal(listV2AgentToolCards().find((tool) => tool.id === 'timeline.patch')?.effectiveMode, 'preview')
 assert.equal(listV2AgentToolCards().find((tool) => tool.id === 'timeline.render')?.effectiveMode, 'execute')
@@ -66,11 +67,17 @@ assert.equal(validateV2AgentToolRequest({ callId: 'render_bad_001', toolId: 'tim
 assert.equal(validateV2AgentToolRequest({ callId: 'sample_bad_001', toolId: 'sample.analyze', skillId: 'sample-reference-analysis', arguments: { sampleId: 'foreign' }, requestedMode: 'preview' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'render_bad_002', toolId: 'timeline.render', skillId: 'v2-render-delivery', arguments: { draftId: 'foreign', revision: 99 }, requestedMode: 'execute' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_bad_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'subtitle', targetIds: ['caption_1'] }, requestedMode: 'preview' }).ok, false)
+assert.equal(validateV2AgentToolRequest({ callId: 'dismiss_001', toolId: 'timeline.pending.dismiss', skillId: 'v2-timeline-authoring', arguments: { callId: 'failed_patch_001' }, requestedMode: 'preview' }).ok, true)
+assert.equal(validateV2AgentToolRequest({ callId: 'dismiss_bad_001', toolId: 'timeline.pending.dismiss', skillId: 'v2-timeline-authoring', arguments: {}, requestedMode: 'preview' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_scene_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'scene', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, true)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_scene_002', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'scene' }, requestedMode: 'preview' }).ok, true)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_global_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'global', mode: 'brief_update' }, requestedMode: 'preview' }).ok, true)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_global_missing_mode', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'global' }, requestedMode: 'preview' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_bad_002', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'subtitle', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, true)
+assert.equal(validateV2AgentToolRequest({
+  callId: 'patch_caption_ids', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring',
+  arguments: { scope: 'subtitle', sceneId: 'scene_2', overlayIds: ['caption_dynamic_a'] }, requestedMode: 'preview',
+}).ok, true)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_vs_001', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'visual_strategy', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, true)
 assert.equal(validateV2AgentToolRequest({
   callId: 'author_001',
@@ -119,6 +126,10 @@ assert.equal(validateV2AgentToolRequest({ callId: 'patch_vs_002', toolId: 'timel
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_bad_003', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring', arguments: { scope: 'global', mode: 'full_replan', sceneId: 'scene_2' }, requestedMode: 'preview' }).ok, false)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_transition_001', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring', arguments: { scope: 'transition', transitionIds: ['transition_random_a', 'transition_random_b'], instruction: '只修改这两个转场' }, requestedMode: 'preview' }).ok, true)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_transition_002', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring', arguments: { scope: 'transition', transitionIds: [] }, requestedMode: 'preview' }).ok, false)
+assert.equal(validateV2AgentToolRequest({
+  callId: 'patch_resize_timeline', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring',
+  arguments: { scope: 'structure', sceneIds: ['scene_dynamic_a'], durationMode: 'resize_timeline' }, requestedMode: 'preview',
+}).ok, true)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_structure_001', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring', arguments: { scope: 'structure', sceneIds: ['scene_random_a', 'scene_random_b'], instruction: '把这段连续镜头拆得更细' }, requestedMode: 'preview' }).ok, true)
 assert.equal(validateV2AgentToolRequest({ callId: 'patch_structure_002', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring', arguments: { scope: 'structure', sceneIds: ['scene_random_a', 'scene_random_a'] }, requestedMode: 'preview' }).ok, false)
 assert.ok(listV2AgentToolCards().find((tool) => tool.id === 'timeline.patch')?.inputSchema)
@@ -268,6 +279,17 @@ assert.equal(evaluateV2AgentToolReadiness({
   toolId: 'timeline.render', context: duplicateContext,
   runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: false, materialCount: 0 },
 }).status, 'blocked')
+const pendingRevisionReadiness = evaluateV2AgentToolReadiness({
+  toolId: 'timeline.render', context: duplicateContext,
+  runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: false, materialCount: 0 },
+  workspace: {
+    draftId: 'draft_pending_revision', baseRevision: 1,
+    pendingTimelineRevisions: [{ instruction: 'apply a requested timeline edit', callId: 'patch_pending', baseRevision: 1 }],
+  },
+  authorizationGranted: true,
+})
+assert.equal(pendingRevisionReadiness.status, 'blocked')
+assert.ok(pendingRevisionReadiness.missing.some((item) => item.code === 'timeline_revision_pending'))
 const uniqueSampleCandidateReadiness = evaluateV2AgentToolReadiness({
   toolId: 'sample.analyze',
   context: {

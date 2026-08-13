@@ -40,6 +40,7 @@ export interface DirectorWorkspacePatch {
   latestExecution?: DirectorWorkspaceState['latestExecution'] | null
   pendingQuestion?: string | null
   recentFailure?: DirectorWorkspaceState['recentFailure'] | null
+  pendingTimelineRevisions?: DirectorWorkspaceState['pendingTimelineRevisions'] | null
   responseId?: string | null
   responseContinuityDisabled?: boolean
   recentToolCallIds?: string[]
@@ -256,6 +257,7 @@ export function applyDirectorWorkspacePatch(
     'latestExecution',
     'pendingQuestion',
     'recentFailure',
+    'pendingTimelineRevisions',
     'responseId',
     'recentToolCallIds',
     'recentVisualMaterialIds',
@@ -324,6 +326,7 @@ export function compactDirectorWorkspaceContext(state: DirectorWorkspaceState) {
       latestExecution: state.latestExecution,
       pendingQuestion: state.pendingQuestion,
       recentFailure: state.recentFailure,
+      pendingTimelineRevisions: state.pendingTimelineRevisions,
     },
     rollingSummary: state.rollingSummary,
     recentTurns: state.turns,

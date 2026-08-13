@@ -32,6 +32,12 @@ export interface DirectorWorkspaceState {
         reason: string;
         recovery?: string;
     };
+    /** Requested draft edits that failed and must not be misrepresented by rendering an older revision. */
+    pendingTimelineRevisions?: Array<{
+        instruction: string;
+        callId: string;
+        baseRevision: number;
+    }>;
     rollingSummary: string;
     turns: DirectorWorkspaceTurn[];
     responseId?: string;

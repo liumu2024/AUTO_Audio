@@ -21,6 +21,7 @@ interface LocalV2TimelineDraft {
   plannerSource: string | null
   reviewJson: unknown
   traceDir: string | null
+  pendingRevisionJson: unknown
   createdAt: string
   updatedAt: string
 }
@@ -189,6 +190,15 @@ function clone<T>(value: T): T {
   return value == null ? value : JSON.parse(JSON.stringify(value))
 }
 
+function localWhereValueMatches(actual: unknown, expected: unknown): boolean {
+  if (expected && typeof expected === 'object' && 'equals' in expected) {
+    return localWhereValueMatches(actual, (expected as { equals: unknown }).equals)
+  }
+  if (Object.is(actual, expected)) return true
+  if (actual == null || expected == null || typeof actual !== 'object' || typeof expected !== 'object') return false
+  return JSON.stringify(actual) === JSON.stringify(expected)
+}
+
 function ensureDate(value: string | null): Date | null {
   return value ? new Date(value) : null
 }
@@ -275,6 +285,7 @@ function makeLocalPrisma() {
             plannerSource: (args.data.plannerSource as string | null | undefined) ?? null,
             reviewJson: args.data.reviewJson ?? null,
             traceDir: (args.data.traceDir as string | null | undefined) ?? null,
+            pendingRevisionJson: args.data.pendingRevisionJson ?? [],
             createdAt: now,
             updatedAt: now,
           }
@@ -320,9 +331,8 @@ function makeLocalPrisma() {
         write(() => {
           let count = 0
           for (const draft of state.v2TimelineDrafts) {
-            const matches = Object.entries(args.where).every(
-              ([key, value]) => draft[key as keyof LocalV2TimelineDraft] === value,
-            )
+            const matches = Object.entries(args.where).every(([key, value]) =>
+              localWhereValueMatches(draft[key as keyof LocalV2TimelineDraft], value))
             if (!matches) continue
             Object.assign(draft, clone(args.data), { updatedAt: new Date().toISOString() })
             count += 1

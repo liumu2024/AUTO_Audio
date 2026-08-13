@@ -135,6 +135,7 @@ try {
     requestHash: v2IdempotencyRequestHash({
       workspaceSessionId: 'workspace_running_replay',
       currentDraftId: undefined,
+      requirementStatements: [],
       action: { ...runningAction, statement: 'prefer measured pacing' },
     }),
   })
@@ -346,13 +347,110 @@ try {
       sourceTurnIds: ['turn_duplicate_requirement'],
     }],
   })
-  assert.equal(duplicateOfRequirement[0].status, 'succeeded')
+  assert.equal(duplicateOfRequirement[0].status, 'skipped')
   assert.equal(duplicateOfRequirement[0].reason, 'duplicate_of_requirement')
+  assert.equal(duplicateOfRequirement[0].memoryId, undefined)
   assert.equal(
-    (await listCreativeMemories({ userId: 1 })).find((item) => item.id === duplicateOfRequirement[0].memoryId)?.status,
-    'candidate',
-    'requirement double-write must degrade to candidate instead of active',
+    (await listCreativeMemories({ userId: 1 })).some((item) => item.statement.includes('战锤40k世界大战')),
+    false,
+    'a project requirement must not create a duplicate candidate memory',
   )
+
+  const duplicateOfEarlierRequirement = await applyCreativeMemoryActions({
+    userId: 1,
+    workspaceSessionId: 'workspace_memory_smoke',
+    currentTurnId: 'turn_duplicate_earlier_requirement',
+    requirementStatements: ['这个项目的画面使用冷蓝低照度'],
+    actions: [{
+      ref: 'dup_earlier_req',
+      operation: 'add',
+      scopeType: 'user',
+      statement: '这个项目的画面使用冷蓝低照度',
+      status: 'active',
+      origin: 'explicit',
+      sourceTurnIds: ['turn_duplicate_earlier_requirement'],
+    }],
+  })
+  assert.equal(duplicateOfEarlierRequirement[0].status, 'skipped')
+  assert.equal(duplicateOfEarlierRequirement[0].memoryId, undefined)
+
+  const stablePreferenceThatAlsoAppliesNow = await applyCreativeMemoryActions({
+    userId: 1,
+    workspaceSessionId: 'workspace_memory_smoke',
+    currentTurnId: 'turn_stable_preference_also_applies_now',
+    requirementStatements: ['本片采用低饱和度画面'],
+    actions: [{
+      ref: 'stable_preference_also_applies_now',
+      operation: 'add',
+      scopeType: 'user',
+      statement: '我一直偏好低饱和度风格',
+      status: 'active',
+      origin: 'explicit',
+      sourceTurnIds: ['turn_stable_preference_also_applies_now'],
+    }],
+  })
+  assert.equal(stablePreferenceThatAlsoAppliesNow[0].status, 'succeeded')
+  assert.ok(stablePreferenceThatAlsoAppliesNow[0].memoryId)
+
+  const explicitStablePreferenceWithSameRequirementText = await applyCreativeMemoryActions({
+    userId: 1,
+    workspaceSessionId: 'workspace_memory_smoke',
+    currentTurnId: 'turn_exact_stable_preference',
+    currentUserText: '我一直偏好克制留白的画面风格，这一版也这么做',
+    requirementStatements: ['我一直偏好克制留白的画面风格'],
+    actions: [{
+      ref: 'exact_stable_preference',
+      operation: 'add',
+      scopeType: 'user',
+      statement: '我一直偏好克制留白的画面风格',
+      status: 'active',
+      origin: 'explicit',
+      sourceTurnIds: ['turn_exact_stable_preference'],
+      sourceExcerpt: '我一直偏好克制留白的画面风格，这一版也这么做',
+    }],
+  })
+  assert.equal(explicitStablePreferenceWithSameRequirementText[0].status, 'succeeded')
+  assert.ok(explicitStablePreferenceWithSameRequirementText[0].memoryId)
+
+  const forgedPreferenceEvidence = await applyCreativeMemoryActions({
+    userId: 1,
+    workspaceSessionId: 'workspace_memory_smoke',
+    currentTurnId: 'turn_forged_preference_evidence',
+    currentUserText: '这次使用冷灰色背景',
+    requirementStatements: ['这次使用冷灰色背景'],
+    actions: [{
+      ref: 'forged_preference_evidence',
+      operation: 'add',
+      scopeType: 'user',
+      statement: '这次使用冷灰色背景',
+      status: 'active',
+      origin: 'explicit',
+      sourceTurnIds: ['turn_forged_preference_evidence'],
+      sourceExcerpt: '我一直偏好冷灰色背景',
+    }],
+  })
+  assert.equal(forgedPreferenceEvidence[0].status, 'skipped')
+  assert.equal(forgedPreferenceEvidence[0].memoryId, undefined)
+
+  const unrelatedPreferenceEvidence = await applyCreativeMemoryActions({
+    userId: 1,
+    workspaceSessionId: 'workspace_memory_smoke',
+    currentTurnId: 'turn_unrelated_preference_evidence',
+    currentUserText: '我一直偏好黑白风格；这次使用冷灰色背景',
+    requirementStatements: ['这次使用冷灰色背景'],
+    actions: [{
+      ref: 'unrelated_preference_evidence',
+      operation: 'add',
+      scopeType: 'user',
+      statement: '这次使用冷灰色背景',
+      status: 'active',
+      origin: 'explicit',
+      sourceTurnIds: ['turn_unrelated_preference_evidence'],
+      sourceExcerpt: '我一直偏好黑白风格',
+    }],
+  })
+  assert.equal(unrelatedPreferenceEvidence[0].status, 'skipped')
+  assert.equal(unrelatedPreferenceEvidence[0].memoryId, undefined)
 
   // A genuine transferable preference is not blocked just because this turn
   // also records an unrelated requirement.

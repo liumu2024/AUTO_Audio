@@ -34,7 +34,8 @@ model V2TimelineDraft {
   specJson      Json     @map("spec_json")
   plannerSource String?  @map("planner_source")
   reviewJson    Json?    @map("review_json")
-  traceDir      String?  @map("trace_dir")
+  traceDir            String?  @map("trace_dir")
+  pendingRevisionJson Json     @default("[]") @map("pending_revision_json")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 

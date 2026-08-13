@@ -11,7 +11,10 @@ import {
   createStaticMaterialGenerationAdapter,
   type V2MaterialGenerationAdapter,
 } from '../src/pipeline-v2/material-generation-adapter.js'
-import { resolveRemotionTimelineMaterialJobs } from '../src/pipeline-v2/remotion-timeline-material-resolver.js'
+import {
+  resolveRemotionTimelineMaterialJobs,
+  standardizeRemotionTimelineVideoAssets,
+} from '../src/pipeline-v2/remotion-timeline-material-resolver.js'
 import type {
   V2IdempotencyReceiptRecord,
   V2IdempotencyRepository,
@@ -112,6 +115,20 @@ assert.match(boundGenerationPrompt ?? '', /Reveal the moving subject/)
 assert.match(resolved.report.generation_trace[0]?.request_fingerprint ?? '', /^[a-f0-9]{64}$/)
 assert.equal(resolved.report.generation_trace[0]?.input_asset_id, 'hero_image_asset')
 assert.equal(validateRemotionTimelineSpec(resolved.spec).ok, true)
+
+const generatedAssetBeforeFinalStandardization = resolved.spec.assets.find(
+  (asset) => asset.id === 'generated_scene_001',
+)
+const finalStandardization = await standardizeRemotionTimelineVideoAssets({
+  spec: resolved.spec,
+  outputDir,
+  alreadyStandardizedAssetIds: ['generated_scene_001'],
+})
+assert.equal(
+  finalStandardization.spec.assets.find((asset) => asset.id === 'generated_scene_001')?.src,
+  generatedAssetBeforeFinalStandardization?.src,
+  'a generated shot that already passed the material standardizer must not be encoded to a second path',
+)
 
 const reuseOutputDir = await mkdtemp(path.join(os.tmpdir(), 'v2-remotion-timeline-material-reuse-'))
 let reuseAdapterCalls = 0

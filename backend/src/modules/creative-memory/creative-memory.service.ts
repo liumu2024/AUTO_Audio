@@ -48,7 +48,7 @@ export interface CreativeMemoryAction {
 export interface CreativeMemoryActionReceipt {
   ref: string
   operation: CreativeMemoryAction['operation']
-  status: 'succeeded' | 'failed'
+  status: 'succeeded' | 'failed' | 'skipped'
   memoryId?: string
   reason?: string
   effectiveStatus?: 'active' | 'candidate'
@@ -105,6 +105,18 @@ const memories = () => (prisma as unknown as { creativeMemory: CreativeMemoryDel
 
 function normalizedText(value: string): string {
   return normalizeCreativeText(value)
+}
+
+function duplicatesRequirement(statement: string, requirement: string): boolean {
+  const normalizedStatement = normalizedText(statement)
+  const normalizedRequirement = normalizedText(requirement)
+  if (!normalizedStatement || !normalizedRequirement) return false
+  if (normalizedStatement === normalizedRequirement) return true
+  const shorter = normalizedStatement.length <= normalizedRequirement.length
+    ? normalizedStatement
+    : normalizedRequirement
+  const longer = shorter === normalizedStatement ? normalizedRequirement : normalizedStatement
+  return longer.includes(shorter) && shorter.length / longer.length >= 0.75
 }
 
 function memoryScopeKey(scopeType: CreativeMemoryScope, draftId?: string): string {
@@ -166,11 +178,9 @@ async function effectiveCreativeMemoryStatus(input: {
   origin: CreativeMemoryOrigin
   requestedStatus: 'active' | 'candidate'
   currentWorkspaceSessionId: string
-  duplicateOfRequirement?: boolean
 }): Promise<'active' | 'candidate'> {
   if (input.requestedStatus === 'candidate') return 'candidate'
   if (input.origin === 'inferred') return 'candidate'
-  if (input.duplicateOfRequirement) return 'candidate'
   const rows = await memories().findMany({ where: { userId: input.userId }, take: 500 })
   const normalized = normalizedText(input.statement)
   const sameScope = (item: DbMemory) =>
@@ -421,6 +431,7 @@ export async function applyCreativeMemoryActions(input: {
   userId: number
   workspaceSessionId: string
   currentTurnId: string
+  currentUserText?: string
   currentDraftId?: string
   recalledMemoryIds?: Set<string>
   actions: CreativeMemoryAction[]
@@ -441,6 +452,8 @@ export async function applyCreativeMemoryActions(input: {
           requestHash: v2IdempotencyRequestHash({
             workspaceSessionId: input.workspaceSessionId,
             currentDraftId: input.currentDraftId,
+            currentUserText: input.currentUserText ? normalizedText(input.currentUserText) : undefined,
+            requirementStatements: (input.requirementStatements ?? []).map(normalizedText),
             action: {
               ...action,
               statement: action.statement ? normalizedText(action.statement) : undefined,
@@ -503,8 +516,29 @@ async function applyCreativeMemoryAction(
       const scopeType = action.scopeType ?? 'user'
       const statement = assertStatement(action.statement)
       const origin = action.origin ?? 'inferred'
-      const duplicateOfRequirement = (input.requirementStatements ?? []).some((requirement) =>
-        Boolean(longestSharedHanPhrase(statement, requirement)))
+      const explicitlyTransferablePreference = scopeType === 'user'
+        && origin === 'explicit'
+        && Boolean(action.sourceExcerpt
+          && input.currentUserText
+          && normalizedText(input.currentUserText).includes(normalizedText(action.sourceExcerpt))
+          && (
+            normalizedText(action.sourceExcerpt).includes(normalizedText(statement))
+            || normalizedText(statement).includes(normalizedText(action.sourceExcerpt))
+          )
+          && (
+          /(?:我|本人).{0,12}(?:喜欢|偏好|倾向|钟爱)|(?:一直|向来|长期|平时|通常|以后).{0,12}(?:喜欢|偏好|采用|保持)/u.test(action.sourceExcerpt)
+          || /\b(?:i (?:always )?(?:like|prefer)|my (?:usual|long[- ]term) preference)\b/iu.test(action.sourceExcerpt)
+          ))
+      const duplicateOfRequirement = (input.requirementStatements ?? [])
+        .some((requirement) => duplicatesRequirement(statement, requirement))
+      if (duplicateOfRequirement && !explicitlyTransferablePreference) {
+        return {
+          ref: action.ref,
+          operation: action.operation,
+          status: 'skipped',
+          reason: 'duplicate_of_requirement',
+        }
+      }
       const status = await effectiveCreativeMemoryStatus({
         userId: input.userId,
         scopeType,
@@ -513,7 +547,6 @@ async function applyCreativeMemoryAction(
         origin,
         requestedStatus: action.status ?? 'candidate',
         currentWorkspaceSessionId: input.workspaceSessionId,
-        duplicateOfRequirement,
       })
       const memory = await createCreativeMemory({
         userId: input.userId,
@@ -531,7 +564,6 @@ async function applyCreativeMemoryAction(
         operation: action.operation,
         status: 'succeeded',
         memoryId: memory.id,
-        ...(duplicateOfRequirement ? { reason: 'duplicate_of_requirement' } : {}),
         effectiveStatus: status,
       }
     }

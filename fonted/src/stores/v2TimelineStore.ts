@@ -25,6 +25,7 @@ interface V2TimelineState {
   lastPrompt: string | null
   selectedClipId: string | null
   hasLocalEdits: boolean
+  pendingTimelineRevisions: Array<{ instruction: string; callId: string; baseRevision: number }>
   setSampleSession: (input: {
     result: V2SampleAnalyzeResult
     prompt: string
@@ -42,11 +43,12 @@ interface V2TimelineState {
     previewAssetUrls?: Record<string, string>,
   ) => void
   setPersistedDraft: (draft: V2TimelineDraftDto) => void
-  openPersistedDraft: (draft: Pick<V2TimelineDraftDto, 'draftId' | 'revision' | 'spec' | 'traceDir'> & {
+  openPersistedDraft: (draft: Pick<V2TimelineDraftDto, 'draftId' | 'revision' | 'spec' | 'traceDir' | 'pendingTimelineRevisions'> & {
     latestRun?: V2TimelineDraftRunSummaryDto
   }) => void
   updateSpec: (update: (spec: RemotionTimelineSpecV1) => RemotionTimelineSpecV1) => void
   selectClip: (clipId: string | null) => void
+  setPendingTimelineRevisions: (value: V2TimelineState['pendingTimelineRevisions']) => void
   clear: () => void
 }
 
@@ -65,6 +67,7 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
   lastPrompt: null,
   selectedClipId: null,
   hasLocalEdits: false,
+  pendingTimelineRevisions: [],
 
   setSampleSession: ({ result, prompt, playbackUrl, sampleName }) =>
     set({
@@ -86,6 +89,7 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       lastPrompt: prompt,
       selectedClipId: null,
       hasLocalEdits: false,
+      pendingTimelineRevisions: [],
     }),
 
   setPreview: (preview, prompt, previewAssetUrls) =>
@@ -104,6 +108,7 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       lastPrompt: prompt,
       selectedClipId: null,
       hasLocalEdits: false,
+      pendingTimelineRevisions: preview.draft?.pendingTimelineRevisions ?? state.pendingTimelineRevisions,
     })),
 
   setResult: (result, prompt, previewAssetUrls) =>
@@ -144,10 +149,11 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
         ? state.lastRunResolvedSpec
         : null,
       hasLocalEdits: false,
+      pendingTimelineRevisions: draft.pendingTimelineRevisions ?? state.pendingTimelineRevisions,
     })),
 
   openPersistedDraft: (draft) =>
-    set({
+    set((state) => ({
       taskId: draft.spec.task_id,
       draftId: draft.draftId,
       draftRevision: draft.revision,
@@ -165,7 +171,8 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       lastPrompt: null,
       selectedClipId: null,
       hasLocalEdits: false,
-    }),
+      pendingTimelineRevisions: draft.pendingTimelineRevisions ?? state.pendingTimelineRevisions,
+    })),
 
   updateSpec: (update) =>
     set((state) => {
@@ -184,6 +191,7 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
     }),
 
   selectClip: (selectedClipId) => set({ selectedClipId }),
+  setPendingTimelineRevisions: (pendingTimelineRevisions) => set({ pendingTimelineRevisions }),
 
   clear: () =>
     set({
@@ -201,5 +209,6 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       lastPrompt: null,
       selectedClipId: null,
       hasLocalEdits: false,
+      pendingTimelineRevisions: [],
     }),
 }))

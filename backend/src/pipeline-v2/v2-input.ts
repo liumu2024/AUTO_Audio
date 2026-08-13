@@ -62,10 +62,14 @@ export interface V2PlannerInput {
   revisionBaseSpec?: RemotionTimelineSpecV1
   /** Tool-authorized field scope applied before review and persistence. */
   revisionScope?: V2TimelineRevisionScope
+  /** Structure edits preserve their range unless the Tool explicitly authorizes timeline resizing. */
+  revisionDurationMode?: 'preserve_range' | 'resize_timeline'
   /** Distinguishes a creative-direction update from an explicit whole-plan replacement. */
   revisionGlobalMode?: 'brief_update' | 'full_replan'
   /** Tool-authorized target scene for the scene revision scope. */
   revisionSceneId?: string
+  /** Optional server-validated caption targets for a narrow subtitle edit. */
+  revisionOverlayIds?: string[]
   /** Tool-authorized contiguous scene range for structural revisions. */
   revisionSceneIds?: string[]
   /** Tool-authorized target transitions for the transition revision scope. */

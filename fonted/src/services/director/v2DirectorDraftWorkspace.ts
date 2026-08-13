@@ -12,7 +12,7 @@ import type { RemotionTimelineSpecV1 } from '@shared/types/remotion-timeline-spe
 export type V2DraftWorkspaceInput = Pick<
   V2TimelineDraftDto,
   'draftId' | 'revision' | 'spec' | 'traceDir'
-> & Pick<Partial<V2TimelineDraftDetailDto>, 'latestRun'>
+> & Pick<Partial<V2TimelineDraftDetailDto>, 'latestRun' | 'pendingTimelineRevisions'>
 
 export type V2CanvasSurface =
   | 'sample_analysis'

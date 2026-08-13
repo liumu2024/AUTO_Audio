@@ -130,13 +130,26 @@ const replies = [
   {
     id: 'resp_9',
     output_text: JSON.stringify({
+      replyDraft: '已记录：沟通语气可靠但不冰冷。你还可以继续说明希望这种语气用于哪些创作环节。', intent: 'chat', creativeConfigDelta: {},
+      stateActions: [],
+      memoryActions: [{
+        ref: 'failed_memory_only', operation: 'add', scopeType: 'user',
+        statement: '沟通语气可靠但不冰冷', status: 'active', origin: 'explicit',
+        sourceTurnIds: ['not_current_turn'],
+      }],
+      skillRequests: [], toolRequests: [], missingInformation: [],
+    }),
+  },
+  {
+    id: 'resp_10',
+    output_text: JSON.stringify({
       replyDraft: '当前是讨论模式；我不会记录任何偏好，也不会修改草稿。',
       intent: 'chat', creativeConfigDelta: {}, stateActions: [], memoryActions: [],
       skillRequests: [], toolRequests: [], missingInformation: [],
     }),
   },
   {
-    id: 'resp_10',
+    id: 'resp_11',
     output_text: JSON.stringify({
       replyDraft: '我会创作并应用这个转场。', intent: 'revise', creativeConfigDelta: {},
       stateActions: [], memoryActions: [], skillRequests: [],
@@ -497,6 +510,13 @@ try {
   assert.deepEqual(isolatedTrace.creative_memory_changes, [
     { ref: 'invalid_memory', operation: 'add', status: 'failed', reason: 'Creative memory action must cite the current source turn.' },
   ])
+  const failedMemoryOnly = await turn('再记录一条：沟通语气可靠但不冰冷。')
+  const failedMemoryReply = String(
+    (failedMemoryOnly.find((event) => event.type === 'assistant_reply') as { message: string }).message,
+  )
+  assert.match(failedMemoryReply, /未保存|拒绝/)
+  assert.doesNotMatch(failedMemoryReply, /已记录/)
+  assert.match(failedMemoryReply, /继续说明希望这种语气用于哪些创作环节/)
   const negatedPersistence = await turn('说明当前模式，不要记录偏好或修改草稿。')
   assert.equal(
     (negatedPersistence.find((event) => event.type === 'assistant_reply') as { message: string }).message,
@@ -569,7 +589,7 @@ try {
     state: { context: { sampleVideo?: unknown } }
   }).state
   assert.equal(clearedSampleState.context.sampleVideo, undefined, 'an explicit sample clear must persist')
-  assert.equal(requests.length, 17)
+  assert.equal(requests.length, 18)
 } finally {
   globalThis.fetch = originalFetch
   await restoredDraftRepository.deleteDraft(restoredDraft.id, 1)

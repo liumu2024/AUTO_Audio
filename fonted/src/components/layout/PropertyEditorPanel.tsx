@@ -53,7 +53,7 @@ function V2TimelinePropertyInspector() {
               <p className="text-sm font-semibold text-violet-100">{sceneFacts?.title ?? scene.id}</p>
               <p className="mt-1 font-mono text-[10px] text-violet-200/70">{scene.start_sec.toFixed(2)}s – {(scene.start_sec + scene.duration_sec).toFixed(2)}s</p>
             </section>
-            <Detail label="模型创作说明" value={sceneFacts?.description ?? review?.description_zh ?? review?.source_zh} />
+            <Detail label="镜头内容" value={sceneFacts?.description ?? review?.description_zh ?? review?.source_zh} />
             {sceneFacts ? <SceneFacts scene={sceneFacts} selectedOverlayId={selectedOverlayId} /> : null}
             <label className="block space-y-1.5">
               <span className="text-[10px] font-medium text-zinc-500">我的修改要求</span>
@@ -76,7 +76,7 @@ function SceneFacts({
   return (
     <>
       <section className="space-y-1.5">
-        <h3 className="text-[10px] font-medium text-zinc-500">画面构成</h3>
+        <h3 className="text-[10px] font-medium text-zinc-500">视觉呈现</h3>
         <div className="grid grid-cols-2 gap-2 text-xs">
           <Fact label="画面方式" value={sceneTypeLabel(scene.sceneType)} />
           <Fact label="镜头职责" value={visualRoleLabel(scene.visualRole)} />

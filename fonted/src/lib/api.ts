@@ -133,6 +133,7 @@ export interface V2TimelineDraftDto {
   plannerSource?: string
   review?: V2TimelinePlanningReview
   traceDir?: string
+  pendingTimelineRevisions?: Array<{ instruction: string; callId: string; baseRevision: number }>
   createdAt: string
   updatedAt: string
 }

@@ -9,6 +9,7 @@ import {
   describeV2TimelineSpecDiff,
   evaluateV2TimelineRevisionCommit,
   reviewV2TimelineRevisionOutcome,
+  verifyV2TimelinePendingResolution,
 } from '../src/pipeline-v2/timeline-revision-outcome-review.js'
 import { bindRenderComponentDisplayNames } from '../src/modules/render-components/component-registry.js'
 import { applyV2TimelineRevisionScope } from '../src/pipeline-v2/timeline-revision-scope.js'
@@ -72,6 +73,21 @@ const realizationPrompt = buildV2TimelineOutcomeReviewPrompt({
 assert.match(realizationPrompt, /image_motion can only pan, zoom, or crop existing pixels/i)
 assert.match(realizationPrompt, /remotion_card can fulfill only an intentional typography or motion-graphics scene/i)
 assert.match(realizationPrompt, /generate_video/i)
+assert.match(realizationPrompt, /input_asset_id/i)
+assert.match(realizationPrompt, /subject, location, action, event, or prop/i)
+assert.match(realizationPrompt, /visual_strategy/i)
+assert.match(realizationPrompt, /reusing an unchanged generation request is incomplete/i)
+const authorizedBoundaryPrompt = buildV2TimelineOutcomeReviewPrompt({
+  prompt: 'Resize the timeline and update only the selected caption.',
+  baseDigest: buildV2TimelineFactDigest(base),
+  candidateDigest: buildV2TimelineFactDigest(base),
+  hasBase: true,
+  revisionScope: 'subtitle',
+  revisionOverlayIds: ['caption_1'],
+  revisionDurationMode: 'resize_timeline',
+})
+assert.match(authorizedBoundaryPrompt, /overlay_ids=caption_1/)
+assert.match(authorizedBoundaryPrompt, /duration_mode=resize_timeline/)
 assert.match(
   buildV2TimelineOutcomeReviewPrompt({
     prompt: '请围绕产品主题自由重写字幕，不要重复旧文案。',
@@ -89,6 +105,17 @@ const initialPlanReview = await reviewV2TimelineRevisionOutcome({
 })
 assert.equal(initialPlanReview.pass, true)
 assert.equal(initialPlanReview.baseDigest.scenes.length, 0)
+
+const pendingResolutionReview = await verifyV2TimelinePendingResolution({
+  instruction: 'Replace the first caption with the requested safety message.',
+  candidateSpec: base,
+  assess: async ({ prompt, baseDigest }) => {
+    assert.equal(prompt, 'Replace the first caption with the requested safety message.')
+    assert.equal(baseDigest.scenes.length, 0, 'pending resolution checks final state without authorizing a second edit')
+    return { pass: false, violations: [{ kind: 'missing_requested_change', message: 'caption is unchanged' }] }
+  },
+})
+assert.equal(pendingResolutionReview.pass, false)
 
 const unchangedRevisionReview = await reviewV2TimelineRevisionOutcome({
   prompt: '补充更具体的观众可见字幕。',
@@ -197,8 +224,8 @@ const scopedSceneCandidate = applyV2TimelineRevisionScope({
 })
 assert.deepEqual(
   scopedSceneCandidate.transitions.map((item) => `${item.from_scene_id}->${item.to_scene_id}:${item.type}`),
-  ['scene_1->scene_2:fade', 'scene_2->scene_3:flash'],
-  'scene scope must keep base transition order while applying in-scope content updates',
+  ['scene_1->scene_2:fade', 'scene_2->scene_3:fade'],
+  'scene scope must preserve transitions; transition edits use the transition scope',
 )
 
 // A style-only revision (caption background) is a real, deliverable change and
@@ -323,8 +350,26 @@ const scopedSceneGeneration = applyV2TimelineRevisionScope({
 })
 assert.equal(
   scopedSceneGeneration.material_jobs[0]?.prompt,
-  '极限战士与圣血天使两种星际战士出场；镜头作用：proof；生成写实、连贯的视频画面，明确主体、环境、光线、动作和镜头运动',
+  '极限战士与圣血天使两种星际战士出场；画面应连贯呈现主体、环境、光线、动作和镜头运动',
   'scene creative-intent revision must re-derive the generation prompt',
+)
+assert.doesNotMatch(scopedSceneGeneration.material_jobs[0]?.prompt ?? '', /proof|feature|镜头作用/)
+
+const explicitScenePromptCandidate = structuredClone(sceneIntentCandidate)
+explicitScenePromptCandidate.material_jobs[0] = {
+  ...explicitScenePromptCandidate.material_jobs[0]!,
+  prompt: 'Two armored figures enter a library while the camera tracks backward.',
+}
+const explicitScenePromptScoped = applyV2TimelineRevisionScope({
+  baseSpec: generationBase,
+  candidateSpec: explicitScenePromptCandidate,
+  scope: 'scene',
+  sceneId: 'scene_2',
+})
+assert.equal(
+  explicitScenePromptScoped.material_jobs[0]?.prompt,
+  'Two armored figures enter a library while the camera tracks backward.',
+  'an explicit scene-generation prompt must survive the scene scope instead of being replaced by a generic template',
 )
 
 console.info('[smoke-v2-timeline-revision-outcome] OK')

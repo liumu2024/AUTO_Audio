@@ -50,8 +50,7 @@ function deriveSceneGenerationPrompt(scene: RemotionTimelineScene): string {
   const subject = scene.creative_intent?.description ?? scene.creative_intent?.title ?? scene.title ?? ''
   return [
     subject,
-    `镜头作用：${scene.visual_role ?? 'feature'}`,
-    '生成写实、连贯的视频画面，明确主体、环境、光线、动作和镜头运动',
+    '画面应连贯呈现主体、环境、光线、动作和镜头运动',
   ].filter(Boolean).join('；')
 }
 
@@ -69,10 +68,31 @@ function applyVisualStrategyScene(
   return merged
 }
 
+function visualStrategyChanged(
+  base: RemotionTimelineScene,
+  candidate: RemotionTimelineScene,
+): boolean {
+  const project = (scene: RemotionTimelineScene) => Object.fromEntries(
+    VISUAL_STRATEGY_SCENE_FIELDS.map((field) => [field, scene[field]]),
+  )
+  return JSON.stringify(project(base)) !== JSON.stringify(project(candidate))
+}
+
+function visualStrategyPrompt(scene: RemotionTimelineScene): string {
+  return [
+    `presentation_type=${scene.type}`,
+    scene.fit ? `fit=${scene.fit}` : '',
+    scene.motion ? `motion=${scene.motion}` : '',
+    scene.background ? `background=${scene.background}` : '',
+    scene.asset_id ? `asset=${scene.asset_id}` : '',
+  ].filter(Boolean).join('; ')
+}
+
 function applyStructureScope(input: {
   baseSpec: RemotionTimelineSpecV1
   candidateSpec: RemotionTimelineSpecV1
   sceneIds?: string[]
+  durationMode?: 'preserve_range' | 'resize_timeline'
 }): RemotionTimelineSpecV1 {
   const requested = [...new Set(input.sceneIds ?? [])]
   if (requested.length === 0) throw new Error('Structure revision scope requires sceneIds.')
@@ -106,7 +126,8 @@ function applyStructureScope(input: {
   const replacedDuration = input.baseSpec.scenes.slice(startIndex, endIndex + 1)
     .reduce((sum, scene) => sum + scene.duration_sec, 0)
   const replacementDuration = replacement.reduce((sum, scene) => sum + scene.duration_sec, 0)
-  if (Math.abs(replacedDuration - replacementDuration) > 0.001) {
+  const durationDelta = replacementDuration - replacedDuration
+  if (input.durationMode !== 'resize_timeline' && Math.abs(durationDelta) > 0.001) {
     throw new Error('Structure revision must preserve the target range duration.')
   }
   let cursor = input.baseSpec.scenes[startIndex]!.start_sec
@@ -130,7 +151,10 @@ function applyStructureScope(input: {
   const protectedTrackIds = new Set(input.baseSpec.overlays
     .filter((overlay) => overlay.scene_id && !targetIds.has(overlay.scene_id) && overlay.track_id)
     .map((overlay) => overlay.track_id as string))
-  const scenes = [...before, ...normalizedReplacement, ...after]
+  const shiftedAfter = Math.abs(durationDelta) <= 0.001
+    ? after
+    : after.map((scene) => ({ ...scene, start_sec: scene.start_sec + durationDelta }))
+  const scenes = [...before, ...normalizedReplacement, ...shiftedAfter]
   const candidateTransitions = input.candidateSpec.transitions.filter((transition) =>
     replacementIds.has(transition.from_scene_id)
       || replacementIds.has(transition.to_scene_id)
@@ -169,8 +193,29 @@ function applyStructureScope(input: {
     if (job.fallback_asset_id) referencedCandidateAssetIds.add(job.fallback_asset_id)
   }
 
+  const shiftedAfterIds = new Set(after.map((scene) => scene.id))
+  const replacedEnd = input.baseSpec.scenes[endIndex]!.start_sec
+    + input.baseSpec.scenes[endIndex]!.duration_sec
+  const shiftProtectedOverlay = (overlay: RemotionTimelineSpecV1['overlays'][number]) => {
+    const followsRange = overlay.scene_id
+      ? shiftedAfterIds.has(overlay.scene_id)
+      : overlay.start_sec >= replacedEnd - 0.001
+    if (!followsRange || Math.abs(durationDelta) <= 0.001) return overlay
+    return { ...overlay, start_sec: overlay.start_sec + durationDelta, end_sec: overlay.end_sec + durationDelta }
+  }
+  const shiftAudio = (clip: NonNullable<RemotionTimelineSpecV1['audio']>[number]) => {
+    if (Math.abs(durationDelta) <= 0.001 || clip.end_sec <= replacedEnd + 0.001) return clip
+    if (clip.start_sec >= replacedEnd - 0.001) {
+      return { ...clip, start_sec: clip.start_sec + durationDelta, end_sec: clip.end_sec + durationDelta }
+    }
+    return { ...clip, end_sec: clip.end_sec + durationDelta }
+  }
+
   return {
     ...input.baseSpec,
+    canvas: input.durationMode === 'resize_timeline'
+      ? { ...input.baseSpec.canvas, duration_sec: input.baseSpec.canvas.duration_sec + durationDelta }
+      : input.baseSpec.canvas,
     assets: [
       ...input.baseSpec.assets,
       ...input.candidateSpec.assets.filter((asset) =>
@@ -179,7 +224,9 @@ function applyStructureScope(input: {
     scenes,
     transitions,
     overlays: [
-      ...input.baseSpec.overlays.filter((overlay) => !overlay.scene_id || !targetIds.has(overlay.scene_id)),
+      ...input.baseSpec.overlays
+        .filter((overlay) => !overlay.scene_id || !targetIds.has(overlay.scene_id))
+        .map(shiftProtectedOverlay),
       ...candidateReplacementOverlays,
     ],
     caption_tracks: [
@@ -192,6 +239,7 @@ function applyStructureScope(input: {
       ...input.baseSpec.material_jobs.filter((job) => !targetIds.has(job.scene_id)),
       ...candidateReplacementJobs,
     ],
+    audio: input.baseSpec.audio?.map(shiftAudio),
   }
 }
 
@@ -207,20 +255,31 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
   scope: V2TimelineRevisionScope
   sceneId?: string
   sceneIds?: string[]
+  overlayIds?: string[]
   transitionIds?: string[]
   globalMode?: 'brief_update' | 'full_replan'
+  durationMode?: 'preserve_range' | 'resize_timeline'
 }): RemotionTimelineSpecV1 {
   if (input.scope === 'subtitle') {
     if (input.sceneId) {
+      const requestedOverlayIds = new Set(input.overlayIds ?? [])
+      if (requestedOverlayIds.size > 0) {
+        const invalid = [...requestedOverlayIds].filter((id) => !input.baseSpec.overlays.some((overlay) =>
+          overlay.id === id && overlay.type === 'caption' && overlay.scene_id === input.sceneId))
+        if (invalid.length > 0) throw new Error(`Subtitle revision contains invalid overlayIds: ${invalid.join(', ')}`)
+      }
+      const inTarget = (overlay: RemotionTimelineSpecV1['overlays'][number]) =>
+        overlay.type === 'caption'
+        && overlay.scene_id === input.sceneId
+        && (requestedOverlayIds.size === 0 || requestedOverlayIds.has(overlay.id))
       const targetTrackIds = new Set([
         ...input.baseSpec.overlays,
         ...input.candidateSpec.overlays,
-      ].filter((overlay) =>
-        overlay.type === 'caption' && overlay.scene_id === input.sceneId && overlay.track_id)
+      ].filter((overlay) => inTarget(overlay) && overlay.track_id)
         .map((overlay) => overlay.track_id as string))
       const protectedTrackIds = new Set(input.baseSpec.overlays
         .filter((overlay) =>
-          overlay.type === 'caption' && overlay.scene_id !== input.sceneId && overlay.track_id)
+          overlay.type === 'caption' && !inTarget(overlay) && overlay.track_id)
         .map((overlay) => overlay.track_id as string))
       return {
         ...input.baseSpec,
@@ -233,7 +292,7 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
         overlays: mergeScopedArray({
           base: input.baseSpec.overlays,
           candidate: input.candidateSpec.overlays,
-          isInScope: (overlay) => overlay.type === 'caption' && overlay.scene_id === input.sceneId,
+          isInScope: inTarget,
           key: (overlay) => overlay.id,
         }),
       }
@@ -252,40 +311,70 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
     if (!sceneId) throw new Error('Scene revision scope requires a sceneId.')
     const candidateScene = input.candidateSpec.scenes.find((scene) => scene.id === sceneId)
     const baseScene = input.baseSpec.scenes.find((scene) => scene.id === sceneId)
-    const creativeIntentChanged =
-      JSON.stringify(baseScene?.creative_intent) !== JSON.stringify(candidateScene?.creative_intent)
-    const sceneCaptionTrackIds = new Set(
-      input.candidateSpec.overlays
-        .filter((overlay) => overlay.type === 'caption' && overlay.scene_id === sceneId && overlay.track_id)
-        .map((overlay) => overlay.track_id as string),
-    )
+    const sceneNarrativeChanged = candidateScene != null && baseScene != null && JSON.stringify({
+      creative_intent: baseScene.creative_intent,
+      title: baseScene.title,
+      subtitle: baseScene.subtitle,
+      body: baseScene.body,
+    }) !== JSON.stringify({
+      creative_intent: candidateScene.creative_intent,
+      title: candidateScene.title,
+      subtitle: candidateScene.subtitle,
+      body: candidateScene.body,
+    })
+    const candidateJobById = new Map(input.candidateSpec.material_jobs.map((job) => [job.id, job]))
+    const targetCandidateJobs = input.candidateSpec.material_jobs.filter((job) => job.scene_id === sceneId)
+    const conditionedAssetIds = new Set(targetCandidateJobs.flatMap((job) =>
+      job.input_asset_id ? [job.input_asset_id] : []))
+    const candidateImageReferences = input.candidateSpec.creative_brief?.image_references.filter((reference) =>
+      conditionedAssetIds.has(reference.asset_id)) ?? []
+    const baseImageReferences = input.baseSpec.creative_brief?.image_references ?? []
+    const targetReferenceIds = new Set(candidateImageReferences.map((reference) => reference.asset_id))
     return {
       ...input.baseSpec,
       scenes: input.baseSpec.scenes.map((scene) =>
-        scene.id === sceneId && candidateScene ? candidateScene : scene),
-      caption_tracks: mergeScopedArray({
-        base: input.baseSpec.caption_tracks ?? [],
-        candidate: input.candidateSpec.caption_tracks ?? [],
-        isInScope: (track) => sceneCaptionTrackIds.has(track.id),
-        key: (track) => track.id,
+        scene.id === sceneId && candidateScene
+          ? {
+              ...scene,
+              creative_intent: candidateScene.creative_intent,
+              title: candidateScene.title,
+              subtitle: candidateScene.subtitle,
+              body: candidateScene.body,
+            }
+          : scene),
+      creative_brief: input.baseSpec.creative_brief
+        ? {
+            ...input.baseSpec.creative_brief,
+            image_references: [
+              ...baseImageReferences.filter((reference) => !targetReferenceIds.has(reference.asset_id)),
+              ...candidateImageReferences,
+            ],
+          }
+        : input.candidateSpec.creative_brief
+          ? {
+              direction: input.candidateSpec.creative_brief.direction,
+              sample_methods: input.candidateSpec.creative_brief.sample_methods,
+              image_references: candidateImageReferences,
+            }
+          : undefined,
+      material_jobs: mergeScopedArray({
+        base: input.baseSpec.material_jobs,
+        candidate: input.candidateSpec.material_jobs,
+        isInScope: (job) => job.scene_id === sceneId,
+        key: (job) => job.id,
+      }).map((job) => {
+        if (job.scene_id !== sceneId || job.type !== 'generate_video' || !sceneNarrativeChanged || !candidateScene) {
+          return job
+        }
+        const candidatePrompt = candidateJobById.get(job.id)?.prompt?.trim()
+        return {
+          ...job,
+          status: 'planned',
+          prompt: candidatePrompt && candidatePrompt !== input.baseSpec.material_jobs.find((baseJob) => baseJob.id === job.id)?.prompt
+            ? candidatePrompt
+            : deriveSceneGenerationPrompt(candidateScene),
+        }
       }),
-      overlays: mergeScopedArray({
-        base: input.baseSpec.overlays,
-        candidate: input.candidateSpec.overlays,
-        isInScope: (overlay) => overlay.type === 'caption' && overlay.scene_id === sceneId,
-        key: (overlay) => overlay.id,
-      }),
-      transitions: mergeScopedArray({
-        base: input.baseSpec.transitions,
-        candidate: input.candidateSpec.transitions,
-        isInScope: (transition) =>
-          transition.from_scene_id === sceneId || transition.to_scene_id === sceneId,
-        key: (transition) => `${transition.from_scene_id}:${transition.to_scene_id}`,
-      }),
-      material_jobs: input.baseSpec.material_jobs.map((job) =>
-        job.scene_id === sceneId && job.type === 'generate_video' && creativeIntentChanged && candidateScene
-          ? { ...job, prompt: deriveSceneGenerationPrompt(candidateScene) }
-          : job),
     }
   }
   if (input.scope === 'structure') return applyStructureScope(input)
@@ -293,6 +382,8 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
     const sceneId = input.sceneId
     if (!sceneId) throw new Error('Visual strategy revision scope requires a sceneId.')
     const candidateScene = input.candidateSpec.scenes.find((scene) => scene.id === sceneId)
+    const baseScene = input.baseSpec.scenes.find((scene) => scene.id === sceneId)
+    const strategyChanged = Boolean(baseScene && candidateScene && visualStrategyChanged(baseScene, candidateScene))
     return {
       ...input.baseSpec,
       scenes: input.baseSpec.scenes.map((scene) =>
@@ -302,6 +393,20 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
         candidate: input.candidateSpec.material_jobs,
         isInScope: (job) => job.scene_id === sceneId,
         key: (job) => job.id,
+      }).map((job) => {
+        if (job.scene_id !== sceneId || job.type !== 'generate_video') return job
+        const baseJob = input.baseSpec.material_jobs.find((item) => item.id === job.id)
+        if (!baseJob) return job
+        const candidatePrompt = job.prompt?.trim()
+        const promptChanged = candidatePrompt && candidatePrompt !== baseJob.prompt?.trim()
+        if (!strategyChanged && JSON.stringify(baseJob) === JSON.stringify(job)) return job
+        return {
+          ...job,
+          status: 'planned',
+          prompt: promptChanged || !candidateScene
+            ? candidatePrompt
+            : [baseJob.prompt?.trim(), visualStrategyPrompt(candidateScene)].filter(Boolean).join('\n'),
+        }
       }),
     }
   }
@@ -348,8 +453,10 @@ export function applyV2TimelineRevisionScope(input: {
   scope: V2TimelineRevisionScope
   sceneId?: string
   sceneIds?: string[]
+  overlayIds?: string[]
   transitionIds?: string[]
   globalMode?: 'brief_update' | 'full_replan'
+  durationMode?: 'preserve_range' | 'resize_timeline'
 }): RemotionTimelineSpecV1 {
   return retainV2TimelineResourceClosure({
     baseSpec: input.baseSpec,

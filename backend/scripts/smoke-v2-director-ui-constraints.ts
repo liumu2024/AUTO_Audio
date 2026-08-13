@@ -193,6 +193,10 @@ const frontendApiSource = await readFile(
   new URL('../../fonted/src/lib/api.ts', import.meta.url),
   'utf8',
 )
+const editorHeaderSource = await readFile(
+  new URL('../../fonted/src/components/layout/EditorHeader.tsx', import.meta.url),
+  'utf8',
+)
 assert.match(
   chatPanelSource,
   /event\.toolId === 'timeline\.render'[\s\S]*event\.result[\s\S]*setResult/,
@@ -259,6 +263,26 @@ assert.match(
   timelineStoreSource,
   /setPersistedDraft:[\s\S]*result\?\.draftRevision === draft\.revision[\s\S]*renderedOutputUrl/,
   'saving a new revision must not keep a rendered output from an older revision',
+)
+assert.match(
+  timelineStoreSource,
+  /pendingTimelineRevisions[\s\S]*setPendingTimelineRevisions/,
+  'the UI timeline store must retain the server-confirmed pending revision gate',
+)
+assert.match(
+  timelineStoreSource,
+  /openPersistedDraft:[\s\S]*pendingTimelineRevisions:\s*draft\.pendingTimelineRevisions\s*\?\?\s*state\.pendingTimelineRevisions/,
+  'opening an SSE draft without pending metadata must preserve the server workspace pending gate',
+)
+assert.match(
+  chatPanelSource,
+  /applyDirectorWorkspaceContext\([\s\S]*event\.state\.pendingTimelineRevisions/,
+  'workspace synchronization must deliver the pending revision gate to direct UI export',
+)
+assert.match(
+  editorHeaderSource,
+  /pendingTimelineRevisions[\s\S]*handleExport[\s\S]*仍有方案修改尚未落实[\s\S]*exportDisabled/,
+  'direct UI export must not render an older revision after a requested patch failed',
 )
 
 console.log('V2 director UI constraints smoke passed')

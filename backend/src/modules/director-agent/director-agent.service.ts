@@ -15,13 +15,17 @@ import {
   type V2AgentToolResult,
 } from '../../pipeline-v2/agent-tools/dispatcher.js'
 import { resolveV2AgentExecutionPlan } from '../../pipeline-v2/agent-skills/registry.js'
-import { deliveryAuthorizationFromDirectorDecision } from '../../pipeline-v2/agent-tools/authorization.js'
+import {
+  deliveryAuthorizationFromDirectorDecision,
+  pendingDismissalAuthorizationFromDirectorDecision,
+} from '../../pipeline-v2/agent-tools/authorization.js'
 import { routeDirectorIntentWithLlm } from './llm-intent-router.js'
 import {
   applyCreativeMemoryActions,
   searchCreativeMemories,
   type CreativeMemoryActionReceipt,
 } from '../creative-memory/creative-memory.service.js'
+import { normalizeCreativeText } from '../creative-memory/creative-text-retrieval.js'
 import { searchCreativeKnowledge } from '../creative-knowledge/creative-knowledge.service.js'
 import {
   appendDirectorWorkspaceTurn,
@@ -161,7 +165,7 @@ function intentForWorkspace(input: {
 
 function stateDiff(before: DirectorWorkspaceState, after: DirectorWorkspaceState) {
   const changed: string[] = []
-  for (const key of ['draftId', 'baseRevision', 'selectedItemId', 'pendingQuestion', 'responseId'] as const) {
+  for (const key of ['draftId', 'baseRevision', 'selectedItemId', 'pendingQuestion', 'pendingTimelineRevisions', 'responseId'] as const) {
     if (before[key] !== after[key]) changed.push(key)
   }
   if (JSON.stringify(before.context.slots) !== JSON.stringify(after.context.slots)) changed.push('context.slots')
@@ -171,13 +175,20 @@ function stateDiff(before: DirectorWorkspaceState, after: DirectorWorkspaceState
   return changed
 }
 
-const requirementPersistenceClaim = /(?:我|本轮|现已|已经).{0,12}(?:记录|保存|更新|撤销|作废).{0,20}(?:要求|偏好|约束)|已(?:为你)?(?:记录|保存)(?:了)?(?:本轮|该|这|您的|你的)?(?:要求|偏好|约束)|已将.{0,20}(?:要求|偏好|约束).{0,8}(?:更新|撤销|作废)|\b(?:I|this turn|now).{0,12}(?:recorded|saved|updated|revoked).{0,20}(?:requirement|preference|constraint)s?\b/i
+const requirementPersistenceClaim = /(?:我|本轮|现已|已经).{0,12}(?:记录|保存|沉淀|更新|撤销|作废).{0,20}(?:要求|偏好|约束)|(?:已|已经|现已)(?:为你)?(?:成功)?(?:记录|保存|沉淀)(?:了)?(?::|：|(?:本轮|该|这|您的|你的)?(?:要求|偏好|约束))|(?:已|已经|现已)(?:成功)?(?:撤销|更新).{0,30}(?:偏好|要求|约束)|已将.{0,20}(?:要求|偏好|约束).{0,8}(?:更新|撤销|作废)|\b(?:I|this turn|now).{0,12}(?:recorded|saved|updated|revoked).{0,20}(?:requirement|preference|constraint)s?\b/i
 
 function hasUnsupportedRequirementPersistenceClaim(message: string) {
   const withoutNegatedActions = message
     .replace(/(?:不|不会|不要|未|没有|无需).{0,4}(?:记录|保存|更新|撤销|作废)/gu, '')
     .replace(/\b(?:do not|don't|will not|won't|did not|not)\s+(?:record|save|update|revoke)\b/giu, '')
   return requirementPersistenceClaim.test(withoutNegatedActions)
+}
+
+function stripUnsupportedPersistenceClaims(message: string) {
+  return (message.match(/[^。！？!?；;\n]+[。！？!?；;]?/gu) ?? [message])
+    .filter((sentence) => !hasUnsupportedRequirementPersistenceClaim(sentence))
+    .join('')
+    .trim()
 }
 
 function requirementConfirmation(changes: RequirementChanges) {
@@ -271,7 +282,7 @@ function creativeMemoryConfirmation(
   const candidates = receipts.filter((receipt) =>
     receipt.status === 'succeeded' && receipt.effectiveStatus === 'candidate').length
   const duplicates = receipts.filter((receipt) =>
-    receipt.status === 'succeeded' && receipt.reason === 'duplicate_of_requirement').length
+    receipt.status === 'skipped' && receipt.reason === 'duplicate_of_requirement').length
   const failed = receipts.filter((receipt) => receipt.status === 'failed')
   return [
     active ? `已沉淀 ${active} 条创作偏好，可在“创作偏好”中查看或撤销` : '',
@@ -318,6 +329,14 @@ export async function* streamDirectorAgentChat(
   let workspaceState = persisted
     ? applyDirectorWorkspacePatch(before, runtimeObservationPatch(input))
     : before
+  if (workspaceState.draftId) {
+    const persistedDraft = await timelineDrafts.getDraft(workspaceState.draftId, userId)
+    if (persistedDraft) {
+      workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+        pendingTimelineRevisions: persistedDraft.pendingTimelineRevisions,
+      })
+    }
+  }
   const selectedSampleId = workspaceState.context.sampleVideo?.id
   if (selectedSampleId && workspaceState.context.materials.some((material) => material.id === selectedSampleId)) {
     workspaceState = applyDirectorWorkspacePatch(workspaceState, {
@@ -482,6 +501,7 @@ export async function* streamDirectorAgentChat(
     currentTurnId: turnOperationId,
     context: workspaceState.context,
     confirmedRequirements: workspaceState.confirmedRequirements,
+    pendingTimelineRevisions: workspaceState.pendingTimelineRevisions,
     retrievedCreativeMemories: creativeMemoryRetrieval,
     previousResponseId:
       workspaceState.responseContinuityDisabled ? undefined : workspaceState.responseId,
@@ -541,21 +561,27 @@ export async function* streamDirectorAgentChat(
     userId,
     workspaceSessionId: id,
     currentTurnId: turnOperationId,
+    currentUserText: input.prompt,
     currentDraftId: workspaceState.draftId,
     recalledMemoryIds: new Set([
       ...creativeMemoryRetrieval.active.map((item) => item.memory.id),
       ...creativeMemoryRetrieval.candidate.map((item) => item.memory.id),
     ]),
     actions: routed.memoryActions,
-    requirementStatements: [
+    requirementStatements: [...new Map([
+      ...workspaceState.confirmedRequirements
+        .filter((item) => item.status === 'active')
+        .map((item) => item.statement),
       ...(requirementResult.changes.added ?? []).map((item) => item.statement),
       ...(requirementResult.changes.replaced ?? []).map((item) => item.current.statement),
-    ],
+    ].map((statement) => [normalizeCreativeText(statement), statement])).values()],
   })
   actionReceipts.push(...memoryActionReceipts.map((receipt) => ({
     ref: receipt.ref,
     kind: 'memory.update' as const,
-    status: receipt.status,
+    // A duplicate project requirement is intentionally not persisted as
+    // memory, but it is a handled no-op rather than a failed dependency.
+    status: receipt.status === 'skipped' ? 'succeeded' : receipt.status,
     reason: receipt.reason,
     dependsOn: [],
   })))
@@ -658,6 +684,17 @@ export async function* streamDirectorAgentChat(
     intent: routed.conversationIntent,
     requestsDelivery: modelToolProposals.some((proposal) => proposal.toolId === 'timeline.render'),
   })
+  const pendingDismissalAuthorization = pendingDismissalAuthorizationFromDirectorDecision({
+    prompt: input.prompt,
+    intent: routed.conversationIntent,
+    requestedCallId: (() => {
+      const proposals = modelToolProposals.filter((proposal) => proposal.toolId === 'timeline.pending.dismiss')
+      return proposals.length === 1 && typeof proposals[0]?.arguments.callId === 'string'
+        ? proposals[0].arguments.callId
+        : undefined
+    })(),
+    pendingRevisions: workspaceState.pendingTimelineRevisions ?? [],
+  })
   if (shouldExecute) {
     for (const request of requestedTools) {
       const rejected = executionPlan.rejectedTools.find((item) => item.callId === request.callId)
@@ -713,7 +750,9 @@ export async function* streamDirectorAgentChat(
             context: workspaceState.context,
             runtime: effectiveRuntime,
             workspace: workspaceState,
-            authorization: deliveryAuthorization,
+            authorization: request.toolId === 'timeline.pending.dismiss'
+              ? pendingDismissalAuthorization
+              : deliveryAuthorization,
             traceSessionId: id,
             recalledCreativeMemories: creativeMemoryRetrieval.active.map(
               (item) => item.memory.statement,
@@ -774,6 +813,28 @@ export async function* streamDirectorAgentChat(
         }
       }
       toolResults.push(result)
+      if (
+        request.toolId === 'timeline.patch'
+        && !result.ok
+        && workspaceState.draftId
+        && workspaceState.baseRevision
+      ) {
+        const marked = await timelineDrafts.markPendingRevision({
+          draftId: workspaceState.draftId,
+          userId,
+          baseRevision: workspaceState.baseRevision,
+          callId: request.callId,
+          replacesCallId: typeof request.arguments.resolvesPendingCallId === 'string'
+            ? request.arguments.resolvesPendingCallId
+            : undefined,
+          instruction: typeof request.arguments.instruction === 'string'
+            ? request.arguments.instruction
+            : input.prompt,
+        })
+        if (marked) workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+          pendingTimelineRevisions: marked.pendingTimelineRevisions,
+        })
+      }
       const receiptStatus = failedDependency
         ? 'skipped'
         : result.ok
@@ -853,6 +914,13 @@ export async function* streamDirectorAgentChat(
           : workspaceState.recentToolCallIds,
         latestExecution: { action: request.toolId, outcome: result.ok ? result.summary : `failed: ${result.summary}`, traceDir: result.draft?.traceDir },
         recentFailure: result.ok ? null : { reason: result.summary, recovery: result.recovery },
+        pendingTimelineRevisions: request.toolId === 'timeline.patch' || request.toolId === 'timeline.pending.dismiss'
+          ? result.ok
+            ? result.draft
+              ? result.draft.pendingTimelineRevisions ?? workspaceState.pendingTimelineRevisions
+              : workspaceState.pendingTimelineRevisions
+            : workspaceState.pendingTimelineRevisions
+          : workspaceState.pendingTimelineRevisions,
       })
       yield {
         type: 'tool_result',
@@ -869,6 +937,7 @@ export async function* streamDirectorAgentChat(
               revision: result.draft.revision,
               spec: result.draft.spec,
               traceDir: result.draft.traceDir,
+              pendingTimelineRevisions: result.draft.pendingTimelineRevisions,
             }
           : undefined,
       }
@@ -895,7 +964,11 @@ export async function* streamDirectorAgentChat(
           .map((message) => message.replace(/[。！!？?]+$/u, ''))
           .join('。')
       : requirementMessage
-    : toolResults.length === 0
+    : memoryActionReceipts.length > 0
+      && toolResults.length === 0
+      && hasUnsupportedRequirementPersistenceClaim(modelAssistantMessage)
+      ? stripUnsupportedPersistenceClaims(modelAssistantMessage)
+      : toolResults.length === 0
       && memoryActionReceipts.every((receipt) => receipt.status !== 'succeeded')
       && hasUnsupportedRequirementPersistenceClaim(modelAssistantMessage)
       ? '本轮没有产生可验证的要求变更，因此未将其标记为已保存。'

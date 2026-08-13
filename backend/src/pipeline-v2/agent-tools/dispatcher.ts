@@ -12,7 +12,11 @@ import { buildV2TimelinePlanningReview } from '../remotion-timeline-review.js'
 import { executeV2TimelineDraftRun } from '../timeline-draft-runner.js'
 import { buildV2TimelineRevisionContext } from '../timeline-revision-context.js'
 import { normalizeV2TimelineSelection } from '../timeline-selection.js'
-import { buildDirectorTimelineFacts, evaluateV2TimelineRevisionCommit } from '../timeline-revision-outcome-review.js'
+import {
+  buildDirectorTimelineFacts,
+  evaluateV2TimelineRevisionCommit,
+  verifyV2TimelinePendingResolution,
+} from '../timeline-revision-outcome-review.js'
 import type { V2TimelineRevisionScope } from '../timeline-revision-scope.js'
 import {
   listPromotedComponents,
@@ -31,6 +35,7 @@ import { RENDER_COMPONENT_SANDBOX_POLICY_VERSION } from '../../modules/render-co
 import {
   createV2TimelineDraftRepository,
   V2TimelineComponentReferenceError,
+  type V2TimelineDraftRecord,
 } from '../timeline-draft-repository.js'
 import type { V2PlannerInput } from '../v2-input.js'
 import {
@@ -71,7 +76,13 @@ export interface V2AgentToolResult {
   summary: string
   /** Which review gate rejected the tool, when applicable. */
   gate?: string
-  draft?: { id: string; revision: number; spec: RemotionTimelineSpecV1; traceDir?: string }
+  draft?: {
+    id: string
+    revision: number
+    spec: RemotionTimelineSpecV1
+    traceDir?: string
+    pendingTimelineRevisions?: V2TimelineDraftRecord['pendingTimelineRevisions']
+  }
   sampleUnderstanding?: unknown
   sampleSelection?: { id: string; url: string; name?: string }
   output?: Record<string, unknown>
@@ -233,6 +244,27 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
     userId: input.userId,
   })
 
+  if (request.toolId === 'timeline.pending.dismiss') {
+    if (!input.workspace.draftId || !input.workspace.baseRevision) {
+      return { callId: request.callId, toolId: request.toolId, ok: false, gate: 'dispatcher_draft', summary: '当前没有可处理失败修订的草稿。' }
+    }
+    const draft = await drafts.dismissPendingRevision({
+      draftId: input.workspace.draftId,
+      userId: input.userId,
+      baseRevision: input.workspace.baseRevision,
+      callId: checked.arguments.callId as string,
+    })
+    if (!draft) return { callId: request.callId, toolId: request.toolId, ok: false, gate: 'dispatcher_draft', summary: '当前草稿不存在。' }
+    return {
+      callId: request.callId,
+      toolId: request.toolId,
+      ok: true,
+      summary: '已按本轮明确要求放弃该失败修改；当前已保存方案保持不变。',
+      draft: { id: draft.id, revision: draft.revision, spec: draft.spec, traceDir: draft.traceDir, pendingTimelineRevisions: draft.pendingTimelineRevisions },
+      output: { selectedItemId: input.workspace.selectedItemId },
+    }
+  }
+
   if (request.toolId === 'material.inspect') {
     const selected = new Set(bound.system.materialIds)
     const materials = input.context.materials.filter((material) => selected.has(material.id))
@@ -341,6 +373,9 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
   const requestedSceneId = request.toolId === 'timeline.patch'
     ? (checked.arguments.sceneId as string | undefined)
     : undefined
+  const requestedOverlayIds = request.toolId === 'timeline.patch' && patchScope === 'subtitle'
+    ? (checked.arguments.overlayIds as string[] | undefined)
+    : undefined
   const existingSceneIds = new Set((existing?.spec.scenes ?? []).map((scene) => scene.id))
   const requestedTransitionIds = request.toolId === 'timeline.patch' && patchScope === 'transition'
     ? (checked.arguments.transitionIds as string[])
@@ -348,6 +383,26 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
   const requestedStructureSceneIds = request.toolId === 'timeline.patch' && patchScope === 'structure'
     ? (checked.arguments.sceneIds as string[])
     : undefined
+  const requestedDurationMode = request.toolId === 'timeline.patch' && patchScope === 'structure'
+    ? checked.arguments.durationMode as 'preserve_range' | 'resize_timeline'
+    : undefined
+  const requestedPendingCallId = request.toolId === 'timeline.patch'
+    ? checked.arguments.resolvesPendingCallId as string | undefined
+    : undefined
+  const pendingResolution = requestedPendingCallId
+    ? (await drafts.getDraft(input.workspace.draftId!, input.userId))?.pendingTimelineRevisions
+        .find((item) => item.callId === requestedPendingCallId)
+    : undefined
+  if (requestedPendingCallId && !pendingResolution) {
+    return {
+      callId: request.callId,
+      toolId: request.toolId,
+      ok: false,
+      gate: 'pending_resolution_target',
+      summary: '指定的失败修改不属于当前草稿或已不再待处理。',
+      recovery: '请从当前草稿的 pendingTimelineRevisions 中选择真实 callId。',
+    }
+  }
   const existingTransitionIds = new Set((existing?.spec.transitions ?? []).map((transition) => transition.id))
   const resolvedSceneId = requestedSceneId && existingSceneIds.has(requestedSceneId)
     ? requestedSceneId
@@ -364,6 +419,18 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
   }
   const missingTransitionIds = (requestedTransitionIds ?? []).filter((id) => !existingTransitionIds.has(id))
   const missingStructureSceneIds = (requestedStructureSceneIds ?? []).filter((id) => !existingSceneIds.has(id))
+  const missingOverlayIds = (requestedOverlayIds ?? []).filter((id) => !existing?.spec.overlays.some((overlay) =>
+    overlay.id === id && overlay.type === 'caption' && (!requestedSceneId || overlay.scene_id === requestedSceneId)))
+  if (request.toolId === 'timeline.patch' && missingOverlayIds.length > 0) {
+    return {
+      callId: request.callId,
+      toolId: request.toolId,
+      ok: false,
+      gate: 'dispatcher_target',
+      summary: `目标字幕不存在或不属于目标场景：${missingOverlayIds.join('、')}。`,
+      recovery: '请从当前草稿的可见字幕对象中选择目标后重试。',
+    }
+  }
   if (request.toolId === 'timeline.patch' && existing && missingStructureSceneIds.length > 0) {
     return {
       callId: request.callId,
@@ -463,7 +530,9 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
         revisionBaseSpec: existing.spec,
         revisionScope: patchScope,
         revisionGlobalMode: requestedGlobalMode,
+        revisionDurationMode: requestedDurationMode,
         revisionSceneId: resolvedSceneId,
+        revisionOverlayIds: requestedOverlayIds,
         revisionSceneIds: requestedStructureSceneIds,
         revisionTransitionIds: requestedTransitionIds,
         revisionContext: buildV2TimelineRevisionContext({ draftId: input.workspace.draftId, baseRevision: input.workspace.baseRevision, spec: existing.spec }),
@@ -491,6 +560,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
         sceneId: resolvedSceneId,
         sceneIds: requestedStructureSceneIds,
         transitionIds: requestedTransitionIds,
+        overlayIds: requestedOverlayIds,
       })
       if (!commit.ok) {
         return {
@@ -507,13 +577,33 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
     }
     const validation = validateRemotionTimelineSpec(spec)
     if (!validation.ok) return { callId: request.callId, toolId: request.toolId, ok: false, gate: 'spec_validation', summary: 'V2 时间线未通过结构校验。', output: { validation }, recovery: checked.tool.recovery, plannerInvoked: true }
+    const pendingResolutionReview = pendingResolution
+      ? await verifyV2TimelinePendingResolution({
+          instruction: pendingResolution.instruction,
+          candidateSpec: spec,
+          availableComponents,
+          confirmedContext: plan.conversationSummary,
+        })
+      : undefined
+    if (pendingResolutionReview && !pendingResolutionReview.pass) {
+      return {
+        callId: request.callId,
+        toolId: request.toolId,
+        ok: false,
+        gate: 'pending_resolution_review',
+        summary: '本轮结果尚未落实原失败修改，因此未解除渲染门禁。',
+        output: { pendingResolutionReview },
+        recovery: pendingResolutionReview.repairInstruction ?? '继续针对原失败要求修订，或由用户明确放弃该要求。',
+        plannerInvoked: true,
+      }
+    }
     const review = settled.degradations.length > 0
       ? buildV2TimelinePlanningReview({ spec, validation })
       : preview.review
     let draft: Awaited<ReturnType<typeof drafts.createDraft>>
     try {
       draft = existing && input.workspace.draftId && input.workspace.baseRevision
-        ? await drafts.saveDraft({ draftId: input.workspace.draftId, userId: input.userId, baseRevision: input.workspace.baseRevision, spec, kind: 'preview', plannerInput: plan, plannerSource: preview.plannerSource, review, traceDir: preview.traceDir, authorizedDraftComponentIds: input.authorizedDraftComponentIds })
+        ? await drafts.saveDraft({ draftId: input.workspace.draftId, userId: input.userId, baseRevision: input.workspace.baseRevision, spec, kind: 'preview', plannerInput: plan, plannerSource: preview.plannerSource, review, traceDir: preview.traceDir, authorizedDraftComponentIds: input.authorizedDraftComponentIds, resolvesPendingCallIds: pendingResolutionReview?.pass && requestedPendingCallId ? [requestedPendingCallId] : [] })
         : await drafts.createDraft({ userId: input.userId, plannerInput: plan, spec, plannerSource: preview.plannerSource, review, traceDir: preview.traceDir, authorizedDraftComponentIds: input.authorizedDraftComponentIds })
     } catch (error) {
       if (!(error instanceof V2TimelineComponentReferenceError)) throw error
@@ -536,7 +626,29 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
           nextSpec: draft.spec,
         })
       : null
-    return { callId: request.callId, toolId: request.toolId, ok: true, summary: `${request.toolId === 'timeline.patch' ? 'V2 时间线修订已保存为新的草稿版本。' : 'V2 时间线方案已保存为可编辑草稿。'}${degradationSummary}`, draft: { id: draft.id, revision: draft.revision, spec: draft.spec, traceDir: preview.traceDir }, output: { timelineFacts: buildDirectorTimelineFacts(draft.revision, draft.spec), validation, componentDegradations: settled.degradations, selectedItemId }, plannerInvoked: true }
+    return {
+      callId: request.callId,
+      toolId: request.toolId,
+      ok: true,
+      summary: `${request.toolId === 'timeline.patch' ? 'V2 时间线修订已保存为新的草稿版本。' : 'V2 时间线方案已保存为可编辑草稿。'}${degradationSummary}`,
+      draft: { id: draft.id, revision: draft.revision, spec: draft.spec, traceDir: preview.traceDir, pendingTimelineRevisions: draft.pendingTimelineRevisions },
+      output: {
+        timelineFacts: buildDirectorTimelineFacts(draft.revision, draft.spec),
+        validation,
+        componentDegradations: settled.degradations,
+        selectedItemId,
+        ...(pendingResolutionReview?.pass && requestedPendingCallId
+          ? {
+              pendingResolution: {
+                callId: requestedPendingCallId,
+                pass: true,
+                reviewSource: pendingResolutionReview.audit.source,
+              },
+            }
+          : {}),
+      },
+      plannerInvoked: true,
+    }
   }
   if (request.toolId === 'timeline.render') {
     if (!existing) return { callId: request.callId, toolId: request.toolId, ok: false, summary: '正式渲染需要当前 V2 草稿版本。', recovery: checked.tool.recovery }
@@ -590,6 +702,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
 const IDEMPOTENT_TOOL_OPERATIONS: Partial<Record<string, string>> = {
   'timeline.plan': 'timeline.plan',
   'timeline.patch': 'timeline.save',
+  'timeline.pending.dismiss': 'timeline.pending.dismiss',
   'render.author': 'render.author',
 }
 

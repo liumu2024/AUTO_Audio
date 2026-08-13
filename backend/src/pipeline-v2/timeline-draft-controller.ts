@@ -21,6 +21,7 @@ import { buildV2TimelineRevisionContext } from './timeline-revision-context.js'
 import {
   createV2TimelineDraftRepository,
   V2TimelineComponentReferenceError,
+  V2TimelinePendingRevisionError,
   V2TimelineRevisionConflictError,
   type V2TimelineDraftHistoryRecord,
   type V2TimelineDraftRecord,
@@ -53,6 +54,7 @@ function draftDto(draft: V2TimelineDraftRecord) {
     plannerSource: draft.plannerSource,
     review: draft.review,
     traceDir: draft.traceDir,
+    pendingTimelineRevisions: draft.pendingTimelineRevisions,
     createdAt: draft.createdAt.toISOString(),
     updatedAt: draft.updatedAt.toISOString(),
   }
@@ -134,6 +136,14 @@ function revisionConflictBody(error: V2TimelineRevisionConflictError) {
     draftId: error.draftId,
     expectedRevision: error.expectedRevision,
     actualRevision: error.actualRevision,
+  }
+}
+
+function pendingRevisionBody(error: V2TimelinePendingRevisionError) {
+  return {
+    error: error.message,
+    code: 'V2_TIMELINE_REVISION_PENDING',
+    pendingTimelineRevisions: error.pending,
   }
 }
 
@@ -277,6 +287,10 @@ export async function postV2TimelineDraftPreview(req: Request, res: Response): P
       res.status(409).json({ error: error.message })
       return
     }
+    if (error instanceof V2TimelinePendingRevisionError) {
+      res.status(409).json(pendingRevisionBody(error))
+      return
+    }
     throw error
   }
 }
@@ -399,6 +413,10 @@ export async function postV2TimelineDraftRun(req: Request, res: Response): Promi
     }
     if (error instanceof V2IdempotencyConflictError) {
       res.status(409).json({ error: error.message })
+      return
+    }
+    if (error instanceof V2TimelinePendingRevisionError) {
+      res.status(409).json(pendingRevisionBody(error))
       return
     }
     if (error instanceof V2TimelineIdempotencyRunningError) {

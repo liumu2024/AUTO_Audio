@@ -17,7 +17,10 @@ import type {
   DirectorExecutionEffect,
   DirectorIntentResult,
 } from '../../../../shared/types/director-context.js'
-import type { ConfirmedRequirement } from '../../../../shared/types/director-workspace-session.js'
+import type {
+  ConfirmedRequirement,
+  DirectorWorkspaceState,
+} from '../../../../shared/types/director-workspace-session.js'
 import type { RemotionTimelineSpecV1 } from '../../../../shared/types/remotion-timeline-spec.v1.js'
 import type { CreativeMemorySearchResult } from '../creative-memory/creative-memory.service.js'
 import {
@@ -170,6 +173,7 @@ export function compactDirectorContextForPrompt(input: {
   context: DirectorContext
   runtime: DirectorConversationRuntime
   confirmedRequirements?: ConfirmedRequirement[]
+  pendingTimelineRevisions?: DirectorWorkspaceState['pendingTimelineRevisions']
   retrievedCreativeMemories?: CreativeMemorySearchResult
   promotedComponents?: RenderComponentSummary[]
   timelineSpec?: RemotionTimelineSpecV1
@@ -210,6 +214,7 @@ export function compactDirectorContextForPrompt(input: {
         workspace: {
           draftId: input.context.currentTimeline?.draftId,
           baseRevision: input.context.currentTimeline?.currentRevision,
+          pendingTimelineRevisions: input.pendingTimelineRevisions,
         },
         timelineSpec: input.timelineSpec,
       })),
@@ -276,6 +281,7 @@ export function buildDirectorModelPrompt(input: {
   context: DirectorContext
   runtime: DirectorConversationRuntime
   confirmedRequirements?: ConfirmedRequirement[]
+  pendingTimelineRevisions?: DirectorWorkspaceState['pendingTimelineRevisions']
   retrievedCreativeMemories?: CreativeMemorySearchResult
   promotedComponents?: RenderComponentSummary[]
   timelineSpec?: RemotionTimelineSpecV1
@@ -310,10 +316,10 @@ export function buildDirectorModelPrompt(input: {
 - Treat presets and renderedComponents as implementation candidates, not recommendations. Decide the intended effect semantics before choosing its implementation; source and list order do not imply priority.
 - Reuse a matching preset or registered component when it satisfies the intended effect. Use render.author only when neither can satisfy it; do not prefer or avoid either implementation source merely because it is listed.
 - On retry, preserve the current user goal. A previous model suggestion or failed component name is not a user requirement unless the user explicitly adopts it.
-- timeline.patch 的目标 ID 必须来自当前草稿 timelineFacts；UI 当前选中项仅用于展示，不能替模型补全 Tool 目标。目标不明确时先澄清。subtitle 范围可全量修订字幕，也可带目标 sceneId 只改该场景字幕。
-- 已有草稿后不得再次使用 timeline.plan。拆分、合并、插入或删除镜头使用 timeline.patch 的 structure 范围，并从 timelineFacts.scenes 选择一个连续的 sceneIds 范围；只有用户明确要求整体推翻重做时才使用 global。
+- timeline.patch 的目标 ID 必须来自当前草稿 timelineFacts；UI 当前选中项仅用于展示，不能替模型补全 Tool 目标。目标不明确时先澄清。subtitle 范围可全量修订字幕，也可带目标 sceneId；修改已有的具体字幕时还要从 timelineFacts.visibleText 传入 overlayIds，不能顺带改同场景其他字幕。
+- 已有草稿后不得再次使用 timeline.plan。拆分、合并、插入或删除镜头使用 timeline.patch 的 structure 范围，并从 timelineFacts.scenes 选择一个连续的 sceneIds 范围；默认 durationMode=preserve_range，只有用户明确要求改变镜头或全片总时长时才用 resize_timeline。只有用户明确要求整体推翻重做时才使用 global.full_replan；全片表达方向调整使用 global.brief_update。重试 pendingTimelineRevisions 中的失败修改时，必须原样传回对应 resolvesPendingCallId；新修改不得冒充解决旧失败。只有用户明确表示放弃某项失败修改并保留当前草稿时，才调用 timeline.pending.dismiss 并传入该 pending callId。
 - 修改一个或多个具体转场时使用 transition 范围，并从 timelineFacts.transitions 选择全部真实 transitionIds；用户用镜头顺序描述时，根据 fromSceneIndex/toSceneIndex 选择对应转场，不要把转场修改伪装成 scene 或 global 修订。
-- scene 范围修改目标镜头的画面事实、字幕与相邻转场；visual_strategy 只切换目标镜头的视觉呈现（type/fit/motion/background/素材绑定），不动字幕与转场；两者都需要目标场景。
+- scene 范围只修改目标镜头的主体、地点、动作、事件或道具等内容语义，并同步该镜头的 AI 生成任务；不动字幕、时间、转场和视觉呈现。visual_strategy 只切换目标镜头的 type/fit/motion/background/素材绑定及对应呈现提示，不动镜头叙事、字幕与转场；两者都需要目标场景。
 - 要求台账（stateActions）与创作记忆（memoryActions）不得保存内容相同的 statement。若一句话同时包含当前项目要求和可复用偏好证据，可分别保存当前要求与更抽象的偏好 candidate，但不能把项目对象、镜头操作或文案复制进长期偏好。
 - 用户明确说“记住/保存/沉淀”，或表达明确偏好（我喜欢、偏好、习惯、总是用…）时，必须输出对应的 memoryAction：稳定且跨项目→user+active；仅当前草稿→draft+active；不确定或仅一次选择→candidate。
 
@@ -698,6 +704,7 @@ export async function routeDirectorIntentWithLlm(input: {
   runtime: DirectorConversationRuntime
   previousResponseId?: string
   confirmedRequirements?: ConfirmedRequirement[]
+  pendingTimelineRevisions?: DirectorWorkspaceState['pendingTimelineRevisions']
   retrievedCreativeMemories?: CreativeMemorySearchResult
   timelineSpec?: RemotionTimelineSpecV1
 }): Promise<LlmIntentRouterOutput> {

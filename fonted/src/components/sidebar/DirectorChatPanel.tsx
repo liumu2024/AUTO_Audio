@@ -69,9 +69,14 @@ function syncDirectorContext(input: {
   )
 }
 
-function applyDirectorWorkspaceContext(context: DirectorContext, acknowledgeLocalChanges = false) {
+function applyDirectorWorkspaceContext(
+  context: DirectorContext,
+  acknowledgeLocalChanges = false,
+  pendingTimelineRevisions: Array<{ instruction: string; callId: string; baseRevision: number }> = [],
+) {
   useDirectorContextStore.getState().replaceContext(context)
   useV2TimelineStore.getState().selectClip(context.currentTimeline?.selectedClipId ?? null)
+  useV2TimelineStore.getState().setPendingTimelineRevisions(pendingTimelineRevisions)
   useCreationStore.getState().acceptServerMaterials(context.materials, acknowledgeLocalChanges)
   const sample = context.sampleVideo
   useCreationStore.getState().acceptServerSample(sample?.url
@@ -245,7 +250,11 @@ export function DirectorChatPanel() {
         if (!session) return
         if (browserWorkspaceSessionId() !== workspaceSessionId) return
         workspaceRevisionsRef.current.set(workspaceSessionId, session.state.stateRevision)
-        applyDirectorWorkspaceContext(session.state.context)
+        applyDirectorWorkspaceContext(
+          session.state.context,
+          false,
+          session.state.pendingTimelineRevisions ?? [],
+        )
         await restoreWorkspaceDraft({
           workspace: session.state,
           loadDraft: async (draftId) => (await getV2TimelineDraft(draftId)).draft,
@@ -524,7 +533,11 @@ export function DirectorChatPanel() {
               window.sessionStorage,
               event.workspaceSessionId,
             )
-            applyDirectorWorkspaceContext(event.state.context, true)
+            applyDirectorWorkspaceContext(
+              event.state.context,
+              true,
+              event.state.pendingTimelineRevisions ?? [],
+            )
             debugThoughts.push(
               `V2 会话已同步；本轮${event.modelCalled ? '已调用导演模型' : '使用上下文降级'}。`,
             )

@@ -252,14 +252,15 @@ try {
     base.scenes.find((scene) => scene.id === 'scene_4'),
     'scene scope must ignore unrelated scene changes',
   )
-  assert.equal(sceneScoped.transitions.find((transition) => transition.id === 'transition_2')?.type, 'wipe')
+  assert.equal(sceneScoped.transitions.find((transition) => transition.id === 'transition_2')?.type, 'fade')
   assert.equal(sceneScoped.transitions.find((transition) => transition.id === 'transition_1')?.type, 'fade')
-  assert.equal(sceneScoped.overlays.find((overlay) => overlay.id === 'cap_2')?.text, '注意：气压异常')
+  assert.equal(sceneScoped.overlays.find((overlay) => overlay.id === 'cap_2')?.text, base.overlays.find((overlay) => overlay.id === 'cap_2')?.text)
   const baseJob1 = base.material_jobs.find((job) => job.id === 'job_1')
   const scopedJob1 = sceneScoped.material_jobs.find((job) => job.id === 'job_1')
   assert.notEqual(scopedJob1?.prompt, baseJob1?.prompt,
     'scene creative-intent change must re-derive the generation prompt')
-  assert.match(String(scopedJob1?.prompt), /生成写实、连贯的视频画面/,
+  assert.equal(scopedJob1?.status, 'planned', 'scene content changes must invalidate a previously generated shot')
+  assert.match(String(scopedJob1?.prompt), /画面应连贯呈现主体、环境、光线、动作和镜头运动/,
     'derived prompt keeps the generation instruction')
   assert.equal(
     sceneScoped.material_jobs.find((job) => job.id === 'job_2'),
@@ -400,6 +401,11 @@ try {
     briefScoped.assets.some((asset) => asset.id === briefOnlyAssetId),
     'A creative-brief image reference must keep its authoritative asset in the resource closure.',
   )
+  assert.equal(evaluateV2TimelineRevisionCommit({
+    baseSpec: base,
+    candidateSpec: briefScoped,
+    scope: 'global',
+  }).ok, true, 'a brief_update must count as a real revision without rewriting direct timeline fields')
 
   assert.equal(evaluateV2TimelineRevisionCommit({
     baseSpec: base,
@@ -453,6 +459,50 @@ try {
   assert.equal(normalizedOverlay?.end_sec, 2.9)
   assert.equal(validateRemotionTimelineSpec(timingScoped).ok, true)
 
+  const resizedCandidate = structuredClone(timingBase)
+  resizedCandidate.canvas.duration_sec = 7
+  resizedCandidate.scenes = [
+    timingBase.scenes[0]!,
+    { ...timingBase.scenes[1]!, duration_sec: 3 },
+    { ...timingBase.scenes[2]!, start_sec: 5 },
+  ]
+  resizedCandidate.overlays = [
+    { ...timingBase.overlays[0]!, end_sec: 4.8 },
+  ]
+  const resized = applyV2TimelineRevisionScope({
+    baseSpec: timingBase,
+    candidateSpec: resizedCandidate,
+    scope: 'structure',
+    sceneIds: ['replace_me'],
+    durationMode: 'resize_timeline',
+  })
+  assert.equal(resized.canvas.duration_sec, 7)
+  assert.equal(resized.scenes.find((scene) => scene.id === 'anchor_after')?.start_sec, 5)
+  assert.equal(validateRemotionTimelineSpec(resized).ok, true)
+
+  const captionTargetBase = structuredClone(timingBase)
+  captionTargetBase.overlays.push({
+    id: 'protected_caption', type: 'caption', scene_id: 'replace_me', text: 'protected',
+    start_sec: 2.3, end_sec: 3.7, x_pct: 50, y_pct: 70,
+  })
+  const captionTargetCandidate = structuredClone(captionTargetBase)
+  captionTargetCandidate.overlays = captionTargetCandidate.overlays.map((overlay) =>
+    overlay.id === 'old_caption'
+      ? { ...overlay, start_sec: 2.5, end_sec: 3.5 }
+      : { ...overlay, text: 'must not survive' })
+  const captionTargetScoped = applyV2TimelineRevisionScope({
+    baseSpec: captionTargetBase,
+    candidateSpec: captionTargetCandidate,
+    scope: 'subtitle',
+    sceneId: 'replace_me',
+    overlayIds: ['old_caption'],
+  })
+  assert.equal(captionTargetScoped.overlays.find((overlay) => overlay.id === 'old_caption')?.start_sec, 2.5)
+  assert.deepEqual(
+    captionTargetScoped.overlays.find((overlay) => overlay.id === 'protected_caption'),
+    captionTargetBase.overlays.find((overlay) => overlay.id === 'protected_caption'),
+  )
+
   // 4e. visual_strategy scope: only the target scene's visual fields and its
   // material jobs may change; captions, audio, transitions and other scenes
   // stay untouched.
@@ -503,6 +553,26 @@ try {
     true,
     'scoped visual strategy change must pass the commit gate',
   )
+  const baseVisualJob = base.material_jobs.find((job) => job.scene_id === 'scene_2' && job.type === 'generate_video')
+  assert.ok(baseVisualJob)
+  const visualOnlyCandidate = structuredClone(base)
+  visualOnlyCandidate.scenes = visualOnlyCandidate.scenes.map((scene) => scene.id === 'scene_2'
+    ? { ...scene, motion: 'slow_zoom_in', background: '#112244' }
+    : scene)
+  const visualOnlyScoped = applyV2TimelineRevisionScope({
+    baseSpec: base,
+    candidateSpec: visualOnlyCandidate,
+    scope: 'visual_strategy',
+    sceneId: 'scene_2',
+  })
+  const resolvedVisualJob = visualOnlyScoped.material_jobs.find((job) => job.id === baseVisualJob.id)
+  assert.equal(resolvedVisualJob?.status, 'planned')
+  assert.notEqual(
+    resolvedVisualJob?.prompt,
+    baseVisualJob.prompt,
+    'a visual strategy change must alter the AI generation request even when the model omitted the job prompt',
+  )
+  assert.match(resolvedVisualJob?.prompt ?? '', /slow_zoom_in/)
   assert.equal(
     evaluateV2TimelineRevisionCommit({ baseSpec: base, candidateSpec: base, scope: 'visual_strategy', sceneId: 'scene_2' }).ok,
     false,

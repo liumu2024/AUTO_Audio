@@ -194,8 +194,10 @@ async function resolveTimelineSpec(input: {
               scope: input.plannerInput.revisionScope,
               sceneId: input.plannerInput.revisionSceneId,
               sceneIds: input.plannerInput.revisionSceneIds,
+              overlayIds: input.plannerInput.revisionOverlayIds,
               transitionIds: input.plannerInput.revisionTransitionIds,
               globalMode: input.plannerInput.revisionGlobalMode,
+              durationMode: input.plannerInput.revisionDurationMode,
             }),
           }
           await input.trace.writeJson('02-planning', 'timeline-scoped-candidate.json', llmPlanner.spec)
@@ -213,7 +215,10 @@ async function resolveTimelineSpec(input: {
           revisionScope: input.plannerInput.revisionScope,
           revisionSceneId: input.plannerInput.revisionSceneId,
           revisionSceneIds: input.plannerInput.revisionSceneIds,
+          revisionOverlayIds: input.plannerInput.revisionOverlayIds,
           revisionTransitionIds: input.plannerInput.revisionTransitionIds,
+          revisionGlobalMode: input.plannerInput.revisionGlobalMode,
+          revisionDurationMode: input.plannerInput.revisionDurationMode,
         })
         await input.trace.writeJson('02-planning', 'timeline-outcome-review.json', outcomeReview)
         if (!outcomeReview.pass) {
@@ -244,8 +249,10 @@ async function resolveTimelineSpec(input: {
                 scope: input.plannerInput.revisionScope,
                 sceneId: input.plannerInput.revisionSceneId,
                 sceneIds: input.plannerInput.revisionSceneIds,
+                overlayIds: input.plannerInput.revisionOverlayIds,
                 transitionIds: input.plannerInput.revisionTransitionIds,
                 globalMode: input.plannerInput.revisionGlobalMode,
+                durationMode: input.plannerInput.revisionDurationMode,
               }),
             }
             await input.trace.writeJson('02-planning', 'timeline-outcome-correction-scoped-candidate.json', llmPlanner.spec)
@@ -263,7 +270,10 @@ async function resolveTimelineSpec(input: {
             revisionScope: input.plannerInput.revisionScope,
             revisionSceneId: input.plannerInput.revisionSceneId,
             revisionSceneIds: input.plannerInput.revisionSceneIds,
+            revisionOverlayIds: input.plannerInput.revisionOverlayIds,
             revisionTransitionIds: input.plannerInput.revisionTransitionIds,
+            revisionGlobalMode: input.plannerInput.revisionGlobalMode,
+            revisionDurationMode: input.plannerInput.revisionDurationMode,
           })
           await input.trace.writeJson('02-planning', 'timeline-outcome-correction-review.json', outcomeReview)
           if (!outcomeReview.pass) {
@@ -567,6 +577,12 @@ export async function runV2RemotionTimeline(
   const standardized = await standardizeRemotionTimelineVideoAssets({
     spec: materialResolution.spec,
     outputDir: outputRoot,
+    alreadyStandardizedAssetIds: materialResolution.report.generation_trace
+      .flatMap((trace) =>
+        trace.status === 'fulfilled' && trace.output_asset_id && trace.output_sha256
+          ? [trace.output_asset_id]
+          : [],
+      ),
   })
   await trace.writeJson('04-material-assets', 'timeline-standardized-assets.json', standardized.standardized_assets)
   const renderValidation = validateRemotionTimelineSpec(standardized.spec)
