@@ -17,10 +17,15 @@ import {
   createV2IdempotencyRepository,
   V2IdempotencyConflictError,
   v2IdempotencyRequestHash,
+  type V2IdempotencyReceiptRecord,
   type V2IdempotencyRepository,
 } from './idempotency-repository.js'
-import type { V2TimelineDraftRepository, V2TimelineRenderRunRecord } from './timeline-draft-repository.js'
-import { V2TimelinePendingRevisionError } from './timeline-draft-repository.js'
+import {
+  V2TimelinePendingRevisionError,
+  V2TimelineRevisionConflictError,
+  type V2TimelineDraftRepository,
+  type V2TimelineRenderRunRecord,
+} from './timeline-draft-repository.js'
 import { evaluateV2TimelineDeliveryReadiness, type V2TimelineDeliveryReadiness } from './timeline-delivery-readiness.js'
 
 export interface V2TimelineDraftRunExecutionResult {
@@ -106,48 +111,94 @@ interface V2TimelineDraftRunInput {
   runTimeline?: TimelineRunner
 }
 
+async function replayTimelineRender(input: {
+  receipt: V2IdempotencyReceiptRecord
+  repository: V2TimelineDraftRepository
+  userId: number
+}): Promise<V2TimelineDraftRunExecutionResult> {
+  if (input.receipt.status === 'failed') {
+    throw new V2TimelineIdempotencyFailedError(
+      input.receipt.resultRef ?? '',
+      input.receipt.failure?.message ?? 'The original render request failed.',
+    )
+  }
+  if (input.receipt.status === 'completed' && input.receipt.resultRef) {
+    const previous = await input.repository.getRenderRun(input.receipt.resultRef, input.userId)
+    if (!previous) throw new Error(`Idempotent RenderRun ${input.receipt.resultRef} was not found.`)
+    return resultFromCompletedRun({ run: previous })
+  }
+  throw new V2TimelineIdempotencyRunningError(input.receipt.resultRef ?? '')
+}
+
 async function executeV2TimelineDraftRunOnce(
   input: V2TimelineDraftRunInput,
 ): Promise<V2TimelineDraftRunExecutionResult> {
+  const idempotency = input.idempotency ?? createV2IdempotencyRepository()
+  const operation = 'timeline.render'
+  const resourceKey = `${input.draftId}:${input.revision}`
+  const requestHash = v2IdempotencyRequestHash({ draftId: input.draftId, revision: input.revision })
+  const replayExisting = (receipt: V2IdempotencyReceiptRecord) => {
+    if (
+      receipt.draftId !== input.draftId
+      || receipt.resourceKey !== resourceKey
+      || receipt.requestHash !== requestHash
+    ) throw new V2IdempotencyConflictError()
+    return replayTimelineRender({
+      receipt,
+      repository: input.repository,
+      userId: input.userId,
+    })
+  }
+  const existing = await idempotency.get({
+    userId: input.userId,
+    operation,
+    idempotencyKey: input.idempotencyKey,
+  })
+  if (existing) return replayExisting(existing)
+  const rejectUnlessRaced = async (error: Error) => {
+    const raced = await idempotency.get({
+      userId: input.userId,
+      operation,
+      idempotencyKey: input.idempotencyKey,
+    })
+    if (raced) return replayExisting(raced)
+    throw error
+  }
   const [draft, source] = await Promise.all([
     input.repository.getDraft(input.draftId, input.userId),
     input.repository.getRevision(input.draftId, input.revision, input.userId),
   ])
-  if (!draft || !source) throw new Error('V2 timeline draft revision not found.')
+  if (!draft || !source) {
+    return rejectUnlessRaced(new Error('V2 timeline draft revision not found.'))
+  }
+  if (draft.revision !== source.revision) {
+    return rejectUnlessRaced(
+      new V2TimelineRevisionConflictError(input.draftId, source.revision, draft.revision),
+    )
+  }
   const readiness = evaluateV2TimelineDeliveryReadiness({
     timelineSpec: source.spec,
     pendingTimelineRevisions: draft.pendingTimelineRevisions,
     videoGenerationAvailable: input.materialAdapter || input.runTimeline ? true : undefined,
   })
   if (readiness.missing.some((item) => item.code === 'timeline_revision_pending')) {
-    throw new V2TimelinePendingRevisionError(draft.pendingTimelineRevisions)
+    return rejectUnlessRaced(new V2TimelinePendingRevisionError(draft.pendingTimelineRevisions))
   }
-  if (readiness.status === 'blocked') throw new V2TimelineDeliveryBlockedError(readiness)
+  if (readiness.status === 'blocked') {
+    return rejectUnlessRaced(new V2TimelineDeliveryBlockedError(readiness))
+  }
   const runId = `v2_run_${Date.now()}_${randomUUID().slice(0, 8)}`
-  const idempotency = input.idempotency ?? createV2IdempotencyRepository()
-  const operation = 'timeline.render'
   const reservation = await idempotency.reserve({
     userId: input.userId,
     draftId: input.draftId,
     operation,
     idempotencyKey: input.idempotencyKey,
-    resourceKey: `${input.draftId}:${source.revision}`,
-    requestHash: v2IdempotencyRequestHash({ draftId: input.draftId, revision: source.revision }),
+    resourceKey,
+    requestHash,
     resultRef: runId,
   })
   if (reservation.kind === 'replay') {
-    if (reservation.receipt.status === 'failed') {
-      throw new V2TimelineIdempotencyFailedError(
-        reservation.receipt.resultRef ?? runId,
-        reservation.receipt.failure?.message ?? 'The original render request failed.',
-      )
-    }
-    if (reservation.receipt.status === 'completed' && reservation.receipt.resultRef) {
-      const previous = await input.repository.getRenderRun(reservation.receipt.resultRef, input.userId)
-      if (!previous) throw new Error(`Idempotent RenderRun ${reservation.receipt.resultRef} was not found.`)
-      return resultFromCompletedRun({ run: previous, plannerSource: draft.plannerSource })
-    }
-    throw new V2TimelineIdempotencyRunningError(reservation.receipt.resultRef ?? runId)
+    return replayExisting(reservation.receipt)
   }
   const execution = (async () => {
     let renderRunCreated = false
@@ -155,6 +206,7 @@ async function executeV2TimelineDraftRunOnce(
       await input.repository.createRenderRun({
         id: runId,
         draftId: input.draftId,
+        userId: input.userId,
         sourceRevision: source.revision,
         sourceSpec: source.spec,
       })

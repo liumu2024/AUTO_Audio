@@ -148,21 +148,29 @@ export function DirectorChatMessageBubble({
             <div className="mt-2 space-y-1.5 rounded-lg border border-violet-500/20 bg-black/20 p-2 text-[11px] text-zinc-300">
               <p><span className="text-zinc-500">原始要求：</span>{message.revisionIntent.originalRequest}</p>
               <p><span className="text-zinc-500">范围：</span>{message.revisionIntent.scope}</p>
-              <p><span className="text-zinc-500">目标：</span>{message.revisionIntent.targetIds.join('、') || '全片'}</p>
+              <p><span className="text-zinc-500">目标：</span>{message.revisionIntent.targetDisplay?.join('；') || message.revisionIntent.targetIds.join('、') || '全片'}</p>
               <p><span className="text-zinc-500">修改指令：</span>{message.revisionIntent.instruction}</p>
               <p><span className="text-zinc-500">预计影响：</span>{message.revisionIntent.expectedImpact}</p>
               <p><span className="text-zinc-500">保护边界：</span>{message.revisionIntent.protectedBoundary}</p>
               <div className="flex flex-wrap gap-1.5">
-                <button type="button" disabled={message.revisionDecisionStatus === 'confirming'}
-                  className="rounded border border-emerald-400/30 px-2 py-1 text-emerald-200 disabled:opacity-50"
-                  onClick={() => onRevisionDecision?.({ confirmationId: message.revisionConfirmationId ?? message.revisionIntent!.callId, action: 'confirm' })}>
-                  确认执行
-                </button>
-                <button type="button" disabled={message.revisionDecisionStatus === 'confirming'}
-                  className="rounded border border-zinc-500/30 px-2 py-1 text-zinc-300 disabled:opacity-50"
-                  onClick={() => onRevisionDecision?.({ confirmationId: message.revisionConfirmationId ?? message.revisionIntent!.callId, action: 'reject' })}>
-                  取消提案
-                </button>
+                {message.revisionDecisionStatus === 'rejected' || message.revisionDecisionStatus === 'failed' ? (
+                  <span className="rounded border border-zinc-600/30 px-2 py-1 text-zinc-400">
+                    {message.revisionDecisionStatus === 'failed' ? '修改提案已失效' : '修改提案已取消'}
+                  </span>
+                ) : (
+                  <>
+                    <button type="button" disabled={message.revisionDecisionStatus === 'confirming' || message.revisionDecisionStatus === 'rejecting'}
+                      className="rounded border border-emerald-400/30 px-2 py-1 text-emerald-200 disabled:opacity-50"
+                      onClick={() => onRevisionDecision?.({ confirmationId: message.revisionConfirmationId ?? message.revisionIntent!.callId, action: 'confirm' })}>
+                      确认执行
+                    </button>
+                    <button type="button" disabled={message.revisionDecisionStatus === 'confirming' || message.revisionDecisionStatus === 'rejecting'}
+                      className="rounded border border-zinc-500/30 px-2 py-1 text-zinc-300 disabled:opacity-50"
+                      onClick={() => onRevisionDecision?.({ confirmationId: message.revisionConfirmationId ?? message.revisionIntent!.callId, action: 'reject' })}>
+                      取消提案
+                    </button>
+                  </>
+                )}
                 <button type="button" className="rounded border border-violet-400/25 px-2 py-1 text-violet-200"
                   onClick={() => setInputText(`请重新理解这次修改。原要求：${message.revisionIntent!.originalRequest}`)}>
                   纠正后重提
@@ -175,7 +183,7 @@ export function DirectorChatMessageBubble({
             <div className="mt-2 space-y-1.5 rounded-lg border border-violet-500/20 bg-black/20 p-2 text-[11px] text-zinc-300">
               <p><span className="text-zinc-500">原始要求：</span>{message.revisionReceipt.originalRequest}</p>
               <p><span className="text-zinc-500">范围：</span>{message.revisionReceipt.scope}</p>
-              <p><span className="text-zinc-500">目标：</span>{message.revisionReceipt.targetIds.join('、') || '全片'}</p>
+              <p><span className="text-zinc-500">目标：</span>{message.revisionReceipt.targetDisplay?.join('；') || message.revisionReceipt.targetIds.join('、') || '全片'}</p>
               <p><span className="text-zinc-500">修改指令：</span>{message.revisionReceipt.instruction}</p>
               <p><span className="text-zinc-500">预计影响：</span>{message.revisionReceipt.expectedImpact}</p>
               <p><span className="text-zinc-500">保护边界：</span>{message.revisionReceipt.protectedBoundary}</p>

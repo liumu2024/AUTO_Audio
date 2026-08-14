@@ -758,6 +758,7 @@ export async function* streamDirectorAgentChat(
       callId: request.callId,
       userRequest: input.prompt,
       arguments: request.arguments,
+      baseSpec: persistedTimelineRevision?.spec,
     })
     return intent ? [intent] : []
   })
@@ -778,7 +779,6 @@ export async function* streamDirectorAgentChat(
         draftId: workspaceState.draftId!,
         baseRevision: workspaceState.baseRevision!,
         originalTurnRequestId: turnRequestId,
-        originalRequest: input.prompt,
         intent: routed.conversationIntent === 'execute' ? 'execute' : 'revise',
         skillRequests: executionPlan.selectedSkills,
         resolvedStateActionRefs: routed.stateActions.map((item) => item.ref),
@@ -854,7 +854,7 @@ export async function* streamDirectorAgentChat(
     })(),
     pendingRevisions: workspaceState.pendingTimelineRevisions ?? [],
   })
-  const executionPrompt = confirmedRevisionProposal?.originalRequest ?? input.prompt
+  const executionPrompt = confirmedRevisionProposal?.revisionIntents[0]?.originalRequest ?? input.prompt
   const executionContext = confirmedRevisionProposal?.executionContext
   const dispatchWorkspace = executionContext
     ? {

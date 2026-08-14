@@ -14,6 +14,7 @@ assert.match(editorHeader, /useDirectorChatStore\(\(s\) => s\.isSending\)/)
 assert.match(editorHeader, /newDraftDisabled[\s\S]*isDirectorSending[\s\S]*isAnalyzing/)
 
 const directorChatPanel = source('fonted/src/components/sidebar/DirectorChatPanel.tsx')
+const attachmentUploads = source('fonted/src/services/director/attachmentUploads.ts')
 assert.match(
   directorChatPanel,
   /const requestWorkspaceSessionId = browserWorkspaceSessionId\(\)[\s\S]*workspaceSessionId: requestWorkspaceSessionId/,
@@ -30,18 +31,17 @@ assert.match(
 const chatInput = source('fonted/src/components/sidebar/ChatInput.tsx')
 assert.match(chatInput, /const draft = useCreationStore\(\(s\) => s\.inputText\)/)
 assert.match(chatInput, /const setDraft = useCreationStore\(\(s\) => s\.setInputText\)/)
+assert.match(chatInput, /ingestAttachmentFiles/)
+assert.match(chatInput, /retryAttachmentFileUpload/)
+assert.match(directorChatPanel, /ingestAttachmentFiles/)
+assert.doesNotMatch(chatInput, /addFromFileWithHash|beginAttachmentUpload|completeAttachmentUpload/)
+assert.doesNotMatch(directorChatPanel, /addFromFileWithHash|beginAttachmentUpload|completeAttachmentUpload/)
 assert.match(
-  chatInput,
-  /await addFromFileWithHash\(upload\.file\)[\s\S]*browserWorkspaceSessionId\(\) !== uploadWorkspaceSessionId[\s\S]*completeAttachmentUpload/,
+  attachmentUploads,
+  /addFromFileWithHash[\s\S]*browserWorkspaceSessionId\(\) !== workspaceSessionId[\s\S]*completeAttachmentUpload/,
 )
-assert.match(chatInput, /const uploadWorkspaceSessionId = browserWorkspaceSessionId\(\)/)
-assert.match(
-  directorChatPanel,
-  /const uploadWorkspaceSessionId = browserWorkspaceSessionId\(\)[\s\S]*await useMaterialLibraryStore\.getState\(\)\.addFromFileWithHash\(upload\.file\)[\s\S]*browserWorkspaceSessionId\(\) !== uploadWorkspaceSessionId[\s\S]*completeAttachmentUpload/,
-)
-assert.match(chatInput, /beginAttachmentUpload[\s\S]*await addFromFileWithHash[\s\S]*completeAttachmentUpload/)
+assert.match(attachmentUploads, /beginAttachmentUpload[\s\S]*uploadAttachment/)
 assert.match(chatInput, /attachmentUploads\.length > 0/)
-assert.match(directorChatPanel, /beginAttachmentUpload[\s\S]*await useMaterialLibraryStore\.getState\(\)\.addFromFileWithHash[\s\S]*completeAttachmentUpload/)
 
 const propertyEditor = source('fonted/src/components/layout/PropertyEditorPanel.tsx')
 assert.match(propertyEditor, /镜头备注（不会自动执行）/)

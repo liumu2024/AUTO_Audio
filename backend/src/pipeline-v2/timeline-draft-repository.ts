@@ -325,6 +325,7 @@ export interface V2TimelineDraftRepository {
   createRenderRun(input: {
     id: string
     draftId: string
+    userId: number
     sourceRevision: number
     sourceSpec: RemotionTimelineSpecV1
   }): Promise<V2TimelineRenderRunRecord>
@@ -614,15 +615,40 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
     },
 
     async createRenderRun(input) {
-      const row = await prisma.v2TimelineRenderRun.create({
-        data: {
-          id: input.id,
-          draftId: input.draftId,
-          sourceRevision: input.sourceRevision,
-          sourceSpecJson: asJson(input.sourceSpec),
-          status: 'running',
-        },
-      })
+      try {
+        await prisma.v2TimelineDraft.update({
+          where: {
+            id: input.draftId,
+            userId: input.userId,
+            revision: input.sourceRevision,
+          },
+          data: {
+            renderRuns: {
+              create: {
+                id: input.id,
+                sourceRevision: input.sourceRevision,
+                sourceSpecJson: asJson(input.sourceSpec),
+                status: 'running',
+              },
+            },
+          },
+        })
+      } catch (error) {
+        const current = await prisma.v2TimelineDraft.findFirst({
+          where: { id: input.draftId, userId: input.userId },
+        })
+        if (!current) throw new Error('V2 timeline draft not found.')
+        if (Number(current.revision) !== input.sourceRevision) {
+          throw new V2TimelineRevisionConflictError(
+            input.draftId,
+            input.sourceRevision,
+            Number(current.revision),
+          )
+        }
+        throw error
+      }
+      const row = await prisma.v2TimelineRenderRun.findFirst({ where: { id: input.id } })
+      if (!row) throw new Error('V2 timeline RenderRun disappeared after creation.')
       return runFromRow(asRecord(row))
     },
 

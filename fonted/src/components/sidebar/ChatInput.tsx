@@ -1,5 +1,5 @@
 import { ArrowUp, FolderOpen, Paperclip, Square } from 'lucide-react'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 
 import {
   AttachmentPreviewStrip,
@@ -9,10 +9,9 @@ import {
 import { MaterialLibraryPickerDialog } from '@/components/sidebar/MaterialLibraryPickerDialog'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { browserWorkspaceSessionId } from '@/services/director/workspaceSessionLifecycle'
-import type { AttachmentUpload, InputAttachment } from '@/stores/creationStore'
+import { ingestAttachmentFiles, retryAttachmentFileUpload } from '@/services/director/attachmentUploads'
+import type { InputAttachment } from '@/stores/creationStore'
 import { useCreationStore } from '@/stores/creationStore'
-import { useMaterialLibraryStore } from '@/stores/materialLibraryStore'
 
 interface ChatInputProps {
   disabled?: boolean
@@ -40,13 +39,8 @@ export function ChatInput({
   const setStyleIntensity = useCreationStore((s) => s.setStyleIntensity)
   const clearSample = useCreationStore((s) => s.clearSample)
   const addAttachment = useCreationStore((s) => s.addAttachment)
-  const beginAttachmentUpload = useCreationStore((s) => s.beginAttachmentUpload)
-  const completeAttachmentUpload = useCreationStore((s) => s.completeAttachmentUpload)
-  const failAttachmentUpload = useCreationStore((s) => s.failAttachmentUpload)
-  const retryAttachmentUpload = useCreationStore((s) => s.retryAttachmentUpload)
   const removeAttachmentUpload = useCreationStore((s) => s.removeAttachmentUpload)
   const removeAttachment = useCreationStore((s) => s.removeAttachment)
-  const addFromFileWithHash = useMaterialLibraryStore((s) => s.addFromFileWithHash)
 
   const draft = useCreationStore((s) => s.inputText)
   const setDraft = useCreationStore((s) => s.setInputText)
@@ -55,69 +49,6 @@ export function ChatInput({
 
   const placeholder =
     '描述想生成的视频；可选上传样例作风格参考，或上传图片 / 视频 / 音频作创作素材...'
-
-  const uploadFile = useCallback(async (
-    upload: Pick<AttachmentUpload, 'id' | 'file' | 'type'>,
-    uploadWorkspaceSessionId: string,
-  ) => {
-    if (!upload.file) return
-    try {
-      const material = await addFromFileWithHash(upload.file)
-      if (browserWorkspaceSessionId() !== uploadWorkspaceSessionId) {
-        completeAttachmentUpload(upload.id)
-        return
-      }
-      addAttachment({
-        id: `att_${material.id}`,
-        name: material.name,
-        type: upload.type,
-        url: material.url,
-        source: 'upload',
-        materialId: material.id,
-        tags: material.tags,
-      })
-      completeAttachmentUpload(upload.id)
-    } catch (error) {
-      if (browserWorkspaceSessionId() !== uploadWorkspaceSessionId) {
-        completeAttachmentUpload(upload.id)
-        return
-      }
-      failAttachmentUpload(
-        upload.id,
-        error instanceof Error ? error.message : '上传失败',
-      )
-    }
-  }, [addAttachment, addFromFileWithHash, completeAttachmentUpload, failAttachmentUpload])
-
-  const ingestFiles = useCallback((files: FileList | File[] | null) => {
-    if (!files?.length) return
-    const uploadWorkspaceSessionId = browserWorkspaceSessionId()
-    const uploads = Array.from(files).flatMap((file) => {
-      const mime = file.type
-      const type = mime.startsWith('video/')
-        ? 'video'
-        : mime.startsWith('audio/')
-          ? 'audio'
-          : mime.startsWith('image/')
-            ? 'image'
-            : undefined
-      if (!type) return []
-      return [{
-        id: `upload_${crypto.randomUUID()}`,
-        name: file.name,
-        type,
-        file,
-      } satisfies Omit<AttachmentUpload, 'status' | 'error'>]
-    })
-    for (const upload of uploads) beginAttachmentUpload(upload)
-    for (const upload of uploads) void uploadFile(upload, uploadWorkspaceSessionId)
-  }, [beginAttachmentUpload, uploadFile])
-
-  const retryUpload = useCallback((upload: AttachmentUpload) => {
-    if (!upload.file) return
-    retryAttachmentUpload(upload.id)
-    void uploadFile(upload, browserWorkspaceSessionId())
-  }, [retryAttachmentUpload, uploadFile])
 
   const previewItems: AttachmentPreviewItem[] = useMemo(() => {
     const items: AttachmentPreviewItem[] = []
@@ -190,7 +121,7 @@ export function ChatInput({
                   </span>
                   {upload.status === 'failed' ? (
                     <span className="flex shrink-0 gap-2">
-                      <button type="button" className="text-violet-300 hover:text-violet-200" onClick={() => retryUpload(upload)}>重试</button>
+                      <button type="button" className="text-violet-300 hover:text-violet-200" onClick={() => retryAttachmentFileUpload(upload)}>重试</button>
                       <button type="button" className="text-zinc-500 hover:text-zinc-300" onClick={() => removeAttachmentUpload(upload.id)}>移除</button>
                     </span>
                   ) : null}
@@ -222,7 +153,7 @@ export function ChatInput({
                 multiple
                 className="hidden"
                 onChange={(e) => {
-                  ingestFiles(e.target.files)
+                  ingestAttachmentFiles(e.target.files)
                   e.target.value = ''
                 }}
               />

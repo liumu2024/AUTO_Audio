@@ -324,6 +324,44 @@ function makeLocalPrisma() {
           .slice(0, args.take ?? undefined)
           .map((draft) => v2DraftOut(draft))
       },
+      update: async (args: {
+        where: Record<string, unknown>
+        data: Partial<LocalV2TimelineDraft> & {
+          renderRuns?: { create?: Partial<LocalV2TimelineRenderRun> }
+        }
+      }) =>
+        write(() => {
+          const draft = state.v2TimelineDrafts.find((item) =>
+            Object.entries(args.where).every(([key, value]) =>
+              localWhereValueMatches(item[key as keyof LocalV2TimelineDraft], value)),
+          )
+          if (!draft) throw new Error('V2 timeline draft not found')
+          const { renderRuns, ...draftData } = args.data
+          const runInput = renderRuns?.create
+          if (runInput) {
+            const runId = String(runInput.id)
+            if (state.v2TimelineRenderRuns.some((item) => item.id === runId)) {
+              throw new Error('V2 timeline render run already exists')
+            }
+            state.v2TimelineRenderRuns.push({
+              id: runId,
+              draftId: draft.id,
+              sourceRevision: Number(runInput.sourceRevision),
+              sourceSpecJson: runInput.sourceSpecJson ?? null,
+              resolvedSpecJson: runInput.resolvedSpecJson ?? null,
+              status: String(runInput.status ?? 'running'),
+              outputPath: (runInput.outputPath as string | null | undefined) ?? null,
+              outputUrl: (runInput.outputUrl as string | null | undefined) ?? null,
+              traceDir: (runInput.traceDir as string | null | undefined) ?? null,
+              materialResolutionJson: runInput.materialResolutionJson ?? null,
+              evaluationJson: runInput.evaluationJson ?? null,
+              createdAt: new Date().toISOString(),
+              completedAt: null,
+            })
+          }
+          Object.assign(draft, clone(draftData), { updatedAt: new Date().toISOString() })
+          return v2DraftOut(draft)
+        }),
       updateMany: async (args: {
         where: Record<string, unknown>
         data: Partial<LocalV2TimelineDraft>

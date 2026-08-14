@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -48,6 +49,23 @@ const saved = await repository.saveDraft({
 })
 assert.equal(saved.revision, 2)
 assert.equal(saved.spec.scenes[0]?.title, '用户保存的草稿镜头')
+
+let staleRevisionExecuted = false
+await assert.rejects(
+  executeV2TimelineDraftRun({
+    repository,
+    draftId: draft.id,
+    revision: draft.revision,
+    userId: 1,
+    idempotencyKey: `stale-revision-render-${Date.now()}`,
+    runTimeline: async () => {
+      staleRevisionExecuted = true
+      throw new Error('stale revision must not execute')
+    },
+  }),
+  (error: unknown) => error instanceof V2TimelineRevisionConflictError,
+)
+assert.equal(staleRevisionExecuted, false, 'a stale confirmed revision must not reach rendering')
 
 await assert.rejects(
   () =>
@@ -211,9 +229,37 @@ await assert.rejects(
 const run = await repository.createRenderRun({
   id: `v2_draft_smoke_run_${Date.now()}`,
   draftId: draft.id,
-  sourceRevision: source.revision,
-  sourceSpec: source.spec,
+  userId: 1,
+  sourceRevision: renderableAgain.revision,
+  sourceSpec: renderableAgain.spec,
 })
+await assert.rejects(
+  repository.createRenderRun({
+    id: `v2_draft_stale_run_${Date.now()}`,
+    draftId: draft.id,
+    userId: 1,
+    sourceRevision: source.revision,
+    sourceSpec: source.spec,
+  }),
+  (error: unknown) => error instanceof V2TimelineRevisionConflictError,
+)
+const repositorySource = await readFile(
+  new URL('../src/pipeline-v2/timeline-draft-repository.ts', import.meta.url),
+  'utf8',
+)
+const createRenderRunSource = repositorySource.match(
+  /async createRenderRun\(input\) \{([\s\S]*?)\n    \},\n\n    async completeRenderRun/,
+)?.[1] ?? ''
+assert.match(
+  createRenderRunSource,
+  /v2TimelineDraft\.update\([\s\S]*renderRuns:\s*\{\s*create:/,
+  'the revision check and RenderRun creation must be one nested database write',
+)
+assert.doesNotMatch(
+  createRenderRunSource,
+  /v2TimelineDraft\.updateMany/,
+  'a separate revision claim would leave a save interleaving window before Run creation',
+)
 const resolvedSpec = {
   ...source.spec,
   scenes: source.spec.scenes.map((scene, index) =>

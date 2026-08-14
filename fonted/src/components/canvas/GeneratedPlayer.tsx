@@ -196,7 +196,12 @@ function V2PlanReview({
             )}
             onClick={() => onSelect(scene)}
           >
-            <span className="block font-medium">{index + 1}. {scene.title}</span>
+            <span className="flex items-start justify-between gap-2 font-medium">
+              <span>{index + 1}. {scene.title}</span>
+              <span className="shrink-0 text-[9px] font-normal text-violet-300">
+                {v2DeliveryStateLabel(scene.deliveryState)}
+              </span>
+            </span>
             <span className="mt-1 flex justify-between text-[10px] text-zinc-500">
               <span>{formatTimeRange(scene.startSec, scene.startSec + scene.durationSec)}</span>
               <span>{scene.visibleTexts.length} 段文字</span>

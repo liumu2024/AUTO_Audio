@@ -12,6 +12,14 @@ const directorPanelSource = await readFile(
   new URL('../../fonted/src/components/sidebar/DirectorChatPanel.tsx', import.meta.url),
   'utf8',
 )
+const directorStoreSource = await readFile(
+  new URL('../../fonted/src/stores/directorChatStore.ts', import.meta.url),
+  'utf8',
+)
+const chatMessageSource = await readFile(
+  new URL('../../fonted/src/components/sidebar/DirectorChatMessage.tsx', import.meta.url),
+  'utf8',
+)
 assert.doesNotMatch(
   directorPanelSource,
   /revisionReceipt:\s*\{\s*\.\.\.event\.revisionIntent/s,
@@ -25,9 +33,31 @@ assert.match(
 )
 assert.match(
   directorPanelSource,
-  /messages[\s\S]*\.filter\(\(message\) => message\.revisionConfirmationId === decision\.confirmationId\)/,
+  /const setRevisionDecisionMessages =[\s\S]*message\.revisionConfirmationId === confirmationId/,
   'one decision must update every revision card in the same persisted proposal',
 )
+assert.doesNotMatch(
+  directorPanelSource,
+  /if \(event\.revisionReceipt\) \{[\s\S]{0,240}revisionDecisionCommitted = true/,
+  'one tool receipt must not commit a multi-tool confirmation group',
+)
+assert.match(
+  directorPanelSource,
+  /unresolvedOnly[\s\S]*!message\.revisionReceipt/,
+  'a terminal workspace acknowledgement must only fail proposal cards that have no tool receipt',
+)
+assert.equal(
+  (directorPanelSource.match(/'确认(?:未被服务端确认|失败)[^']*'[\s\S]{0,120}unresolvedOnly: true/g) ?? []).length,
+  2,
+  'stream completion and transport failure must only reset unresolved cards in a multi-tool confirmation',
+)
+assert.match(
+  directorPanelSource,
+  /timelineRevisionDecision\?\.action === 'confirm'[\s\S]*pendingTimelineRevisionConfirmation\?\.confirmationId !== timelineRevisionDecision\.confirmationId[\s\S]*'failed'/,
+  'a server-cleared stale confirmation must leave the proposal card in a terminal failed state',
+)
+assert.match(directorStoreSource, /revisionDecisionStatus\?:[^\n]*'failed'/)
+assert.match(chatMessageSource, /revisionDecisionStatus === 'failed'[\s\S]*修改提案已失效/)
 assert.match(
   directorPanelSource,
   /if \(!timelineRevisionDecision\) clearInputTray\(\)/,
@@ -249,8 +279,8 @@ const propertyEditorSource = await readFile(
   new URL('../../fonted/src/components/layout/PropertyEditorPanel.tsx', import.meta.url),
   'utf8',
 )
-const chatMessageSource = await readFile(
-  new URL('../../fonted/src/components/sidebar/DirectorChatMessage.tsx', import.meta.url),
+const generatedPlayerSource = await readFile(
+  new URL('../../fonted/src/components/canvas/GeneratedPlayer.tsx', import.meta.url),
   'utf8',
 )
 assert.match(
@@ -267,9 +297,24 @@ assert.match(chatPanelSource, /event\.revisionIntent[\s\S]*revisionReceipt/)
 assert.match(chatMessageSource, /实际变化[\s\S]*actualDiff/)
 assert.match(chatMessageSource, /纠正修改理解[\s\S]*setInputText/)
 assert.match(
+  generatedPlayerSource,
+  /scenes\.map[\s\S]*v2DeliveryStateLabel\(scene\.deliveryState\)/,
+  'the all-scenes navigation must expose each scene delivery state without requiring selection',
+)
+assert.match(
+  chatMessageSource,
+  /revisionDecisionStatus === 'rejected'[\s\S]*修改提案已取消/,
+  'a server-confirmed rejected proposal must be passive instead of retaining execution buttons',
+)
+assert.match(
   chatPanelSource,
   /event\.toolId === 'timeline\.render'[\s\S]*event\.result[\s\S]*setResult/,
   'Director render receipts must update the existing V2 result store',
+)
+assert.match(
+  chatPanelSource,
+  /\n      if \(timelineRevisionDecision\?\.action === 'reject' && !revisionDecisionCommitted\) \{[\s\S]*setRevisionDecisionMessages\([\s\S]*'pending'[\s\S]*\n      \}\n\n      if \(streamErrorMessage\)/,
+  'an error+done SSE response without a workspace acknowledgement must restore the proposal to pending',
 )
 assert.match(chatPanelSource, /总用时.*秒/, 'render progress must label elapsed seconds as total elapsed time')
 assert.match(

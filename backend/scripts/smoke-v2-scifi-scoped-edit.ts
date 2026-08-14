@@ -818,6 +818,19 @@ try {
   assert.deepEqual(createdWithoutBrief, base)
   assert.deepEqual(revision1.spec, created.spec)
 
+  await drafts.createRenderRun({
+    id: 'run_1', draftId: created.id, userId: 7, sourceRevision: 1, sourceSpec: created.spec,
+  })
+  await drafts.completeRenderRun({
+    id: 'run_1',
+    resolvedSpec: created.spec,
+    outputPath: 'v2-renders/run_1.mp4',
+    outputUrl: '/v2-renders/run_1.mp4',
+    traceDir: 'tmp/v2-traces/tasks/sci_fi/render_1',
+    materialResolution: {},
+    evaluation: {},
+  })
+
   const saved = await drafts.saveDraft({
     draftId: created.id,
     userId: 7,
@@ -838,17 +851,7 @@ try {
   )
   assert.deepEqual((await drafts.getRevision(created.id, 2, 7))?.spec, saved.spec)
 
-  await drafts.createRenderRun({ id: 'run_1', draftId: created.id, sourceRevision: 1, sourceSpec: base })
-  await drafts.completeRenderRun({
-    id: 'run_1',
-    resolvedSpec: base,
-    outputPath: 'v2-renders/run_1.mp4',
-    outputUrl: '/v2-renders/run_1.mp4',
-    traceDir: 'tmp/v2-traces/tasks/sci_fi/render_1',
-    materialResolution: {},
-    evaluation: {},
-  })
-  await drafts.createRenderRun({ id: 'run_2', draftId: created.id, sourceRevision: 2, sourceSpec: scoped })
+  await drafts.createRenderRun({ id: 'run_2', draftId: created.id, userId: 7, sourceRevision: 2, sourceSpec: saved.spec })
   await drafts.completeRenderRun({
     id: 'run_2',
     resolvedSpec: scoped,
@@ -874,8 +877,8 @@ try {
   assert.equal(run1.outputUrl, '/v2-renders/run_1.mp4')
   assert.equal(run2.sourceRevision, 2, 'run_2 must be bound to revision 2')
   assert.equal(run2.outputUrl, '/v2-renders/run_2.mp4')
-  assert.deepEqual(run1.sourceSpecJson, base, 'run_1 keeps the revision-1 source')
-  assert.deepEqual(run2.sourceSpecJson, scoped, 'run_2 uses the scoped revision-2 source')
+  assert.deepEqual(run1.sourceSpecJson, created.spec, 'run_1 keeps the revision-1 source')
+  assert.deepEqual(run2.sourceSpecJson, saved.spec, 'run_2 uses the scoped revision-2 source')
   assert.deepEqual(
     run2.sourceSpecJson.material_jobs,
     base.material_jobs,

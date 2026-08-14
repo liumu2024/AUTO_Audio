@@ -1,5 +1,5 @@
 import { Upload } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { ChatInput } from '@/components/sidebar/ChatInput'
 import { DirectorChatThread } from '@/components/sidebar/DirectorChatThread'
@@ -18,6 +18,7 @@ import {
   buildDirectorContextFromUI,
   buildDirectorSampleVideoFromUI,
 } from '@/services/director/directorDecisionContext'
+import { ingestAttachmentFiles } from '@/services/director/attachmentUploads'
 import { activateV2DraftWorkspace } from '@/services/director/v2DirectorDraftWorkspace'
 import {
   browserWorkspaceSessionId,
@@ -25,9 +26,8 @@ import {
   restoreWorkspaceDraft,
 } from '@/services/director/workspaceSessionLifecycle'
 import { useCreationStore, type InputAttachment } from '@/stores/creationStore'
-import { useDirectorChatStore } from '@/stores/directorChatStore'
+import { useDirectorChatStore, type DirectorChatMessage } from '@/stores/directorChatStore'
 import { useDirectorContextStore } from '@/stores/directorContextStore'
-import { useMaterialLibraryStore } from '@/stores/materialLibraryStore'
 import { useTaskStore } from '@/stores/taskStore'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 import type {
@@ -35,13 +35,6 @@ import type {
   DirectorTimelineSnapshot,
 } from '@shared/types/director-state'
 import type { DirectorContext } from '@shared/types/director-context'
-
-function attachmentTypeFromMime(mime: string): InputAttachment['type'] | null {
-  if (mime.startsWith('video/')) return 'video'
-  if (mime.startsWith('audio/')) return 'audio'
-  if (mime.startsWith('image/')) return 'image'
-  return null
-}
 
 function attachmentMaterialId(attachment: InputAttachment): string {
   return attachment.materialId ?? attachment.id.replace(/^att_/, '')
@@ -245,6 +238,24 @@ export function DirectorChatPanel() {
   const workspaceRevisionsRef = useRef(new Map<string, number>())
   const activeProgressMessageIdRef = useRef<string | null>(null)
   const revisionMessageIdsRef = useRef(new Map<string, string>())
+  const setRevisionDecisionMessages = (
+    confirmationId: string,
+    status: NonNullable<DirectorChatMessage['revisionDecisionStatus']>,
+    content: string,
+    options: { clearRefs?: boolean; unresolvedOnly?: boolean } = {},
+  ) => {
+    const messages = useDirectorChatStore.getState().messages
+      .filter((message) => (
+        message.revisionConfirmationId === confirmationId
+        && (!options.unresolvedOnly || !message.revisionReceipt)
+      ))
+    for (const message of messages) {
+      updateMessage(message.id, { revisionDecisionStatus: status, content })
+      if (options.clearRefs && message.revisionIntent) {
+        revisionMessageIdsRef.current.delete(message.revisionIntent.callId)
+      }
+    }
+  }
   useEffect(() => {
     const workspaceSessionId = browserWorkspaceSessionId()
     void getDirectorWorkspaceSession(workspaceSessionId)
@@ -286,48 +297,6 @@ export function DirectorChatPanel() {
       })
   }, [addAssistantMessage, updateMessage])
 
-  const ingestDroppedFiles = useCallback((files: FileList | null) => {
-    if (!files?.length) return
-    const store = useCreationStore.getState()
-    const uploadWorkspaceSessionId = browserWorkspaceSessionId()
-    const uploads = Array.from(files).flatMap((file) => {
-      const type = attachmentTypeFromMime(file.type)
-      if (!type) return []
-      return [{ id: `upload_${crypto.randomUUID()}`, name: file.name, type, file }]
-    })
-    for (const upload of uploads) store.beginAttachmentUpload(upload)
-    for (const upload of uploads) {
-      void (async () => {
-        try {
-          const material = await useMaterialLibraryStore.getState().addFromFileWithHash(upload.file)
-          if (browserWorkspaceSessionId() !== uploadWorkspaceSessionId) {
-            store.completeAttachmentUpload(upload.id)
-            return
-          }
-          store.addAttachment({
-            id: `att_${material.id}`,
-            name: material.name,
-            type: upload.type,
-            url: material.url,
-            source: 'upload',
-            materialId: material.id,
-            tags: material.tags,
-          })
-          store.completeAttachmentUpload(upload.id)
-        } catch (error) {
-          if (browserWorkspaceSessionId() !== uploadWorkspaceSessionId) {
-            store.completeAttachmentUpload(upload.id)
-            return
-          }
-          store.failAttachmentUpload(
-            upload.id,
-            error instanceof Error ? error.message : '上传失败',
-          )
-        }
-      })()
-    }
-  }, [])
-
   const onDragEnter = (e: React.DragEvent) => {
     e.preventDefault()
     dragDepthRef.current += 1
@@ -347,13 +316,14 @@ export function DirectorChatPanel() {
     e.preventDefault()
     dragDepthRef.current = 0
     setDragOver(false)
-    ingestDroppedFiles(e.dataTransfer.files)
+    ingestAttachmentFiles(e.dataTransfer.files)
   }
 
   const handleSend = async (
     text: string,
     timelineRevisionDecision?: { confirmationId: string; action: 'confirm' | 'reject' },
   ) => {
+    let revisionDecisionCommitted = false
     const creationSnapshot = useCreationStore.getState()
     if (!timelineRevisionDecision && creationSnapshot.attachmentUploads.length > 0) return
     const prompt = text.trim()
@@ -459,6 +429,7 @@ export function DirectorChatPanel() {
     streamCancelRef.current = false
 
     let directMessage: string | null = null
+    let streamErrorMessage: string | null = null
     const debugThoughts: string[] = []
     const requestWorkspaceSessionId = browserWorkspaceSessionId()
     const turnRequestId = crypto.randomUUID()
@@ -543,7 +514,9 @@ export function DirectorChatPanel() {
               updateMessage(messageId, {
                 revisionIntent: event.revisionIntent,
                 revisionConfirmationId: event.revisionConfirmationId,
-                revisionDecisionStatus: timelineRevisionDecision?.action === 'confirm' ? 'confirming' : 'pending',
+                revisionDecisionStatus: timelineRevisionDecision?.action === 'confirm'
+                  ? 'confirming'
+                  : timelineRevisionDecision?.action === 'reject' ? 'rejecting' : 'pending',
               })
             }
           }
@@ -591,6 +564,7 @@ export function DirectorChatPanel() {
             debugThoughts.push(event.ok ? `后端结果：${event.summary}` : `后端未完成：${event.summary}`)
           }
           if (event.type === 'assistant_reply') directMessage = event.message
+          if (event.type === 'error') streamErrorMessage = event.message
           if (event.type === 'state_update') {
             useDirectorContextStore.getState().setDirectorState(event.state)
           }
@@ -608,6 +582,24 @@ export function DirectorChatPanel() {
               true,
               event.state.pendingTimelineRevisions ?? [],
             )
+            if (
+              timelineRevisionDecision
+              && !revisionDecisionCommitted
+              && event.state.pendingTimelineRevisionConfirmation?.confirmationId !== timelineRevisionDecision.confirmationId
+            ) {
+              revisionDecisionCommitted = true
+              setRevisionDecisionMessages(
+                timelineRevisionDecision.confirmationId,
+                timelineRevisionDecision.action === 'reject' ? 'rejected' : 'failed',
+                timelineRevisionDecision.action === 'reject'
+                  ? '修改提案已取消。'
+                  : '修改提案已失效，请基于当前方案重新提出修改。',
+                {
+                  clearRefs: true,
+                  unresolvedOnly: timelineRevisionDecision.action === 'confirm',
+                },
+              )
+            }
             debugThoughts.push(
               `V2 会话已同步；本轮${event.modelCalled ? '已调用导演模型' : '使用上下文降级'}。`,
             )
@@ -615,6 +607,32 @@ export function DirectorChatPanel() {
         },
         abort.signal,
       )
+
+      if (timelineRevisionDecision?.action === 'reject' && !revisionDecisionCommitted) {
+        setRevisionDecisionMessages(
+          timelineRevisionDecision.confirmationId,
+          'pending',
+          '取消提案未被服务端确认，原提案仍待确认。',
+        )
+      }
+      if (timelineRevisionDecision?.action === 'confirm' && !revisionDecisionCommitted) {
+        setRevisionDecisionMessages(
+          timelineRevisionDecision.confirmationId,
+          'pending',
+          '确认未被服务端确认，原提案仍待确认。',
+          { unresolvedOnly: true },
+        )
+      }
+
+      if (streamErrorMessage) {
+        updateMessage(thinkingId, {
+          content: streamErrorMessage,
+          kind: 'error',
+          status: 'error',
+          recoverySuggestions: currentRecoverySuggestions(),
+        })
+        return
+      }
 
       if (directMessage) {
         updateMessage(thinkingId, {
@@ -641,6 +659,21 @@ export function DirectorChatPanel() {
         return
       }
       const msg = e instanceof Error ? e.message : String(e)
+      if (timelineRevisionDecision?.action === 'reject' && !revisionDecisionCommitted) {
+        setRevisionDecisionMessages(
+          timelineRevisionDecision.confirmationId,
+          'pending',
+          '取消提案失败，原提案仍待确认。',
+        )
+      }
+      if (timelineRevisionDecision?.action === 'confirm' && !revisionDecisionCommitted) {
+        setRevisionDecisionMessages(
+          timelineRevisionDecision.confirmationId,
+          'pending',
+          '确认失败，原提案仍待确认。',
+          { unresolvedOnly: true },
+        )
+      }
       updateMessage(thinkingId, {
         content: msg,
         kind: 'error',
@@ -665,17 +698,11 @@ export function DirectorChatPanel() {
   }
 
   const handleRevisionDecision = (decision: { confirmationId: string; action: 'confirm' | 'reject' }) => {
-    const messages = useDirectorChatStore.getState().messages
-      .filter((message) => message.revisionConfirmationId === decision.confirmationId)
-    for (const message of messages) {
-      updateMessage(message.id, {
-        revisionDecisionStatus: decision.action === 'confirm' ? 'confirming' : 'rejected',
-        content: decision.action === 'confirm' ? '正在执行已确认的修改。' : '修改提案已取消。',
-      })
-      if (decision.action === 'reject' && message.revisionIntent) {
-        revisionMessageIdsRef.current.delete(message.revisionIntent.callId)
-      }
-    }
+    setRevisionDecisionMessages(
+      decision.confirmationId,
+      decision.action === 'confirm' ? 'confirming' : 'rejecting',
+      decision.action === 'confirm' ? '正在执行已确认的修改。' : '正在取消修改提案。',
+    )
     void handleSend(
       decision.action === 'confirm' ? '确认执行已解析的修改提案。' : '取消已解析的修改提案。',
       decision,

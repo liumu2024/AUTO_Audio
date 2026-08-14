@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict'
 
+import { createRemotionTimelineFixture } from '../../shared/lib/remotion-timeline-fixtures.js'
+
 const { buildV2TimelineRevisionIntent } = await import(
   '../src/pipeline-v2/timeline-revision-receipt.js'
 )
+const spec = createRemotionTimelineFixture({
+  mainVideoSrc: '/fixtures/main.mp4',
+  imageSrc: '/fixtures/image.png',
+  durationSec: 10,
+})
 
 const subtitle = buildV2TimelineRevisionIntent({
   callId: 'call_subtitle',
@@ -10,17 +17,19 @@ const subtitle = buildV2TimelineRevisionIntent({
   arguments: {
     scope: 'subtitle',
     sceneId: 'scene_001',
-    overlayIds: ['overlay_001'],
+    overlayIds: ['caption_001'],
     instruction: '把第一条字幕改短，其他内容不变',
   },
+  baseSpec: spec,
 })
 assert.deepEqual(subtitle, {
   callId: 'call_subtitle',
   originalRequest: '把第一条字幕改短，其他内容不变',
   instruction: '把第一条字幕改短，其他内容不变',
   scope: 'subtitle',
-  targetIds: ['overlay_001'],
-  expectedImpact: '目标字幕的文字、时间或呈现方式',
+  targetIds: ['caption_001'],
+  targetDisplay: ['caption_001 · “Scene 1: user or generated video” · 0.3s–1.8s'],
+  expectedImpact: '将调整 caption_001 · “Scene 1: user or generated video” · 0.3s–1.8s 的文字、时间或呈现方式',
   protectedBoundary: '未选中的字幕及作用域外对象保持不变',
 })
 

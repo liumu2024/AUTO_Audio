@@ -22,6 +22,7 @@ export interface DirectorTimelineRevisionIntent {
   instruction: string
   scope: 'subtitle' | 'scene' | 'structure' | 'visual_strategy' | 'transition' | 'global'
   targetIds: string[]
+  targetDisplay: string[]
   globalMode?: 'brief_update' | 'full_replan'
   durationMode?: 'preserve_range' | 'resize_timeline'
   expectedImpact: string

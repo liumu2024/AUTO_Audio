@@ -435,6 +435,10 @@ export async function postV2TimelineDraftRun(req: Request, res: Response): Promi
   try {
     res.json(await executeV2TimelineDraftRun({ repository, draftId, revision, userId, idempotencyKey }))
   } catch (error) {
+    if (error instanceof V2TimelineRevisionConflictError) {
+      res.status(409).json(revisionConflictBody(error))
+      return
+    }
     if (error instanceof V2TimelineDeliveryBlockedError) {
       res.status(422).json({ error: error.message, code: 'V2_TIMELINE_DELIVERY_BLOCKED', ...error.readiness })
       return

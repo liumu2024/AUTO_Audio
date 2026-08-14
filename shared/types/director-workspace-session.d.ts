@@ -6,7 +6,6 @@ export interface DirectorPendingTimelineRevisionConfirmation {
     draftId: string;
     baseRevision: number;
     originalTurnRequestId: string;
-    originalRequest: string;
     intent: 'revise' | 'execute';
     skillRequests: Array<{
         skillId: string;

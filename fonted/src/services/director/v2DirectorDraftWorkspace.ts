@@ -52,7 +52,14 @@ export interface V2PlanScenePresentation extends V2PlanSceneCard {
   assetSource?: RemotionTimelineSpecV1['assets'][number]['source']
   sourceLabel: string
   motion?: RemotionTimelineSpecV1['scenes'][number]['motion']
-  deliveryState: 'user_material' | 'generated' | 'pending' | 'blocked' | 'programmatic'
+  deliveryState:
+    | 'user_material'
+    | 'generated'
+    | 'pending_generation'
+    | 'pending_reuse'
+    | 'ready_asset'
+    | 'blocked'
+    | 'programmatic'
   materialPlan?: {
     type: RemotionTimelineSpecV1['material_jobs'][number]['type']
     status: RemotionTimelineSpecV1['material_jobs'][number]['status']
@@ -148,6 +155,12 @@ export function buildV2PlanPresentation(
         ? assets.get(materialJob.output_asset_id)
         : undefined
       const deliveredAsset = outputAsset ?? asset
+      const delivery = v2DeliveryProjection({
+        asset: deliveredAsset,
+        outputAssetAvailable: outputAsset != null,
+        materialJob,
+        sceneType: scene.type,
+      })
       const transition = transitions.get(scene.id)
       const visibleTexts = spec.overlays
         .filter((overlay) => {
@@ -190,37 +203,8 @@ export function buildV2PlanPresentation(
         visualRole: scene.visual_role,
         assetLabel: deliveredAsset?.label ?? deliveredAsset?.id,
         assetSource: deliveredAsset?.source,
-        sourceLabel: v2AuthoritativeSourceLabel({
-          asset: deliveredAsset,
-          outputAssetAvailable: outputAsset != null,
-          materialJob,
-          sceneType: scene.type,
-        }),
+        ...delivery,
         motion: scene.motion,
-        deliveryState:
-          materialJob?.status === 'failed'
-            ? 'blocked'
-            : materialJob?.status === 'fulfilled' && !outputAsset
-              ? 'blocked'
-            : materialJob?.status === 'planned'
-              ? materialJob.type === 'request_user_material'
-                ? 'blocked'
-                : materialJob.type === 'generate_video'
-                  ? 'pending'
-                  : 'user_material'
-              : materialJob?.status === 'fulfilled'
-                ? outputAsset?.source === 'user_asset'
-                  ? 'user_material'
-                  : outputAsset?.source === 'generated_asset' || materialJob.type === 'generate_video'
-                    ? 'generated'
-                    : 'programmatic'
-                : scene.type === 'remotion_card'
-                  ? 'programmatic'
-                  : asset?.source === 'user_asset'
-                    ? 'user_material'
-                    : asset?.source === 'generated_asset'
-                      ? 'generated'
-                      : 'programmatic',
         materialPlan: materialJob
           ? {
               type: materialJob.type,
@@ -248,22 +232,26 @@ export function buildV2PlanPresentation(
   }
 }
 
-function v2AuthoritativeSourceLabel(input: {
+function v2DeliveryProjection(input: {
   asset?: RemotionTimelineSpecV1['assets'][number]
   outputAssetAvailable: boolean
   materialJob?: RemotionTimelineSpecV1['material_jobs'][number]
   sceneType: RemotionTimelineSpecV1['scenes'][number]['type']
-}) {
-  if (input.materialJob?.status === 'failed') return '交付失败'
+}): Pick<V2PlanScenePresentation, 'sourceLabel' | 'deliveryState'> {
+  if (input.materialJob?.status === 'failed') {
+    return { sourceLabel: '交付失败', deliveryState: 'blocked' }
+  }
   if (input.materialJob?.status === 'fulfilled' && !input.outputAssetAvailable) {
-    return '交付失败（缺少产物）'
+    return { sourceLabel: '交付失败（缺少产物）', deliveryState: 'blocked' }
   }
   if (input.materialJob?.status === 'planned') {
-    return input.materialJob.type === 'request_user_material'
-      ? '用户素材（待补）'
-      : input.materialJob.type === 'generate_video'
-        ? 'AI 生成素材（待生成）'
-        : '素材复用（待完成）'
+    if (input.materialJob.type === 'request_user_material') {
+      return { sourceLabel: '用户素材（待补）', deliveryState: 'blocked' }
+    }
+    if (input.materialJob.type === 'generate_video') {
+      return { sourceLabel: 'AI 生成素材（待生成）', deliveryState: 'pending_generation' }
+    }
+    return { sourceLabel: '素材复用（待完成）', deliveryState: 'pending_reuse' }
   }
   if (input.asset) {
     const kind = {
@@ -273,16 +261,27 @@ function v2AuthoritativeSourceLabel(input: {
       local_fixture: '本地素材',
       fallback_asset: '兜底素材',
     }[input.asset.source]
-    return `${kind} · ${input.asset.label ?? input.asset.id}`
+    return {
+      sourceLabel: `${kind} · ${input.asset.label ?? input.asset.id}`,
+      deliveryState: input.asset.source === 'user_asset'
+        ? 'user_material'
+        : input.asset.source === 'generated_asset'
+          ? 'generated'
+          : 'ready_asset',
+    }
   }
-  return input.sceneType === 'remotion_card' ? '程序化画面' : '未绑定素材'
+  return input.sceneType === 'remotion_card'
+    ? { sourceLabel: '程序化画面', deliveryState: 'programmatic' }
+    : { sourceLabel: '未绑定素材', deliveryState: 'blocked' }
 }
 
 export function v2DeliveryStateLabel(state: V2PlanScenePresentation['deliveryState']) {
   return {
     user_material: '用户素材',
     generated: '已生成',
-    pending: '待生成 · 当前不是最终画面',
+    pending_generation: '待生成 · 当前不是最终画面',
+    pending_reuse: '待复用 · 当前不是最终画面',
+    ready_asset: '现有素材 · 可渲染',
     blocked: '失败或缺素材 · 暂不可导出',
     programmatic: '程序化画面',
   }[state]

@@ -43,7 +43,7 @@ try {
       requestedMode: 'preview', effectiveMode: 'preview', modeNormalized: false,
       revisionIntent: {
         callId: 'patch_call', originalRequest: '修改字幕', instruction: '修改字幕', scope: 'subtitle',
-        targetIds: ['caption_1'], expectedImpact: '目标字幕', protectedBoundary: '其他内容保持不变',
+        targetIds: ['caption_1'], targetDisplay: ['caption_1 · 字幕'], expectedImpact: '目标字幕', protectedBoundary: '其他内容保持不变',
       },
     } as const
     yield {
@@ -51,7 +51,7 @@ try {
       toolId: 'timeline.patch', ok: true, summary: '字幕已修改',
       revisionReceipt: {
         callId: 'patch_call', originalRequest: '修改字幕', instruction: '修改字幕', scope: 'subtitle',
-        targetIds: ['caption_1'], expectedImpact: '目标字幕', protectedBoundary: '其他内容保持不变',
+        targetIds: ['caption_1'], targetDisplay: ['caption_1 · 字幕'], expectedImpact: '目标字幕', protectedBoundary: '其他内容保持不变',
         status: 'succeeded', summary: '字幕已修改',
         actualDiff: { scenes: [], visibleText: ['caption_1'], transitions: [], audio: [], other: [], hasAudienceFacingChange: true },
       },

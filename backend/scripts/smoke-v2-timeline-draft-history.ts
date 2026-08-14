@@ -35,6 +35,7 @@ const {
   deleteV2TimelineDraft,
   getV2TimelineDraft,
   getV2TimelineDrafts,
+  postV2TimelineDraftRun,
   postV2TimelineDraftPreview,
   putV2TimelineDraft,
 } = await import('../src/pipeline-v2/timeline-draft-controller.js')
@@ -350,9 +351,17 @@ await assert.rejects(() => idempotency.reserve({
   userId: 1, draftId: draft.id, operation: 'timeline.render', idempotencyKey: 'history-key',
   resourceKey: `${draft.id}:999`, requestHash: 'request-b', resultRef: 'run-c',
 }), /different request/i)
+const staleRunResponse = response()
+await postV2TimelineDraftRun(request({
+  draftId: draft.id,
+  idempotencyKey: 'stale-http-render',
+  body: { revision: 1 },
+}), staleRunResponse.res)
+assert.equal(staleRunResponse.result().statusCode, 409, 'HTTP render must reject a stale confirmed revision')
 const run = await repository.createRenderRun({
   id: `v2_history_run_${Date.now()}`,
   draftId: draft.id,
+  userId: 1,
   sourceRevision: source.revision,
   sourceSpec: source.spec,
 })
@@ -369,9 +378,9 @@ await repository.completeRenderRun({
 let idempotentRenderCalls = 0
 const idempotentKey = `render-key-${Date.now()}`
 const isolatedRenderRoot = path.resolve('tmp', `v2-history-render-${Date.now()}`)
-const runIdempotently = () => executeV2TimelineDraftRun({
+const runIdempotently = (idempotencyRepository = idempotency) => executeV2TimelineDraftRun({
   repository,
-  idempotency,
+  idempotency: idempotencyRepository,
   idempotencyKey: idempotentKey,
   draftId: draft.id,
   revision: source.revision,
@@ -441,6 +450,75 @@ await assert.rejects(() => executeV2TimelineDraftRun({
   },
 }))
 await assert.rejects(() => stat(failedOutputDir), 'a failed RenderRun must remove its task-local output directory')
+
+const beforeIdempotentReplay = await repository.getDraft(draft.id, 1)
+assert.ok(beforeIdempotentReplay)
+await repository.saveDraft({
+  draftId: draft.id,
+  userId: 1,
+  baseRevision: beforeIdempotentReplay.revision,
+  kind: 'user_edit',
+  spec: { ...beforeIdempotentReplay.spec, notes: ['advanced after completed render'] },
+})
+const replayedAfterDraftAdvance = await runIdempotently()
+assert.equal(replayedAfterDraftAdvance.renderRunId, idempotentA.renderRunId)
+assert.equal(replayedAfterDraftAdvance.plannerSource, idempotentA.plannerSource)
+assert.equal(idempotentRenderCalls, 1, 'completed render replay must not execute again after the draft advances')
+
+let racingReceiptReads = 0
+const racingIdempotency = {
+  ...idempotency,
+  get: async (input: Parameters<typeof idempotency.get>[0]) => {
+    racingReceiptReads += 1
+    return racingReceiptReads === 1 ? null : idempotency.get(input)
+  },
+  reserve: async () => {
+    throw new Error('a raced completed receipt must be rechecked before returning a revision conflict')
+  },
+}
+const racedReplay = await runIdempotently(racingIdempotency)
+assert.equal(racedReplay.renderRunId, idempotentA.renderRunId)
+assert.equal(racedReplay.plannerSource, idempotentA.plannerSource)
+assert.equal(racingReceiptReads, 2)
+
+let pendingRaceReceiptReads = 0
+const pendingRaceIdempotency = {
+  ...idempotency,
+  get: async (input: Parameters<typeof idempotency.get>[0]) => {
+    pendingRaceReceiptReads += 1
+    return pendingRaceReceiptReads === 1 ? null : idempotency.get(input)
+  },
+  reserve: async () => {
+    throw new Error('a raced completed receipt must be rechecked before mutable readiness rejection')
+  },
+}
+const pendingRaceRepository = {
+  ...repository,
+  getDraft: async (draftId: string, userId: number) => {
+    const current = await repository.getDraft(draftId, userId)
+    return current ? {
+      ...current,
+      revision: source.revision,
+      pendingTimelineRevisions: [{
+        callId: 'raced_pending_call',
+        instruction: 'raced pending change',
+        baseRevision: source.revision,
+        createdAt: new Date().toISOString(),
+      }],
+    } : current
+  },
+}
+const pendingRaceReplay = await executeV2TimelineDraftRun({
+  repository: pendingRaceRepository,
+  idempotency: pendingRaceIdempotency,
+  idempotencyKey: idempotentKey,
+  draftId: draft.id,
+  revision: source.revision,
+  userId: 1,
+  runTimeline: async () => { throw new Error('raced replay must not execute') },
+})
+assert.equal(pendingRaceReplay.renderRunId, idempotentA.renderRunId)
+assert.equal(pendingRaceReceiptReads, 2)
 
 const foreignDeleteResponse = response()
 await deleteV2TimelineDraft(request({ userId: '2', draftId: draft.id }), foreignDeleteResponse.res)

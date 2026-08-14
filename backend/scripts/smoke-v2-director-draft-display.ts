@@ -163,7 +163,7 @@ const pendingGenerationPresentation = buildV2PlanPresentation({
     output_asset_id: 'generated_scene_1',
   }],
 })
-assert.equal(pendingGenerationPresentation.scenes[0]?.deliveryState, 'pending')
+assert.equal(pendingGenerationPresentation.scenes[0]?.deliveryState, 'pending_generation')
 const missingGeneratedOutputPresentation = buildV2PlanPresentation({
   ...spec,
   assets: [{ id: 'fallback_scene_1', type: 'image', source: 'fallback_asset', src: '/fallback/scene-1.png' }],
@@ -201,6 +201,26 @@ assert.equal(
   fulfilledGeneratedReusePresentation.scenes[0]?.sourceLabel,
   'AI 生成素材 · generated_scene_1',
 )
+const fulfilledFallbackGenerationPresentation = buildV2PlanPresentation({
+  ...spec,
+  assets: [{ id: 'fallback_scene_1', type: 'image', source: 'fallback_asset', src: '/fallback/scene-1.png' }],
+  scenes: spec.scenes.map((scene, index) => index === 0
+    ? { ...scene, type: 'image_motion' as const, asset_id: 'fallback_scene_1' }
+    : scene),
+  material_jobs: [{
+    id: 'generate_scene_1', scene_id: 'scene_1', type: 'generate_video', status: 'fulfilled',
+    output_asset_id: 'fallback_scene_1',
+  }],
+})
+assert.equal(
+  fulfilledFallbackGenerationPresentation.scenes[0]?.deliveryState,
+  'ready_asset',
+  'a fulfilled generation job using a fallback asset must not claim AI generation success',
+)
+assert.equal(
+  fulfilledFallbackGenerationPresentation.scenes[0]?.sourceLabel,
+  '兜底素材 · fallback_scene_1',
+)
 const stockPresentation = buildV2PlanPresentation({
   ...spec,
   assets: [{ id: 'stock_scene_1', type: 'video', source: 'stock_asset', src: '/stock/scene-1.mp4', label: 'Stock clip' }],
@@ -211,9 +231,22 @@ const stockPresentation = buildV2PlanPresentation({
       }
     : scene),
 })
-assert.equal(stockPresentation.scenes[0]?.deliveryState, 'programmatic')
+assert.equal(stockPresentation.scenes[0]?.deliveryState, 'ready_asset')
 assert.equal(stockPresentation.scenes[0]?.assetLabel, 'Stock clip')
 assert.equal(stockPresentation.scenes[0]?.sourceLabel, '库存素材 · Stock clip')
+const plannedReusePresentation = buildV2PlanPresentation({
+  ...spec,
+  assets: [{ id: 'stock_scene_1', type: 'video', source: 'stock_asset', src: '/stock/scene-1.mp4', label: 'Stock clip' }],
+  scenes: spec.scenes.map((scene, index) => index === 0
+    ? { ...scene, type: 'user_video' as const, asset_id: 'stock_scene_1' }
+    : scene),
+  material_jobs: [{
+    id: 'reuse_stock_scene_1', scene_id: 'scene_1', type: 'reuse_asset', status: 'planned',
+    input_asset_id: 'stock_scene_1', output_asset_id: 'stock_scene_1',
+  }],
+})
+assert.equal(plannedReusePresentation.scenes[0]?.deliveryState, 'pending_reuse')
+assert.equal(plannedReusePresentation.scenes[0]?.sourceLabel, '素材复用（待完成）')
 assert.equal(v2TransitionDisplayText({
   id: 'transition_slide',
   from_scene_id: 'scene_1',

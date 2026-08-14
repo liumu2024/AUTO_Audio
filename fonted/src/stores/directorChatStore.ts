@@ -32,7 +32,7 @@ export interface DirectorChatMessage {
   revisionIntent?: DirectorTimelineRevisionIntent
   revisionConfirmationId?: string
   revisionReceipt?: DirectorTimelineRevisionReceipt
-  revisionDecisionStatus?: 'pending' | 'confirming' | 'rejected'
+  revisionDecisionStatus?: 'pending' | 'confirming' | 'rejecting' | 'rejected' | 'failed'
   createdAt: number
   status?: DirectorMessageStatus
 }
