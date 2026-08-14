@@ -42,6 +42,7 @@ export interface DirectorWorkspacePatch {
   recentFailure?: DirectorWorkspaceState['recentFailure'] | null
   pendingTimelineRevisions?: DirectorWorkspaceState['pendingTimelineRevisions'] | null
   pendingTimelineRevisionConfirmation?: DirectorWorkspaceState['pendingTimelineRevisionConfirmation'] | null
+  pendingTimelinePlanConfirmation?: DirectorWorkspaceState['pendingTimelinePlanConfirmation'] | null
   responseId?: string | null
   responseContinuityDisabled?: boolean
   recentToolCallIds?: string[]
@@ -260,6 +261,7 @@ export function applyDirectorWorkspacePatch(
     'recentFailure',
     'pendingTimelineRevisions',
     'pendingTimelineRevisionConfirmation',
+    'pendingTimelinePlanConfirmation',
     'responseId',
     'recentToolCallIds',
     'recentVisualMaterialIds',
@@ -330,6 +332,7 @@ export function compactDirectorWorkspaceContext(state: DirectorWorkspaceState) {
       recentFailure: state.recentFailure,
       pendingTimelineRevisions: state.pendingTimelineRevisions,
       pendingTimelineRevisionConfirmation: state.pendingTimelineRevisionConfirmation,
+      pendingTimelinePlanConfirmation: state.pendingTimelinePlanConfirmation,
     },
     rollingSummary: state.rollingSummary,
     recentTurns: state.turns,

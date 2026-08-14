@@ -22,6 +22,8 @@
 - **Creative memory**: A persisted creative preference in `creative_memories`, scoped to a user or a V2 draft, with `active` / `candidate` / `revoked` states and an explicit/inferred origin; it reaches planning only as a labeled suggestion, never as an invisible rule.
 - **Memory candidate**: A pending-confirmation creative preference that does not control creation until the user adopts it.
 - **Confirmed requirement**: A workspace-session requirement ledger entry (`confirmedRequirements`) that stays valid until a later turn replaces or revokes it; it outranks recalled memories but not the current user input.
+- **Creation summary**: A server-persisted, user-confirmed projection of the first creation request and its frozen planning context; no initial planning Tool runs until the user confirms it.
+- **Applied preference**: An active recalled Creative Memory that the current plan explicitly adopts in `creative_brief.applied_preferences`; retrieval alone does not make a preference applied.
 
 ## Engineering principles
 

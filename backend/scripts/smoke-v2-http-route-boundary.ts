@@ -20,16 +20,27 @@ const server = spawn(process.execPath, [tsxCli, 'src/app.ts'], {
   stdio: 'ignore',
 })
 
+const appSource = readFileSync(resolve(backendRoot, 'src/app.ts'), 'utf8')
 assert.doesNotMatch(
-  readFileSync(resolve(backendRoot, 'src/app.ts'), 'utf8'),
+  appSource,
   /director\/workspaces\/:workspaceSessionId\/outcomes/,
   'workspace mutations must only pass through the serialized Director turn boundary',
+)
+assert.doesNotMatch(
+  appSource,
+  /app\.post\('\/api\/v2\/timeline(?:-drafts)?\/preview'/,
+  'planning must only start after the Director confirmation boundary',
 )
 const draftControllerSource = readFileSync(resolve(backendRoot, 'src/pipeline-v2/timeline-draft-controller.ts'), 'utf8')
 assert.match(
   draftControllerSource,
   /postV2TimelineDraftRun[\s\S]*V2TimelineDeliveryBlockedError/,
   'the formal HTTP RenderRun endpoint must translate the shared delivery preflight error',
+)
+assert.match(
+  draftControllerSource,
+  /status:\s*taskStatus\?\.status\s*\?\?\s*run\.status/,
+  'the run status endpoint must return the latest inspected terminal state',
 )
 
 async function waitForHealthyServer(): Promise<void> {
@@ -61,6 +72,8 @@ try {
     headers: { 'content-type': 'application/json' },
     body: '{}',
   })
+  await expectStatus('/api/v2/timeline/preview', 404, { method: 'POST' })
+  await expectStatus('/api/v2/timeline-drafts/preview', 404, { method: 'POST' })
 
   await expectStatus('/api/tasks', 404)
   await expectStatus('/api/tasks/latest', 404)

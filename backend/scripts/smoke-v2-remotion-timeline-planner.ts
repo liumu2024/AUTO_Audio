@@ -52,6 +52,8 @@ assert.match(activeRequirementPrompt, /画面使用中性低饱和色调/)
 assert.match(activeRequirementPrompt, /activeRequirements is authoritative/)
 assert.match(activeRequirementPrompt, /品牌表达可靠但不冰冷/)
 assert.match(activeRequirementPrompt, /current request and activeRequirements take priority/)
+assert.match(activeRequirementPrompt, /applied_preferences/)
+assert.match(activeRequirementPrompt, /only exact statements.*actually adopted/i)
 
 const availableComponentPrompt = buildV2TimelinePlannerPrompt({
   taskId: 'component_hint_context',
@@ -67,6 +69,7 @@ assert.match(availableComponentPrompt, /custom_render/)
 
 const validation = validateRemotionTimelineSpec(spec)
 assert.equal(validation.ok, true, JSON.stringify(validation.issues, null, 2))
+assert.deepEqual(spec.creative_brief?.applied_preferences, [])
 assert.equal(spec.scenes.length, 3)
 
 const malformedAudioSpec = { ...spec, audio: {} } as unknown as typeof spec
@@ -95,6 +98,7 @@ const hydratedLegacyAsset = hydrateV2TimelineAssetIds({
   creative_brief: {
     direction: 'legacy fixture',
     sample_methods: [],
+    applied_preferences: [],
     image_references: [{
       asset_id: 'material_01_mat_image_1',
       observed_facts: ['legacy fact'],

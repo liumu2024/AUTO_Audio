@@ -144,7 +144,7 @@ assert.equal(noApplicableMetrics.plannerRequirementInputRate, null)
 
 const artifactSpec: RemotionTimelineSpecV1 = {
   schema_version: 'remotion_timeline_spec.v1', task_id: 'artifact-check',
-  creative_brief: { direction: '全片轻松幽默，以生活反差推进', image_references: [], sample_methods: [] },
+  creative_brief: { direction: '全片轻松幽默，以生活反差推进', image_references: [], sample_methods: [], applied_preferences: [] },
   canvas: { width: 1920, height: 1080, fps: 30, duration_sec: 4 }, assets: [],
   scenes: [{
     id: 'scene_2', type: 'remotion_card', start_sec: 0, duration_sec: 4,

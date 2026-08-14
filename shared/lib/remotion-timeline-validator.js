@@ -142,6 +142,11 @@ export function validateRemotionTimelineSpec(value) {
             || brief.sample_methods.some((method) => typeof method !== 'string' || !method.trim())) {
             addIssue(issues, 'error', 'creative_brief.sample_methods', 'sample_methods must contain non-empty strings.');
         }
+        if (!Array.isArray(brief?.applied_preferences)
+            || brief.applied_preferences.some((preference) => typeof preference !== 'string' || !preference.trim())
+            || new Set(brief?.applied_preferences).size !== brief?.applied_preferences?.length) {
+            addIssue(issues, 'error', 'creative_brief.applied_preferences', 'applied_preferences must contain unique non-empty strings.');
+        }
         if (brief?.planning_gaps !== undefined) {
             if (!Array.isArray(brief.planning_gaps)) {
                 addIssue(issues, 'error', 'creative_brief.planning_gaps', 'planning_gaps must be an array.');

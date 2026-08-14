@@ -417,6 +417,7 @@ export function buildDeterministicRemotionTimelineSpec(
             ? input.sampleUnderstanding.transferable_knowledge.slice(0, 6).map((item) => item.statement)
             : input.sampleUnderstanding.method_observations.slice(0, 6).map((item) => item.expression))
         : [],
+      applied_preferences: [],
     },
     canvas: {
       width,
@@ -474,6 +475,7 @@ export function buildV2PlanningGapTimelineSpec(
         intended_use: 'Pending verified image understanding.',
       })),
       sample_methods: [],
+      applied_preferences: [],
       planning_gaps: gaps,
     },
     canvas: {

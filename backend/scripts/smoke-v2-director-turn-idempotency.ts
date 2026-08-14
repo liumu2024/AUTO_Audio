@@ -42,18 +42,18 @@ try {
       type: 'tool_proposed', callId: 'patch_call', toolId: 'timeline.patch',
       requestedMode: 'preview', effectiveMode: 'preview', modeNormalized: false,
       revisionIntent: {
-        callId: 'patch_call', originalRequest: '修改字幕', instruction: '修改字幕', scope: 'subtitle',
-        targetIds: ['caption_1'], targetDisplay: ['caption_1 · 字幕'], expectedImpact: '目标字幕', protectedBoundary: '其他内容保持不变',
+        callId: 'patch_call', originalRequest: '修改字幕', scope: 'subtitle',
+        targetDisplay: ['caption_1 · 字幕'], expectedImpact: '目标字幕', protectedBoundary: '其他内容保持不变',
       },
     } as const
     yield {
       type: 'tool_result', actionRef: 'patch', status: 'succeeded', callId: 'patch_call',
       toolId: 'timeline.patch', ok: true, summary: '字幕已修改',
       revisionReceipt: {
-        callId: 'patch_call', originalRequest: '修改字幕', instruction: '修改字幕', scope: 'subtitle',
-        targetIds: ['caption_1'], targetDisplay: ['caption_1 · 字幕'], expectedImpact: '目标字幕', protectedBoundary: '其他内容保持不变',
+        callId: 'patch_call', originalRequest: '修改字幕', scope: 'subtitle',
+        targetDisplay: ['caption_1 · 字幕'], expectedImpact: '目标字幕', protectedBoundary: '其他内容保持不变',
         status: 'succeeded', summary: '字幕已修改',
-        actualDiff: { scenes: [], visibleText: ['caption_1'], transitions: [], audio: [], other: [], hasAudienceFacingChange: true },
+        actualDiff: { scenes: [], visibleText: ['caption_1'], transitions: [], audio: [], other: [] },
       },
     } as const
     yield { type: 'assistant_reply', message: '方案已完成' } as const

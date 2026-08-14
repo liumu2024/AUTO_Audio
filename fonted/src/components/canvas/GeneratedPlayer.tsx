@@ -12,12 +12,10 @@ import {
   type V2PlanScenePresentation,
   type V2PlanVisibleText,
 } from '@/services/director/v2DirectorDraftWorkspace'
-import type { TimelineMode } from '@/stores/editorStore'
 import { usePlaybackStore } from '@/stores/playbackStore'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 
 interface GeneratedPlayerProps {
-  mode: TimelineMode
   onTimeUpdate: () => void
   onEnded: () => void
   onLoadedMetadata: (duration: number, source?: 'sample' | 'generated') => void
@@ -31,7 +29,6 @@ export const GeneratedPlayer = forwardRef<HTMLVideoElement, GeneratedPlayerProps
     const currentTime = usePlaybackStore((state) => state.currentTime)
     const isPlaying = usePlaybackStore((state) => state.isPlaying)
     const spec = useV2TimelineStore((state) => state.spec)
-    const preview = useV2TimelineStore((state) => state.preview)
     const renderedOutputUrl = useV2TimelineStore((state) => state.renderedOutputUrl)
     const selectedClipId = useV2TimelineStore((state) => state.selectedClipId)
     const selectClip = useV2TimelineStore((state) => state.selectClip)
@@ -39,8 +36,8 @@ export const GeneratedPlayer = forwardRef<HTMLVideoElement, GeneratedPlayerProps
       ? `${env.apiBase}${renderedOutputUrl.startsWith('/') ? '' : '/'}${renderedOutputUrl}`
       : undefined
     const presentation = useMemo(
-      () => spec ? buildV2PlanPresentation(spec, preview?.review.scenes) : undefined,
-      [preview, spec],
+      () => spec ? buildV2PlanPresentation(spec) : undefined,
+      [spec],
     )
     const scenes = presentation?.scenes ?? []
     const selectedId = spec ? resolveV2PlanSceneIdFromClip(spec, selectedClipId) : undefined
@@ -95,6 +92,7 @@ export const GeneratedPlayer = forwardRef<HTMLVideoElement, GeneratedPlayerProps
               <V2PlanReview
                 active={active}
                 scenes={scenes}
+                appliedPreferences={presentation?.appliedPreferences ?? []}
                 onSelect={(scene) => {
                   selectClip(`v2-scene-${scene.id}`)
                   onSeek(scene.startSec)
@@ -114,10 +112,12 @@ export const GeneratedPlayer = forwardRef<HTMLVideoElement, GeneratedPlayerProps
 function V2PlanReview({
   active,
   scenes,
+  appliedPreferences,
   onSelect,
 }: {
   active?: V2PlanScenePresentation
   scenes: V2PlanScenePresentation[]
+  appliedPreferences: string[]
   onSelect: (scene: V2PlanScenePresentation) => void
 }) {
   if (!active) {
@@ -142,6 +142,14 @@ function V2PlanReview({
             {active.description ?? '该镜头尚未填写创作说明。'}
           </p>
         </section>
+
+        {appliedPreferences.length ? (
+          <PlanFactSection title="本次采用的历史偏好">
+            <div className="flex flex-wrap gap-1.5">
+              {appliedPreferences.map((preference) => <FactBadge key={preference}>{preference}</FactBadge>)}
+            </div>
+          </PlanFactSection>
+        ) : null}
 
         <PlanFactSection title="视觉呈现">
           <div className="grid gap-2 text-xs text-zinc-300 sm:grid-cols-2">

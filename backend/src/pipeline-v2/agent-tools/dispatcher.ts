@@ -99,6 +99,7 @@ export interface V2AgentToolProgress {
   elapsedMs?: number
   jobId?: string
   sceneId?: string
+  renderRunId?: string
 }
 
 export interface V2AgentToolAuthorizationGrant {

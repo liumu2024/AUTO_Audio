@@ -8,7 +8,10 @@ import {
   resolveV2CanvasSurface,
   startNewV2DraftWorkspace,
 } from '../../fonted/src/services/director/v2DirectorDraftWorkspace.js'
-import { useDirectorChatStore } from '../../fonted/src/stores/directorChatStore.js'
+import {
+  findDirectorConfirmationMessage,
+  useDirectorChatStore,
+} from '../../fonted/src/stores/directorChatStore.js'
 import { useDirectorContextStore } from '../../fonted/src/stores/directorContextStore.js'
 import { useEditorStore } from '../../fonted/src/stores/editorStore.js'
 import { usePlaybackStore } from '../../fonted/src/stores/playbackStore.js'
@@ -18,6 +21,46 @@ import type { RemotionTimelineSpecV1 } from '../../shared/types/remotion-timelin
 import { useCreationStore } from '../../fonted/src/stores/creationStore.js'
 import { v2TransitionDisplayText } from '../../fonted/src/lib/v2-timeline-ui.js'
 import { buildV2TimelineProject } from '../../fonted/src/lib/v2-timeline-ui.js'
+
+const restoredRevisionMessage = {
+  id: 'revision_existing',
+  role: 'assistant' as const,
+  kind: 'revision' as const,
+  content: '待确认',
+  revisionConfirmationId: 'confirmation_revision',
+  revisionIntent: {
+    callId: 'call_revision',
+    originalRequest: '修改字幕',
+    scope: 'subtitle' as const,
+    targetDisplay: ['第一条字幕'],
+    expectedImpact: '字幕',
+    protectedBoundary: '其他内容不变',
+  },
+  createdAt: 1,
+}
+assert.equal(
+  findDirectorConfirmationMessage([restoredRevisionMessage], {
+    kind: 'revision',
+    confirmationId: 'confirmation_revision',
+    callId: 'call_revision',
+  })?.id,
+  restoredRevisionMessage.id,
+)
+const restoredCreationMessage = {
+  id: 'creation_existing',
+  role: 'assistant' as const,
+  kind: 'text' as const,
+  content: '待确认',
+  creationConfirmationId: 'confirmation_creation',
+  createdAt: 2,
+}
+assert.equal(
+  findDirectorConfirmationMessage([restoredCreationMessage], {
+    kind: 'creation',
+    confirmationId: 'confirmation_creation',
+  })?.id,
+  restoredCreationMessage.id,
+)
 
 const spec: RemotionTimelineSpecV1 = {
   schema_version: 'remotion_timeline_spec.v1',
@@ -107,7 +150,6 @@ const spec: RemotionTimelineSpecV1 = {
 }
 
 useV2TimelineStore.getState().clear()
-useEditorStore.getState().setTimelineMode('sample')
 useCreationStore.getState().setAspectRatio('16:9')
 useCreationStore.getState().setDurationSec(30)
 
@@ -119,16 +161,12 @@ activateV2DraftWorkspace({
 })
 
 assert.equal(useV2TimelineStore.getState().spec?.task_id, 'draft_display_smoke')
-assert.equal(useEditorStore.getState().timelineMode, 'generation')
-assert.equal(useEditorStore.getState().generationEditEnabled, true)
 assert.equal(usePlaybackStore.getState().duration, 6)
 assert.equal(useTaskStore.getState().activeTaskId, 'v2_draft_display_smoke')
 assert.equal(useCreationStore.getState().aspectRatio, '9:16')
 assert.equal(useCreationStore.getState().durationSec, 6)
 
 assert.equal(resolveV2CanvasSurface({
-  timelineMode: useEditorStore.getState().timelineMode,
-  hasSample: false,
   hasSpec: true,
   hasRenderedOutput: false,
 }), 'timeline_plan')
@@ -149,6 +187,16 @@ assert.equal(presentation.scenes[0]?.visibleTexts[1]?.enterAnimation, 'slide_up_
 assert.equal(presentation.scenes[0]?.transitionAfter?.type, 'fade')
 assert.equal(presentation.scenes[0]?.deliveryState, 'programmatic')
 assert.equal(presentation.scenes[0]?.sourceLabel, '程序化画面')
+const preferencePresentation = buildV2PlanPresentation({
+  ...spec,
+  creative_brief: {
+    direction: '保持克制、可靠的整体表达。',
+    image_references: [],
+    sample_methods: [],
+    applied_preferences: ['品牌表达可靠但不冰冷'],
+  },
+})
+assert.deepEqual(preferencePresentation.appliedPreferences, ['品牌表达可靠但不冰冷'])
 const timelineProject = buildV2TimelineProject(spec)
 assert.doesNotMatch(
   timelineProject.clips.map((clip) => clip.label).join('；'),
@@ -316,8 +364,6 @@ assert.equal(useDirectorChatStore.getState().messages.length, 1)
 assert.equal(useTaskStore.getState().activeTaskId, null)
 assert.equal(useTaskStore.getState().isTaskRunning, false)
 assert.equal(useTaskStore.getState().lastPrompt, null)
-assert.equal(useEditorStore.getState().timelineMode, 'sample')
-assert.equal(useEditorStore.getState().generationEditEnabled, false)
 assert.equal(useEditorStore.getState().sidebarTab, 'config')
 assert.equal(useEditorStore.getState().sidebarSubView, 'main')
 assert.equal(usePlaybackStore.getState().isPlaying, false)

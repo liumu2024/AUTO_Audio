@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -15,6 +14,7 @@ import {
   timelineRenderComponentReferences,
   validateRenderComponentReferences,
 } from '../modules/render-components/component-registry.js'
+import { runAbortableCommand } from './abortable-command.js'
 
 export interface V2TimelineRenderResult {
   propsPath: string
@@ -31,31 +31,6 @@ function resolveFromCwd(value: string, cwd = process.cwd()): string {
 
 function commandForNode(): string {
   return process.execPath
-}
-
-function runCommand(command: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    })
-    const stdoutChunks: Buffer[] = []
-    const stderrChunks: Buffer[] = []
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdoutChunks.push(chunk)
-    })
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderrChunks.push(chunk)
-    })
-    child.on('error', reject)
-    child.on('close', (code) => {
-      const stdout = Buffer.concat(stdoutChunks).toString('utf8')
-      const stderr = Buffer.concat(stderrChunks).toString('utf8')
-      if (code === 0) resolve({ stdout, stderr })
-      else reject(new Error(`${command} ${args.join(' ')} exited with ${code}\n${stdout}\n${stderr}`))
-    })
-  })
 }
 
 function safePart(value: string): string {
@@ -166,6 +141,7 @@ export async function renderV2RemotionTimeline(input: {
   authorizedDraftComponentIds?: readonly string[]
   authorizedPreviewComponentIds?: readonly string[]
   recordComponentOutcomes?: boolean
+  signal?: AbortSignal
   /** Evaluation-only range rendering; production callers omit it. */
   frameRange?: { startFrame: number; endFrame: number }
 }): Promise<V2TimelineRenderResult> {
@@ -211,7 +187,7 @@ export async function renderV2RemotionTimeline(input: {
     let result
     let commandError: unknown
     try {
-      result = await runCommand(commandForNode(), args, remotionRoot)
+      result = await runAbortableCommand(commandForNode(), args, remotionRoot, input.signal)
     } catch (error) {
       commandError = error
       const message = error instanceof Error ? error.message : String(error)

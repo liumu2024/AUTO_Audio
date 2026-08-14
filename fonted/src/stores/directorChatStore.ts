@@ -1,7 +1,11 @@
 import { create } from 'zustand'
 
 import type { InputAttachment } from '@/stores/creationStore'
-import type { DirectorTimelineRevisionIntent, DirectorTimelineRevisionReceipt } from '@shared/types/director-stream'
+import type {
+  DirectorCreativeSummary,
+  DirectorTimelineRevisionIntent,
+  DirectorTimelineRevisionReceipt,
+} from '@shared/types/director-stream'
 interface OutlineSegment {
   id?: string
   title?: string
@@ -33,8 +37,23 @@ export interface DirectorChatMessage {
   revisionConfirmationId?: string
   revisionReceipt?: DirectorTimelineRevisionReceipt
   revisionDecisionStatus?: 'pending' | 'confirming' | 'rejecting' | 'rejected' | 'failed'
+  creationSummary?: DirectorCreativeSummary
+  creationConfirmationId?: string
+  creationDecisionStatus?: 'pending' | 'confirming' | 'rejecting' | 'confirmed' | 'rejected' | 'failed'
   createdAt: number
   status?: DirectorMessageStatus
+}
+
+export function findDirectorConfirmationMessage(
+  messages: readonly DirectorChatMessage[],
+  identity:
+    | { kind: 'revision'; confirmationId: string; callId: string }
+    | { kind: 'creation'; confirmationId: string },
+): DirectorChatMessage | undefined {
+  return messages.find((message) => identity.kind === 'revision'
+    ? message.revisionConfirmationId === identity.confirmationId
+      && message.revisionIntent?.callId === identity.callId
+    : message.creationConfirmationId === identity.confirmationId)
 }
 
 let messageCounter = 0

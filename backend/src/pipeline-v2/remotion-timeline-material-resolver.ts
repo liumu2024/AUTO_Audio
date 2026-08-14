@@ -62,6 +62,8 @@ export interface V2TimelineMaterialResolutionReport {
 
 const execFileAsync = promisify(execFile)
 
+export type V2ProviderSubmissionPermit = <T>(operation: () => Promise<T>) => Promise<T>
+
 async function sha256File(filePath: string): Promise<string> {
   return createHash('sha256').update(await readFile(filePath)).digest('hex')
 }
@@ -84,6 +86,7 @@ async function copyReusableGeneratedAsset(input: {
   requestFingerprint: string
   outputAssetId: string
   outputDir?: string
+  signal?: AbortSignal
 }): Promise<{ asset: RemotionTimelineAsset; sha256: string } | undefined> {
   if (!input.outputDir) return undefined
   const priorTrace = input.report.generation_trace.find((trace) =>
@@ -117,17 +120,19 @@ async function generateWithIdempotency(input: {
   jobId: string
   outputAssetId: string
   outputDir?: string
+  signal?: AbortSignal
   context?: {
     repository: V2IdempotencyRepository
     userId: number
     draftId: string
     renderRunId: string
     renderKey: string
+    withProviderSubmissionPermit?: V2ProviderSubmissionPermit
   }
 }): Promise<{ generated: V2MaterialGenerationResult; receipt?: V2IdempotencyReceiptRecord }> {
   if (!input.context) {
     return {
-      generated: await input.adapter.generate(input.request).catch((error: unknown) => ({
+      generated: await input.adapter.generate(input.request, { signal: input.signal }).catch((error: unknown) => ({
         ok: false,
         submissionState: 'not_submitted' as const,
         error: error instanceof Error ? error.message : String(error),
@@ -175,20 +180,34 @@ async function generateWithIdempotency(input: {
       },
     }
   }
-  await input.context.repository.update({ id: reservation.receipt.id, phase: 'submitting' })
-  const generated: V2MaterialGenerationResult = await input.adapter.generate(input.request, {
-    onProviderTaskSubmitted: async (providerTaskId) => {
-      await input.context!.repository.update({
-        id: reservation.receipt.id,
-        phase: 'polling',
-        providerTaskId,
-      })
-    },
-  }).catch((error: unknown) => ({
-    ok: false,
-    submissionState: 'not_submitted' as const,
-    error: error instanceof Error ? error.message : String(error),
-  }))
+  const startGeneration = async () => {
+    input.signal?.throwIfAborted()
+    await input.context!.repository.update({ id: reservation.receipt.id, phase: 'submitting' })
+    let markSubmissionKnown!: () => void
+    const submissionKnown = new Promise<void>((resolve) => { markSubmissionKnown = resolve })
+    const generation = input.adapter.generate(input.request, {
+      signal: input.signal,
+      onProviderTaskSubmitted: async (providerTaskId) => {
+        await input.context!.repository.update({
+          id: reservation.receipt.id,
+          phase: 'polling',
+          providerTaskId,
+        })
+        markSubmissionKnown()
+      },
+    }).catch((error: unknown) => ({
+      ok: false,
+      submissionState: 'not_submitted' as const,
+      error: error instanceof Error ? error.message : String(error),
+    }))
+    void generation.then(markSubmissionKnown, markSubmissionKnown)
+    await submissionKnown
+    return { generation }
+  }
+  const started = input.context.withProviderSubmissionPermit
+    ? await input.context.withProviderSubmissionPermit(startGeneration)
+    : await startGeneration()
+  const generated: V2MaterialGenerationResult = await started.generation
   if (!generated.ok) {
     await input.context.repository.update({
       id: reservation.receipt.id,
@@ -253,6 +272,7 @@ async function standardizeIfVideo(input: {
   width: number
   height: number
   fps: number
+  signal?: AbortSignal
 }): Promise<{
   asset: RemotionTimelineAsset
   standardizedSrc?: string
@@ -267,6 +287,7 @@ async function standardizeIfVideo(input: {
     width: input.width,
     height: input.height,
     fps: input.fps,
+    signal: input.signal,
   })
   return {
     asset: {
@@ -296,6 +317,7 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
   outputDir?: string
   maxConcurrency?: number
   onProgress?: (event: V2TimelineMaterialProgress) => void | Promise<void>
+  signal?: AbortSignal
   reusableRun?: {
     runId: string
     spec: RemotionTimelineSpecV1
@@ -307,6 +329,7 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
     draftId: string
     renderRunId: string
     renderKey: string
+    withProviderSubmissionPermit?: V2ProviderSubmissionPermit
   }
 }): Promise<{
   spec: RemotionTimelineSpecV1
@@ -493,6 +516,7 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
           jobId: job.id,
           outputAssetId: job.output_asset_id,
           outputDir: input.outputDir,
+          signal: input.signal,
           context: input.idempotency,
         })
     const generated: V2MaterialGenerationResult = execution.generated
@@ -509,6 +533,7 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
         width: spec.canvas.width,
         height: spec.canvas.height,
         fps: spec.canvas.fps,
+        signal: input.signal,
       })
       const trace: V2TimelineMaterialResolutionReport['generation_trace'][number] = {
         id: job.id,
@@ -722,6 +747,7 @@ export async function standardizeRemotionTimelineVideoAssets(input: {
   outputDir: string
   /** Video assets already normalized by material resolution; keep their paths so reuse evidence stays valid. */
   alreadyStandardizedAssetIds?: readonly string[]
+  signal?: AbortSignal
 }): Promise<{
   spec: RemotionTimelineSpecV1
   standardized_assets: Array<{
@@ -753,6 +779,7 @@ export async function standardizeRemotionTimelineVideoAssets(input: {
       width: spec.canvas.width,
       height: spec.canvas.height,
       fps: spec.canvas.fps,
+      signal: input.signal,
     })
     assets.push({
       ...asset,

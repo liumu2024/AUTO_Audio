@@ -84,6 +84,7 @@ export interface V2IdempotencyRepository {
     resultRef?: string
   }): Promise<{ kind: 'reserved' | 'replay'; receipt: V2IdempotencyReceiptRecord }>
   get(input: { userId: number; operation: string; idempotencyKey: string }): Promise<V2IdempotencyReceiptRecord | null>
+  list(input: { userId: number; draftId: string; operation: string }): Promise<V2IdempotencyReceiptRecord[]>
   update(input: {
     id: string
     status?: V2IdempotencyStatus
@@ -159,6 +160,13 @@ export async function executeV2JsonIdempotentOperation<T>(input: {
 
 export function createV2IdempotencyRepository(): V2IdempotencyRepository {
   return {
+    async list(input) {
+      const rows = await prisma.v2IdempotencyReceipt.findMany({
+        where: input,
+        orderBy: { createdAt: 'asc' },
+      })
+      return rows.map((row) => fromRow(row as unknown as Record<string, unknown>))
+    },
     async get(input) {
       const row = await prisma.v2IdempotencyReceipt.findFirst({
         where: {

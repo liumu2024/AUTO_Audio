@@ -13,7 +13,7 @@ const MUTABLE_FIELDS = {
     'type', 'status', 'prompt', 'input_asset_id', 'output_asset_id', 'fallback_asset_id',
     'fallback_kind', 'provider',
   ]),
-  creative_brief: new Set(['direction', 'image_references', 'sample_methods']),
+  creative_brief: new Set(['direction', 'image_references', 'sample_methods', 'applied_preferences']),
 } as const
 
 export function validateAllowedMutationRules(value: unknown, label: string) {

@@ -34,8 +34,8 @@ V2_VIDEO_GENERATION_MODEL=doubao-seedance-1-5-pro-251215
 
 ## V2 Timeline Module
 
-Trigger: the director executor or V2 page saves a draft through
-`/api/v2/timeline-drafts/preview`, then renders a revision through
+Trigger: the Director proposes and confirms planning through
+`/api/director/chat`, then renders the saved revision through
 `/api/v2/timeline-drafts/:draftId/runs`.
 
 Flow:

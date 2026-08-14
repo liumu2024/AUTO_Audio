@@ -184,7 +184,7 @@ Director 对话与 V2 预览/渲染路径会写 trace；其中保存输入、模
 - Director 工具调用用“会话 ID + `turnRequestId` + 序号”生成稳定 `callId`；已经完成并写入会话近期列表的同一调用会被拒绝。它是顺序重复调用保护，重复请求得到的是拒绝，不是第一次结果的回放。
 - 这个工具级检查发生在执行前，而 `recentToolCallIds` 在一次调度返回后才写入工作区；代码没有 in-flight 记录或互斥锁。因此两份相同请求同时到达时，不能承诺只会执行一份。`turnRequestId` 目前也没有作为整轮 Director 对话的结果回放键：网络重试仍可能再次调用 Director、写状态或提出不同工具方案。
 - 草稿保存要求 `baseRevision` 匹配，并用条件更新防止旧版本静默覆盖新版本。这是乐观并发控制，不是幂等；第二次保存会得到版本冲突。
-- `POST /api/v2/timeline-drafts/preview` 成功后会创建或保存草稿，尽管名字叫 preview，实际是写操作；它没有请求幂等键。首次创建草稿的重复请求可能创建多份草稿；针对已有草稿的重复请求会由 `baseRevision` 冲突止损，但不会回放第一次成功结果。
+- 旧的公开 preview 写入口已经移除；创建与修订统一经过 `/api/director/chat` 的摘要/修改确认和整轮幂等边界，不能绕过确认直接调用 Planner。
 - `POST /api/v2/timeline-drafts/:draftId/runs` 已要求 `Idempotency-Key`（长度不超过 200）。服务端以 `userId + operation + idempotencyKey` 唯一保存 receipt，并同时保存 draft、revision 的请求 hash、运行状态、RenderRun 和可用时的 Provider task ID。相同 key、相同请求：运行中返回同一运行；完成后回放同一 RenderRun；失败后返回同一失败。相同 key 却指向不同草稿/修订会报 409。单进程内还用 in-flight map 合并并发请求；前端一次网络重试也会复用本次调用生成的 key。换一个新 key 才表示用户有意重新渲染同一修订。
 - 素材生成在渲染链路内也会用“渲染 key + material job ID”派生 receipt，并在 Provider 返回任务号后写入 `providerTaskId`。但 Provider 提交请求本身没有看到幂等键透传；如果外部服务已经受理、而本次提交响应在任务号返回前丢失，当前代码不能靠 Provider 侧查询彻底消除“不知道是否已受理”的歧义。组件创作和草稿预览/保存也没有同等的请求结果回放。
 - 上传按文件内容哈希复用已有文件；创作记忆创建会按同用户、作用域和归一化文本复用现存未撤销记录。这两者是业务去重，仍不能替代并发安全的请求幂等。
@@ -200,7 +200,6 @@ Director 对话与 V2 预览/渲染路径会写 trace；其中保存输入、模
 | 已覆盖（仍有外部边界缺口） | `POST /api/v2/timeline-drafts/:draftId/runs` | 同 key 的网络重试已能复用 receipt/RenderRun；但进程崩溃后的 running receipt 尚无独立恢复调度 | 保留 `userId + operation + Idempotency-Key` 唯一约束；增加恢复器/队列消费者处理长期 running receipt |
 | P0 | 外部视频生成提交 | 内部已按 `render key + material job ID` 持久化 receipt 与已返回的 Provider task ID；但提交响应丢失在 task ID 返回前仍有歧义 | 将 `renderRunId + materialJobId` 透传为 Provider 幂等键，或用 Provider 支持的查询键恢复提交状态 |
 | P1 | `POST /api/director/chat` | 同一轮网络重试可再次调用模型、写要求/记忆、发起工具 | `workspaceSessionId + turnRequestId`；保存整轮 receipt 与状态事件，重复请求回放或附着到同一轮 |
-| P1 | `POST /api/v2/timeline-drafts/preview` | 该接口会创建草稿或推进 revision，并消耗 Planner/Reviewer 调用 | 初次创建用 `userId + Idempotency-Key`，修订用 `userId + draftId + baseRevision + Idempotency-Key`；返回第一次草稿/修订 |
 | P1 | `PUT /api/v2/timeline-drafts/:draftId` | 响应丢失后客户端不知道是否已保存，只能收到版本冲突 | `userId + draftId + baseRevision + Idempotency-Key`；保留乐观锁，同时回放首次成功的新 revision |
 | P1 | `render.author` | 重试会再次调用代码模型、试渲染并可能留下多份组件尝试 | 绑定到 Director 的 `callId`/客户端幂等键；同键返回同一组件结果或失败结果 |
 | P2 | 创作记忆创建/替换 | 顺序重复已有文本会复用，但并发仍缺少数据库唯一约束 | 以用户、scope、draft、归一化 statement 或请求键建唯一约束；替换操作记录来源动作 |

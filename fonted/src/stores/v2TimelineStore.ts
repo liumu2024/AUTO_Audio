@@ -1,47 +1,24 @@
 import { create } from 'zustand'
 
 import type {
-  V2SampleAnalyzeResult,
   V2TimelineDraftDto,
-  V2TimelineDraftPreviewResult,
   V2TimelineDraftRunResult,
   V2TimelineDraftRunSummaryDto,
 } from '@/lib/api'
 import type { RemotionTimelineSpecV1 } from '@shared/types/remotion-timeline-spec.v1'
-import type { V2SampleSession } from '@/lib/v2-sample-ui'
 
 interface V2TimelineState {
   taskId: string | null
   draftId: string | null
   draftRevision: number | null
   spec: RemotionTimelineSpecV1 | null
-  preview: V2TimelineDraftPreviewResult | null
   result: V2TimelineDraftRunResult | null
   renderedOutputUrl: string | null
-  lastRunResolvedSpec: RemotionTimelineSpecV1 | null
-  sampleSession: V2SampleSession | null
-  previewAssetUrls: Record<string, string>
   traceDir: string | null
-  lastPrompt: string | null
   selectedClipId: string | null
   hasLocalEdits: boolean
   pendingTimelineRevisions: Array<{ instruction: string; callId: string; baseRevision: number }>
-  setSampleSession: (input: {
-    result: V2SampleAnalyzeResult
-    prompt: string
-    playbackUrl: string
-    sampleName?: string
-  }) => void
-  setPreview: (
-    preview: V2TimelineDraftPreviewResult,
-    prompt: string,
-    previewAssetUrls?: Record<string, string>,
-  ) => void
-  setResult: (
-    result: V2TimelineDraftRunResult,
-    prompt: string,
-    previewAssetUrls?: Record<string, string>,
-  ) => void
+  setResult: (result: V2TimelineDraftRunResult) => void
   setPersistedDraft: (draft: V2TimelineDraftDto) => void
   openPersistedDraft: (draft: Pick<V2TimelineDraftDto, 'draftId' | 'revision' | 'spec' | 'traceDir' | 'pendingTimelineRevisions'> & {
     latestRun?: V2TimelineDraftRunSummaryDto
@@ -57,61 +34,14 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
   draftId: null,
   draftRevision: null,
   spec: null,
-  preview: null,
   result: null,
   renderedOutputUrl: null,
-  lastRunResolvedSpec: null,
-  sampleSession: null,
-  previewAssetUrls: {},
   traceDir: null,
-  lastPrompt: null,
   selectedClipId: null,
   hasLocalEdits: false,
   pendingTimelineRevisions: [],
 
-  setSampleSession: ({ result, prompt, playbackUrl, sampleName }) =>
-    set({
-      taskId: result.taskId,
-      draftId: null,
-      draftRevision: null,
-      spec: null,
-      preview: null,
-      result: null,
-      renderedOutputUrl: null,
-      lastRunResolvedSpec: null,
-      sampleSession: {
-        reference: { playbackUrl, name: sampleName },
-        understanding: result.understanding,
-        traceDir: result.traceDir,
-      },
-      previewAssetUrls: {},
-      traceDir: result.traceDir,
-      lastPrompt: prompt,
-      selectedClipId: null,
-      hasLocalEdits: false,
-      pendingTimelineRevisions: [],
-    }),
-
-  setPreview: (preview, prompt, previewAssetUrls) =>
-    set((state) => ({
-      taskId: preview.taskId,
-      draftId: preview.draft?.draftId ?? state.draftId,
-      draftRevision: preview.draft?.revision ?? state.draftRevision,
-      spec: preview.spec,
-      preview,
-      result: null,
-      renderedOutputUrl: null,
-      lastRunResolvedSpec: null,
-      sampleSession: state.sampleSession,
-      previewAssetUrls: previewAssetUrls ?? state.previewAssetUrls,
-      traceDir: preview.traceDir,
-      lastPrompt: prompt,
-      selectedClipId: null,
-      hasLocalEdits: false,
-      pendingTimelineRevisions: preview.draft?.pendingTimelineRevisions ?? state.pendingTimelineRevisions,
-    })),
-
-  setResult: (result, prompt, previewAssetUrls) =>
+  setResult: (result) =>
     set((state) => ({
       taskId: state.taskId,
       draftId: result.draftId,
@@ -121,11 +51,7 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       spec: state.spec,
       result,
       renderedOutputUrl: result.outputUrl ?? null,
-      lastRunResolvedSpec: result.resolvedSpec,
-      sampleSession: state.sampleSession,
-      previewAssetUrls: previewAssetUrls ?? state.previewAssetUrls,
       traceDir: result.traceDir,
-      lastPrompt: prompt,
       selectedClipId: state.selectedClipId,
       hasLocalEdits: state.hasLocalEdits,
     })),
@@ -135,18 +61,9 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       draftId: draft.draftId,
       draftRevision: draft.revision,
       spec: draft.spec,
-      preview: state.preview
-        ? {
-            ...state.preview,
-            spec: draft.spec,
-          }
-        : state.preview,
       result: state.result?.draftRevision === draft.revision ? state.result : null,
       renderedOutputUrl: state.result?.draftRevision === draft.revision
         ? state.renderedOutputUrl
-        : null,
-      lastRunResolvedSpec: state.result?.draftRevision === draft.revision
-        ? state.lastRunResolvedSpec
         : null,
       hasLocalEdits: false,
       pendingTimelineRevisions: draft.pendingTimelineRevisions ?? state.pendingTimelineRevisions,
@@ -158,17 +75,12 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       draftId: draft.draftId,
       draftRevision: draft.revision,
       spec: draft.spec,
-      preview: null,
       result: null,
       renderedOutputUrl: draft.latestRun?.status === 'completed'
         && draft.latestRun.sourceRevision === draft.revision
         ? draft.latestRun.outputUrl ?? null
         : null,
-      lastRunResolvedSpec: null,
-      sampleSession: null,
-      previewAssetUrls: {},
       traceDir: draft.traceDir ?? null,
-      lastPrompt: null,
       selectedClipId: null,
       hasLocalEdits: false,
       pendingTimelineRevisions: draft.pendingTimelineRevisions ?? state.pendingTimelineRevisions,
@@ -180,12 +92,6 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       const spec = update(state.spec)
       return {
         spec,
-        preview: state.preview
-          ? {
-              ...state.preview,
-              spec,
-            }
-          : state.preview,
         hasLocalEdits: true,
       }
     }),
@@ -199,14 +105,9 @@ export const useV2TimelineStore = create<V2TimelineState>((set) => ({
       draftId: null,
       draftRevision: null,
       spec: null,
-      preview: null,
       result: null,
       renderedOutputUrl: null,
-      lastRunResolvedSpec: null,
-      sampleSession: null,
-      previewAssetUrls: {},
       traceDir: null,
-      lastPrompt: null,
       selectedClipId: null,
       hasLocalEdits: false,
       pendingTimelineRevisions: [],

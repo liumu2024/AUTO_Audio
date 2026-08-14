@@ -15,6 +15,7 @@ import type { V2IdempotencyRepository } from './idempotency-repository.js'
 import {
   resolveRemotionTimelineMaterialJobs,
   standardizeRemotionTimelineVideoAssets,
+  type V2ProviderSubmissionPermit,
   type V2TimelineMaterialResolutionReport,
 } from './remotion-timeline-material-resolver.js'
 import {
@@ -80,10 +81,12 @@ export interface V2TimelineRunProgress {
   elapsedMs?: number
   jobId?: string
   sceneId?: string
+  renderRunId?: string
 }
 
 export interface V2TimelineRunOptions {
   onProgress?: (event: V2TimelineRunProgress) => void | Promise<void>
+  signal?: AbortSignal
   traceContext?: V2TraceContext
   /** Server-authorized draft components already bound to the persisted source timeline. */
   authorizedDraftComponentIds?: readonly string[]
@@ -99,6 +102,7 @@ export interface V2TimelineRunOptions {
       draftId: string
       renderRunId: string
       renderKey: string
+      withProviderSubmissionPermit?: V2ProviderSubmissionPermit
     }
     reusableRun?: {
       runId: string
@@ -461,6 +465,7 @@ export async function runV2RemotionTimeline(
     operationId: options.traceContext?.operationId,
   })
   const reportProgress = async (event: V2TimelineRunProgress) => {
+    options.signal?.throwIfAborted()
     const progressEvent = { ...event, elapsedMs: Date.now() - startedAt }
     await trace.appendSessionEvent({
       type: 'render_progress',
@@ -547,6 +552,7 @@ export async function runV2RemotionTimeline(
     maxConcurrency: env.v2MaterialGenerationConcurrency,
     idempotency: options.materialExecution?.idempotency,
     reusableRun: options.materialExecution?.reusableRun,
+    signal: options.signal,
     onProgress: async (event) => {
       const fraction = event.total > 0 ? event.completed / event.total : 1
       await reportProgress({
@@ -561,6 +567,7 @@ export async function runV2RemotionTimeline(
     },
   })
   await trace.writeJson('03-material-jobs', 'timeline-material-resolution.json', materialResolution.report)
+  options.signal?.throwIfAborted()
   await trace.writeJson('03-material-jobs', 'delivery-readiness.json', materialResolution.report.delivery_readiness)
   if (!materialResolution.report.ok) {
     throw new Error(`Timeline material resolution failed: ${JSON.stringify(materialResolution.report.failed_jobs, null, 2)}`)
@@ -577,6 +584,7 @@ export async function runV2RemotionTimeline(
   const standardized = await standardizeRemotionTimelineVideoAssets({
     spec: materialResolution.spec,
     outputDir: outputRoot,
+    signal: options.signal,
     alreadyStandardizedAssetIds: materialResolution.report.generation_trace
       .flatMap((trace) =>
         trace.status === 'fulfilled' && trace.output_asset_id && trace.output_sha256
@@ -584,6 +592,7 @@ export async function runV2RemotionTimeline(
           : [],
       ),
   })
+  options.signal?.throwIfAborted()
   await trace.writeJson('04-material-assets', 'timeline-standardized-assets.json', standardized.standardized_assets)
   const renderValidation = validateRemotionTimelineSpec(standardized.spec)
   await trace.writeJson('05-remotion-props', 'timeline-render-validation.json', renderValidation)
@@ -598,6 +607,7 @@ export async function runV2RemotionTimeline(
     outputDir: outputRoot,
     outputName: `${input.taskId}.mp4`,
     authorizedDraftComponentIds: options.authorizedDraftComponentIds,
+    signal: options.signal,
   })
   await trace.writeJson('06-remotion-render', 'timeline-render-result.json', render)
   await trace.writeText('06-remotion-render', 'timeline-render-command.txt', render.command.join(' '))

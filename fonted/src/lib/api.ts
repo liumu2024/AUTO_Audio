@@ -4,7 +4,6 @@ import type { DirectorAgentStreamEvent } from '@shared/types/director-stream'
 import type { DirectorConversationRuntime } from '@shared/lib/director-understanding'
 import type { DirectorContext } from '@shared/types/director-context'
 import type { RemotionTimelineSpecV1 } from '@shared/types/remotion-timeline-spec.v1'
-import type { V2SampleUnderstandingResult } from '@shared/types/v2-sample-understanding'
 
 export interface UploadResult {
   url: string
@@ -39,47 +38,16 @@ export interface DirectorAgentChatPayload {
     confirmationId: string
     action: 'confirm' | 'reject'
   }
+  timelinePlanDecision?: {
+    confirmationId: string
+    action: 'confirm' | 'reject'
+  }
 }
 
 export interface DirectorWorkspaceSessionResponse {
   workspaceSessionId: string
   state: DirectorWorkspaceState
   updatedAt: string
-}
-
-export interface V2TimelinePayload {
-  taskId?: string
-  mainVideoPath?: string
-  prompt: string
-  creationMode?: 'sample_replicate' | 'material_brief' | 'text_to_video'
-  inputImageUrl?: string
-  imageSrc?: string
-  referenceVideoPath?: string
-  sampleUnderstanding?: V2SampleUnderstandingResult
-  conversationSummary?: string
-  planningContext?: {
-    kind: 'initial' | 'revision'
-    draftId?: string
-    baseRevision?: number
-    authorizationEvidence?: string
-  }
-  materials?: Array<{
-    id: string
-    name?: string
-    type: 'video' | 'image' | 'audio'
-    src: string
-    publicUrl?: string
-    tags?: string[]
-  }>
-  plannerMode?: 'deterministic' | 'llm'
-  allowPlannerFallback?: boolean
-  durationSec?: number
-  timelineSpecOverride?: unknown
-  canvas?: {
-    width?: number
-    height?: number
-    fps?: number
-  }
 }
 
 export interface V2TimelinePlanningReview {
@@ -106,28 +74,6 @@ export interface V2TimelinePlanningReview {
   metrics: Record<string, number>
   warnings_zh: string[]
   next_actions_zh: string[]
-}
-
-export interface V2SampleAnalyzePayload {
-  taskId?: string
-  prompt: string
-  sampleVideoPath: string
-  sampleVideoName?: string
-}
-
-export interface V2SampleAnalyzeResult {
-  taskId: string
-  understanding: V2SampleUnderstandingResult
-  traceDir: string
-}
-
-export interface V2TimelinePreviewResult {
-  taskId: string
-  plannerSource: string
-  spec: RemotionTimelineSpecV1
-  validation: unknown
-  review: V2TimelinePlanningReview
-  traceDir: string
 }
 
 export interface V2TimelineDraftDto {
@@ -162,11 +108,26 @@ export interface V2TimelineDraftRevisionSummaryDto {
 export interface V2TimelineDraftRunSummaryDto {
   id: string
   sourceRevision: number
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
   outputUrl?: string
   traceDir?: string
   createdAt: string
   completedAt?: string
+}
+
+export interface V2TimelineDraftRunStatusDto {
+  renderRunId: string
+  draftId: string
+  draftRevision: number
+  status: V2TimelineDraftRunSummaryDto['status']
+  canCancel: boolean
+  providerStatuses: Array<{
+    jobId: string
+    providerTaskId?: string
+    status: string
+  }>
+  outputUrl?: string
+  traceDir?: string
 }
 
 export interface V2TimelineDraftHistoryDto {
@@ -188,10 +149,6 @@ export interface V2TimelineDraftHistoryDto {
 }
 
 export type V2TimelineDraftDetailDto = V2TimelineDraftDto & V2TimelineDraftHistoryDto
-
-export interface V2TimelineDraftPreviewResult extends V2TimelinePreviewResult {
-  draft: V2TimelineDraftDto
-}
 
 export interface V2TimelineDraftRunResult {
   ok: boolean
@@ -453,30 +410,6 @@ export async function deleteCreativeKnowledge(id: string) {
   )
 }
 
-export async function previewV2Timeline(
-  payload: V2TimelinePayload,
-  idempotencyKey = crypto.randomUUID(),
-) {
-  return idempotentJsonRequest<V2TimelinePreviewResult>({
-    path: '/api/v2/timeline/preview',
-    method: 'POST',
-    body: payload,
-    idempotencyKey,
-  })
-}
-
-export async function previewV2TimelineDraft(
-  payload: V2TimelinePayload & { draftId?: string; baseRevision?: number },
-  idempotencyKey = crypto.randomUUID(),
-) {
-  return idempotentJsonRequest<V2TimelineDraftPreviewResult>({
-    path: '/api/v2/timeline-drafts/preview',
-    method: 'POST',
-    body: payload,
-    idempotencyKey,
-  })
-}
-
 export async function getV2TimelineDraft(draftId: string) {
   return request<{ draft: V2TimelineDraftDetailDto }>(
     `/api/v2/timeline-drafts/${encodeURIComponent(draftId)}`,
@@ -540,11 +473,12 @@ export async function runV2TimelineDraft(input: {
     for (let attempt = 0; attempt < MAX_IDEMPOTENCY_POLL_ATTEMPTS; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 1000))
       const run = await request<{
-        status: 'running' | 'completed' | 'failed'
+        status: 'running' | 'completed' | 'failed' | 'cancelled'
       }>(`${path}/${encodeURIComponent(pending.renderRunId)}`, {
         signal: idempotentRequestSignal(),
       })
       if (run.status === 'running') continue
+      if (run.status === 'cancelled') throw new Error('这次成片任务已经取消。')
       if (run.status === 'failed') throw new Error('这次成片导出没有完成。')
       response = await post()
       break
@@ -561,11 +495,23 @@ export async function runV2TimelineDraft(input: {
   return response.json() as Promise<V2TimelineDraftRunResult>
 }
 
-export async function analyzeV2Sample(payload: V2SampleAnalyzePayload) {
-  return request<V2SampleAnalyzeResult>('/api/v2/sample/analyze', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
+export async function getV2TimelineDraftRun(input: { draftId: string; renderRunId: string }) {
+  return request<V2TimelineDraftRunStatusDto>(
+    `/api/v2/timeline-drafts/${encodeURIComponent(input.draftId)}/runs/${encodeURIComponent(input.renderRunId)}`,
+  )
+}
+
+export async function cancelV2TimelineDraftRun(input: { draftId: string; renderRunId: string }) {
+  const response = await requestResponse(
+    `/api/v2/timeline-drafts/${encodeURIComponent(input.draftId)}/runs/${encodeURIComponent(input.renderRunId)}`,
+    { method: 'DELETE', signal: idempotentRequestSignal() },
+  )
+  const result = await response.json() as {
+    cancelled: boolean
+    status: 'running' | 'completed' | 'failed' | 'cancelled'
+    reason?: string
+  }
+  return result
 }
 
 export async function uploadFile(

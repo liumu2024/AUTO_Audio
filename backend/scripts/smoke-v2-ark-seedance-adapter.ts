@@ -101,4 +101,51 @@ assert.equal(unknownSubmission.ok, false)
 assert.equal(unknownSubmission.submissionState, 'unknown')
 assert.equal(unknownSubmission.failureCode, 'provider_submit_state_unknown')
 
+const cancellationCalls: string[] = []
+let cancellationDeleteAccepted = false
+const cancellationAdapter = createArkSeedanceMaterialGenerationAdapter({
+  apiKey: 'ark-mock-key',
+  model: 'mock-model',
+  submitUrl: 'https://example.com/tasks',
+  statusUrlTemplate: 'https://example.com/tasks/{id}',
+  outputDir,
+  fetchImpl: async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url
+    cancellationCalls.push(`${init?.method ?? 'GET'} ${url}`)
+    if (init?.method === 'DELETE') {
+      cancellationDeleteAccepted = true
+      return new Response(JSON.stringify({}), { status: 200 })
+    }
+    return new Response(JSON.stringify({
+      id: 'task_queued',
+      status: cancellationDeleteAccepted ? 'cancelled' : 'queued',
+    }), { status: 200 })
+  },
+})
+assert.deepEqual(await cancellationAdapter.getTaskStatus?.('task_queued'), { status: 'queued' })
+assert.deepEqual(await cancellationAdapter.cancelTask?.('task_queued'), {
+  cancelled: true,
+  status: 'cancelled',
+})
+assert.deepEqual(cancellationCalls, [
+  'GET https://example.com/tasks/task_queued',
+  'GET https://example.com/tasks/task_queued',
+  'DELETE https://example.com/tasks/task_queued',
+  'GET https://example.com/tasks/task_queued',
+])
+
+const runningAdapter = createArkSeedanceMaterialGenerationAdapter({
+  apiKey: 'ark-mock-key',
+  model: 'mock-model',
+  submitUrl: 'https://example.com/tasks',
+  statusUrlTemplate: 'https://example.com/tasks/{id}',
+  outputDir,
+  fetchImpl: async () => new Response(JSON.stringify({ id: 'task_running', status: 'running' }), { status: 200 }),
+})
+assert.deepEqual(await runningAdapter.cancelTask?.('task_running'), {
+  cancelled: false,
+  status: 'running',
+  reason: 'provider_task_running',
+})
+
 console.info('[smoke-v2-ark-seedance-adapter] OK')

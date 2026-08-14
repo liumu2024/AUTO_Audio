@@ -11,7 +11,6 @@ import {
 import {
   renderV2DirectorTimeline,
   saveV2DirectorTimelineDraft,
-  v2MaterialsFromAttachments,
 } from '@/services/director/v2DirectorTimeline'
 import { startNewV2DraftWorkspace } from '@/services/director/v2DirectorDraftWorkspace'
 import { replaceActiveDirectorWorkspaceSession } from '@/services/director/workspaceSessionLifecycle'
@@ -127,13 +126,7 @@ export function EditorHeader() {
         return
       }
       await renderV2DirectorTimeline({
-        taskId,
         prompt: creation.inputText || '导出当前视频成片',
-        sampleVideoUrl: creation.sampleUrl,
-        sampleVideoName: creation.sampleName,
-        aspectRatio: creation.aspectRatio,
-        durationSec: creation.durationSec,
-        materials: v2MaterialsFromAttachments(creation.attachments),
       }, { draftId: preflight!.draftId, revision: preflight!.revision })
       setPreflight(null)
     } catch (error) {

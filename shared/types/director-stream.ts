@@ -19,12 +19,8 @@ export type DirectorSurfaceMode =
 export interface DirectorTimelineRevisionIntent {
   callId: string
   originalRequest: string
-  instruction: string
   scope: 'subtitle' | 'scene' | 'structure' | 'visual_strategy' | 'transition' | 'global'
-  targetIds: string[]
   targetDisplay: string[]
-  globalMode?: 'brief_update' | 'full_replan'
-  durationMode?: 'preserve_range' | 'resize_timeline'
   expectedImpact: string
   protectedBoundary: string
 }
@@ -32,15 +28,23 @@ export interface DirectorTimelineRevisionIntent {
 export interface DirectorTimelineRevisionReceipt extends DirectorTimelineRevisionIntent {
   status: 'succeeded' | 'failed' | 'skipped'
   summary: string
-  revision?: number
   actualDiff?: {
     scenes: string[]
     visibleText: string[]
     transitions: string[]
     audio: string[]
     other: string[]
-    hasAudienceFacingChange: boolean
   }
+}
+
+export interface DirectorCreativeSummary {
+  goal: string
+  audience?: string
+  aspectRatio?: string
+  durationSec?: number
+  styleIntensity?: string
+  mustKeep: string[]
+  openQuestions: string[]
 }
 
 export type DirectorAgentStreamEvent =
@@ -85,6 +89,8 @@ export type DirectorAgentStreamEvent =
       revisionIntent?: DirectorTimelineRevisionIntent
       /** One server-owned decision id may cover several revision cards in the same plan. */
       revisionConfirmationId?: string
+      creationSummary?: DirectorCreativeSummary
+      creationConfirmationId?: string
     }
   | { type: 'tool_started'; callId: string; toolId: string }
   | {
@@ -97,6 +103,7 @@ export type DirectorAgentStreamEvent =
       elapsedMs?: number
       jobId?: string
       sceneId?: string
+      renderRunId?: string
     }
   | {
       type: 'tool_result'

@@ -2,32 +2,14 @@ import { useCallback, useEffect, type RefObject } from 'react'
 
 import { usePlaybackStore } from '@/stores/playbackStore'
 
-const DRIFT_THRESHOLD = 0.12
 const END_EPSILON = 0.08
-
-function getVideos(
-  sampleRef: RefObject<HTMLVideoElement | null>,
-  generatedRef: RefObject<HTMLVideoElement | null>,
-): HTMLVideoElement[] {
-  const out: HTMLVideoElement[] = []
-  const sample = sampleRef.current
-  const generated = generatedRef.current
-  if (sample?.src) out.push(sample)
-  if (generated?.src) out.push(generated)
-  return out
-}
 
 function isNearEnd(time: number, duration: number): boolean {
   return duration > 0 && time >= duration - END_EPSILON
 }
 
-/**
- * 将左右 video 与 Zustand 播放状态同步；仅样例有片源时也可正常播放。
- */
-export function useSyncedPlayback(
-  sampleRef: RefObject<HTMLVideoElement | null>,
-  generatedRef: RefObject<HTMLVideoElement | null>,
-) {
+/** 将成片 video 与 Zustand 播放状态同步。 */
+export function useSyncedPlayback(videoRef: RefObject<HTMLVideoElement | null>) {
   const isPlaying = usePlaybackStore((s) => s.isPlaying)
   const currentTime = usePlaybackStore((s) => s.currentTime)
   const syncLock = usePlaybackStore((s) => s.syncLock)
@@ -37,94 +19,51 @@ export function useSyncedPlayback(
   const storeSeek = usePlaybackStore((s) => s.seek)
 
   const finishAtEnd = useCallback(() => {
-      const videos = getVideos(sampleRef, generatedRef)
-      let endTime = usePlaybackStore.getState().duration
-      for (const el of videos) {
-        if (Number.isFinite(el.duration) && el.duration > 0) {
-          endTime = Math.min(endTime, el.duration)
-        }
+    const video = videoRef.current
+    const duration = usePlaybackStore.getState().duration
+    const endTime = video && Number.isFinite(video.duration) && video.duration > 0
+      ? Math.min(duration, video.duration)
+      : duration
+    setPlaying(false)
+    setSyncLock(true)
+    setCurrentTime(endTime)
+    if (video) {
+      video.pause()
+      const target = Math.max(0, endTime - 0.001)
+      if (Math.abs(video.currentTime - target) > 0.02) {
+        video.currentTime = target
       }
-
-      setPlaying(false)
-      setSyncLock(true)
-      setCurrentTime(endTime)
-      for (const el of videos) {
-        el.pause()
-        const target = Math.max(0, endTime - 0.001)
-        if (Math.abs(el.currentTime - target) > 0.02) {
-          el.currentTime = target
-        }
-      }
-      requestAnimationFrame(() => setSyncLock(false))
-    },
-    [
-      sampleRef,
-      generatedRef,
-      setPlaying,
-      setSyncLock,
-      setCurrentTime,
-    ],
-  )
+    }
+    requestAnimationFrame(() => setSyncLock(false))
+  }, [videoRef, setPlaying, setSyncLock, setCurrentTime])
 
   const applyTime = useCallback(
     (time: number) => {
       const duration = usePlaybackStore.getState().duration
       const clamped =
         duration > 0 ? Math.max(0, Math.min(time, duration)) : time
-      for (const el of getVideos(sampleRef, generatedRef)) {
-        if (Number.isFinite(clamped) && Math.abs(el.currentTime - clamped) > 0.02) {
-          el.currentTime = clamped
-        }
+      const video = videoRef.current
+      if (video && Number.isFinite(clamped) && Math.abs(video.currentTime - clamped) > 0.02) {
+        video.currentTime = clamped
       }
     },
-    [sampleRef, generatedRef],
+    [videoRef],
   )
 
-  const syncOtherVideo = useCallback(
-    (source: 'sample' | 'generated', time: number) => {
-      const duration = usePlaybackStore.getState().duration
-      if (isNearEnd(time, duration)) return
+  const handleTimeUpdate = useCallback(() => {
+    if (usePlaybackStore.getState().syncLock) return
+    const video = videoRef.current
+    if (!video) return
 
-      const other =
-        source === 'sample' ? generatedRef.current : sampleRef.current
-      if (
-        other?.src &&
-        Math.abs(other.currentTime - time) > DRIFT_THRESHOLD
-      ) {
-        setSyncLock(true)
-        other.currentTime = time
-        requestAnimationFrame(() => setSyncLock(false))
-      }
-    },
-    [sampleRef, generatedRef, setSyncLock],
-  )
+    const duration = usePlaybackStore.getState().duration
+    const time = video.currentTime
 
-  const handleTimeUpdate = useCallback(
-    (source: 'sample' | 'generated') => {
-      if (usePlaybackStore.getState().syncLock) return
-      const video =
-        source === 'sample' ? sampleRef.current : generatedRef.current
-      if (!video) return
-
-      const duration = usePlaybackStore.getState().duration
-      const time = video.currentTime
-
-      if (isNearEnd(time, duration)) {
-        finishAtEnd()
-        return
-      }
-
-      setCurrentTime(time)
-      syncOtherVideo(source, time)
-    },
-    [
-      sampleRef,
-      generatedRef,
-      setCurrentTime,
-      syncOtherVideo,
-      finishAtEnd,
-    ],
-  )
+    if (isNearEnd(time, duration)) {
+      finishAtEnd()
+      return
+    }
+    setCurrentTime(time)
+  }, [videoRef, setCurrentTime, finishAtEnd])
 
   const handleEnded = useCallback(() => {
     finishAtEnd()
@@ -142,8 +81,8 @@ export function useSyncedPlayback(
   const togglePlayPause = useCallback(() => {
     const state = usePlaybackStore.getState()
     const next = !state.isPlaying
-    const videos = getVideos(sampleRef, generatedRef)
-    if (videos.length === 0) return
+    const video = videoRef.current
+    if (!video?.src) return
 
     if (next && state.duration > 0 && state.currentTime >= state.duration - END_EPSILON) {
       storeSeek(0)
@@ -153,15 +92,15 @@ export function useSyncedPlayback(
     setPlaying(next)
 
     if (next) {
-      void Promise.all(videos.map((v) => v.play().catch(() => undefined)))
+      void video.play().catch(() => undefined)
     } else {
-      for (const v of videos) v.pause()
+      video.pause()
     }
-  }, [sampleRef, generatedRef, setPlaying, storeSeek, applyTime])
+  }, [videoRef, setPlaying, storeSeek, applyTime])
 
   useEffect(() => {
-    const videos = getVideos(sampleRef, generatedRef)
-    if (videos.length === 0) return
+    const video = videoRef.current
+    if (!video?.src) return
 
     if (isPlaying) {
       const { currentTime, duration } = usePlaybackStore.getState()
@@ -169,11 +108,11 @@ export function useSyncedPlayback(
         setPlaying(false)
         return
       }
-      void Promise.all(videos.map((v) => v.play().catch(() => undefined)))
+      void video.play().catch(() => undefined)
     } else {
-      for (const v of videos) v.pause()
+      video.pause()
     }
-  }, [isPlaying, sampleRef, generatedRef, setPlaying])
+  }, [isPlaying, videoRef, setPlaying])
 
   useEffect(() => {
     if (!syncLock) return
@@ -183,15 +122,12 @@ export function useSyncedPlayback(
   }, [syncLock, currentTime, applyTime, setSyncLock])
 
   useEffect(() => {
-    const sample = sampleRef.current
-    const generated = generatedRef.current
-    sample?.addEventListener('ended', handleEnded)
-    generated?.addEventListener('ended', handleEnded)
+    const video = videoRef.current
+    video?.addEventListener('ended', handleEnded)
     return () => {
-      sample?.removeEventListener('ended', handleEnded)
-      generated?.removeEventListener('ended', handleEnded)
+      video?.removeEventListener('ended', handleEnded)
     }
-  }, [sampleRef, generatedRef, handleEnded])
+  }, [videoRef, handleEnded])
 
   return { handleTimeUpdate, handleEnded, seekTo, togglePlayPause, applyTime }
 }

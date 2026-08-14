@@ -100,6 +100,11 @@ const ToolRequestSchema = z.object({
 
 const DecisionFields = {
   replyDraft: z.string().trim().min(1),
+  creationSummary: z.object({
+    goal: z.string().trim().min(1).max(500),
+    audience: z.string().trim().min(1).max(300).optional(),
+    openQuestions: z.array(z.string().trim().min(1).max(300)).max(10).default([]),
+  }).strict().optional(),
   creativeConfigDelta: CreativeConfigDeltaSchema.default({}),
   stateActions: z.array(StateActionSchema).max(1).default([]),
   memoryActions: z.array(MemoryActionSchema).max(20).default([]),
@@ -380,6 +385,7 @@ export function buildDirectorModelPrompt(input: {
 - 每个 toolRequest 的 skillId 是该 Tool 的主 Skill 选择；skillRequests 只用于本轮额外需要的 Skill 上下文，不要重复声明 Tool 已选择的主 Skill。
 - replyDraft 不能声称要求、长期知识或执行动作已成功保存/完成；有真实执行结果时，服务端会根据回执生成最终回复。replyDraft 必须像正常对话，不得出现内部版本号、V2 Timeline、revision、Tool、Skill、Provider、Backend、Worker、调用 ID 或协议字段。
 - missingInformation 只列出真正阻塞当前目标的事实；可选补充不算阻塞。
+- 首次创建方案并请求 timeline.plan 时，creationSummary 概括本轮目标、受众和仍待确认的问题；不要编造用户没有提供的受众。它只用于生成前确认，不替代 toolRequests。
 - Tool arguments 必须严格符合 Tool 卡片中的 inputSchema，不得增加字段。
 - 用户在本轮明确请求修改方案时，可以提出对应修改动作；服务端会先形成可核对的修改提案，只有用户确认后才执行。
 - 对滤镜、合成、动画和转场需求，先确定用户想要的效果语义，再在内置实现与 Current context 的 renderedComponents 中选择语义匹配的实现；两者都不能满足时才通过 render.author 创作组件（用户无需明确要求写代码）。
@@ -406,7 +412,7 @@ export function buildDirectorModelPrompt(input: {
 - Examples: “我一直喜欢更搞笑、反差更强的风格” → user active；“把这个视频改得搞笑” → 当前项目要求，不沉淀；“我更喜欢第一段用懒散人物塑造” → 当前要求，并可把“可能偏好松弛、反差式人物塑造”记为 candidate；“第一段改成推镜头” → 当前操作，不沉淀。
 - 样例中有证据支持的导演规律属于可迁移创作方法，不是用户个人偏好；本轮 memoryActions 只处理用户或草稿偏好。
 - replace/revoke 只能引用 retrievedCreativeMemories 中的 memory id。每项必须引用本轮 currentTurnId；记忆失败不会阻断其他动作。
-输出字段：replyDraft、intent、creativeConfigDelta、stateActions、memoryActions、skillRequests、toolRequests、missingInformation。只输出 JSON。
+输出字段：replyDraft、creationSummary、intent、creativeConfigDelta、stateActions、memoryActions、skillRequests、toolRequests、missingInformation。只输出 JSON。
 1
 Available Skill cards:
 ${JSON.stringify(listV2AgentSkillCards())}
@@ -728,6 +734,7 @@ function toDirectorIntentResult(
     nextAction: nextActionFor(candidate),
     executionEffect: executionEffectFor(candidate),
     assistantMessage: candidate.replyDraft,
+    creationSummary: candidate.creationSummary,
     skillRequests: candidate.skillRequests,
     toolRequests: candidate.toolRequests,
   }

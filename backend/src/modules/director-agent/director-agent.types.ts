@@ -20,6 +20,11 @@ export interface DirectorAgentChatRequest {
     confirmationId: string
     action: 'confirm' | 'reject'
   }
+  /** Explicit decision for the server-owned first-plan creative summary. */
+  timelinePlanDecision?: {
+    confirmationId: string
+    action: 'confirm' | 'reject'
+  }
   /** Stable browser workspace id; the server creates a V2 session when absent. */
   workspaceSessionId?: string
   /** Injected by the controller from the authenticated/request user boundary. */

@@ -33,6 +33,11 @@ const sessionId = `v2_multiturn_${Date.now()}`
 const requests: Array<Record<string, unknown>> = []
 const originalProposalContext = {
   ...baseContext,
+  explicitUiControls: {
+    aspectRatio: '16:9' as const,
+    durationSec: 15,
+    styleIntensity: 'strong' as const,
+  },
   materials: [{
     id: 'mat_proposal', type: 'image' as const, name: 'proposal.png',
     url: '/uploads/proposal.png', tags: ['proposal'],
@@ -212,6 +217,26 @@ const replies = [
       stateActions: [], memoryActions: [], skillRequests: [], toolRequests: [], missingInformation: [],
     }),
   },
+  {
+    id: 'resp_abandon_pending_and_patch',
+    output_text: JSON.stringify({
+      replyDraft: '我会放弃之前失败的修改，再调整当前转场。', intent: 'revise', creativeConfigDelta: {},
+      stateActions: [], memoryActions: [],
+      skillRequests: [{ skillId: 'v2-timeline-authoring', purpose: '处理失败修改并更新转场' }],
+      toolRequests: [
+        {
+          ref: 'dismiss_failed_patch', toolId: 'timeline.pending.dismiss', skillId: 'v2-timeline-authoring',
+          arguments: { callId: 'failed_patch_to_abandon' }, requestedMode: 'preview', dependsOn: [],
+        },
+        {
+          ref: 'patch_after_dismiss', toolId: 'timeline.patch', skillId: 'v2-timeline-authoring',
+          arguments: { scope: 'transition', transitionIds: ['transition_restore_target'], instruction: '改成淡化转场' },
+          requestedMode: 'preview', dependsOn: ['dismiss_failed_patch'],
+        },
+      ],
+      missingInformation: [],
+    }),
+  },
   ...Array.from({ length: 3 }, (_, index) => ({
     id: `resp_material_${index + 1}`,
     output_text: JSON.stringify({
@@ -244,6 +269,7 @@ const originalFetch = globalThis.fetch
 let dispatchCount = 0
 const authorizedDraftComponentsSeen: string[][] = []
 const dispatchedContextMaterialIds: string[][] = []
+const dismissalAuthorizationsSeen: Array<{ granted: boolean; evidence?: string } | undefined> = []
 globalThis.fetch = async (_url, init) => {
   requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
   const reply = replies.shift()
@@ -303,6 +329,9 @@ async function turn(
       if (stage.toolRequest.ref === 'apply_transition') {
         authorizedDraftComponentsSeen.push(dispatchInput.authorizedDraftComponentIds ?? [])
         dispatchedContextMaterialIds.push(dispatchInput.context.materials.map((item) => item.id))
+      }
+      if (stage.toolRequest.toolId === 'timeline.pending.dismiss') {
+        dismissalAuthorizationsSeen.push(dispatchInput.authorization)
       }
       const ok = !failedRefs.has(stage.toolRequest.ref)
       return {
@@ -611,9 +640,9 @@ try {
   }, { hasV2Timeline: true, v2SceneCount: 3 }, new Set(), true)
   const proposedPatch = componentTurn.find((event) => (
     event.type === 'tool_proposed' && event.toolId === 'timeline.patch'
-  )) as { callId: string; revisionIntent?: { scope?: string; targetIds?: string[] } }
+  )) as { callId: string; revisionIntent?: { scope?: string; targetDisplay?: string[] } }
   assert.equal(proposedPatch.revisionIntent?.scope, 'transition')
-  assert.deepEqual(proposedPatch.revisionIntent?.targetIds, ['transition_random'])
+  assert.equal(proposedPatch.revisionIntent?.targetDisplay?.length, 1)
   assert.equal(
     componentTurn.some((event) => event.type === 'tool_started' || event.type === 'tool_result'),
     false,
@@ -628,6 +657,11 @@ try {
     'confirm the pending revision',
     {
       ...baseContext,
+      explicitUiControls: {
+        aspectRatio: '9:16' as const,
+        durationSec: 30,
+        styleIntensity: 'weak' as const,
+      },
       materials: [{
         id: 'mat_late', type: 'image' as const, name: 'late.png',
         url: '/uploads/late.png', tags: ['late'],
@@ -649,6 +683,19 @@ try {
     dispatchedContextMaterialIds,
     [['mat_proposal']],
     'confirmation must execute with the context shown when the proposal was created',
+  )
+  assert.deepEqual(
+    (confirmedComponentTurn.find((event) => event.type === 'workspace_session') as {
+      state: { context: { effectiveCreativeConfig?: { aspectRatio?: string; durationSec?: number; styleIntensity?: string } } }
+    }).state.context.effectiveCreativeConfig,
+    {
+      aspectRatio: '16:9',
+      durationSec: 15,
+      styleIntensity: 'strong',
+      sources: { aspectRatio: 'ui', durationSec: 'ui', styleIntensity: 'ui' },
+      conflicts: [],
+    },
+    'confirmation-time UI controls must not replace the configuration frozen with the proposal',
   )
   assert.equal(
     (confirmedComponentTurn.find((event) => event.type === 'workspace_session') as {
@@ -685,7 +732,7 @@ try {
   assert.equal(dispatchCount, dispatchCountBeforeStaleConfirmation)
   assert.match(
     String((staleConfirmation.find((event) => event.type === 'error') as { message: string }).message),
-    /当前方案已经发生了其他修改.*重新提出修改/,
+    /(?:待确认的修改.*|当前方案已经发生了其他修改.*)重新提出修改/,
   )
   const latestRestoredDraft = await restoredDraftRepository.getDraft(restoredDraft.id, 1)
   const crossDraftProposalTurn = await turn('把当前转场改成缩放', {
@@ -716,7 +763,7 @@ try {
   assert.equal(dispatchCount, dispatchCountBeforeCrossDraftConfirmation)
   assert.match(
     String((crossDraftConfirmation.find((event) => event.type === 'error') as { message: string }).message),
-    /当前方案已经发生了其他修改.*重新提出修改/,
+    /(?:待确认的修改.*|当前方案已经发生了其他修改.*)重新提出修改/,
   )
   assert.equal(
     (crossDraftConfirmation.find((event) => event.type === 'workspace_session') as {
@@ -724,6 +771,40 @@ try {
     }).state.draftId,
     otherDraft.id,
     'rejecting a stale proposal must preserve the draft the user has already switched to',
+  )
+  const dismissSourceDraft = await restoredDraftRepository.getDraft(restoredDraft.id, 1)
+  assert.ok(dismissSourceDraft)
+  await restoredDraftRepository.markPendingRevision({
+    draftId: dismissSourceDraft.id,
+    userId: 1,
+    baseRevision: dismissSourceDraft.revision,
+    callId: 'failed_patch_to_abandon',
+    instruction: '之前失败的转场修改',
+  })
+  const abandonProposalTurn = await turn('放弃之前失败的修改，并把当前转场改成淡化', {
+    ...baseContext,
+    currentTimeline: {
+      kind: 'v2_timeline', status: 'saved', draftId: dismissSourceDraft.id, currentRevision: dismissSourceDraft.revision,
+    },
+  }, { hasV2Timeline: true, v2SceneCount: 2 })
+  const abandonPatchProposal = abandonProposalTurn.find((event) => (
+    event.type === 'tool_proposed' && event.toolId === 'timeline.patch'
+  )) as { callId: string }
+  assert.ok(abandonPatchProposal.callId)
+  const confirmedAbandonment = await turn(
+    '确认执行已解析的修改提案。',
+    baseContext,
+    {},
+    new Set(),
+    false,
+    false,
+    { confirmationId: abandonPatchProposal.callId, action: 'confirm' },
+  )
+  assert.equal(confirmedAbandonment.some((event) => event.type === 'tool_result'), true)
+  assert.deepEqual(
+    dismissalAuthorizationsSeen,
+    [{ granted: true, evidence: '放弃之前失败的修改，并把当前转场改成淡化' }],
+    'confirmation must reuse the original user authorization frozen with the proposal',
   )
   const materialContext = {
     ...baseContext,
@@ -809,7 +890,7 @@ try {
     state: { context: { sampleVideo?: unknown } }
   }).state
   assert.equal(clearedSampleState.context.sampleVideo, undefined, 'an explicit sample clear must persist')
-  assert.equal(requests.length, 21)
+  assert.equal(requests.length, 22)
 } finally {
   globalThis.fetch = originalFetch
   await restoredDraftRepository.deleteDraft(restoredDraft.id, 1)

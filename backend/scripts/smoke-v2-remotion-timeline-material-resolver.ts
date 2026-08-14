@@ -49,6 +49,7 @@ const spec = {
       intended_use: 'Keep the ridge composition while adding natural motion.',
     }],
     sample_methods: ['Reveal the moving subject after the establishing frame.'],
+    applied_preferences: ['Prefer restrained documentary pacing.'],
   },
   assets: base.assets
     .filter((asset) => asset.id !== 'main_video_asset')
@@ -112,6 +113,7 @@ assert.equal(boundGenerationImageUrl, 'https://cdn.example.com/source-landscape.
 assert.match(boundGenerationPrompt ?? '', /calm documentary/)
 assert.match(boundGenerationPrompt ?? '', /mountain ridge/)
 assert.match(boundGenerationPrompt ?? '', /Reveal the moving subject/)
+assert.match(boundGenerationPrompt ?? '', /Prefer restrained documentary pacing/)
 assert.match(resolved.report.generation_trace[0]?.request_fingerprint ?? '', /^[a-f0-9]{64}$/)
 assert.equal(resolved.report.generation_trace[0]?.input_asset_id, 'hero_image_asset')
 assert.equal(validateRemotionTimelineSpec(resolved.spec).ok, true)

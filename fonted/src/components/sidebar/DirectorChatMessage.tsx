@@ -84,11 +84,13 @@ function AttachmentChips({ items }: { items: InputAttachment[] }) {
 interface DirectorChatMessageBubbleProps {
   message: DirectorChatMessage
   onRevisionDecision?: (input: { confirmationId: string; action: 'confirm' | 'reject' }) => void
+  onCreationDecision?: (input: { confirmationId: string; action: 'confirm' | 'reject' }) => void
 }
 
 export function DirectorChatMessageBubble({
   message,
   onRevisionDecision,
+  onCreationDecision,
 }: DirectorChatMessageBubbleProps) {
   const setInputText = useCreationStore((s) => s.setInputText)
   const isUser = message.role === 'user'
@@ -175,7 +177,6 @@ export function DirectorChatMessageBubble({
               <p><span className="text-zinc-500">原始要求：</span>{message.revisionIntent.originalRequest}</p>
               <p><span className="text-zinc-500">范围：</span>{revisionScopeLabel(message.revisionIntent.scope)}</p>
               <p><span className="text-zinc-500">目标：</span>{message.revisionIntent.targetDisplay?.join('；') || '当前方案'}</p>
-              <p><span className="text-zinc-500">修改指令：</span>{message.revisionIntent.instruction}</p>
               <p><span className="text-zinc-500">预计影响：</span>{message.revisionIntent.expectedImpact}</p>
               <p><span className="text-zinc-500">保护边界：</span>{message.revisionIntent.protectedBoundary}</p>
               <div className="flex flex-wrap gap-1.5">
@@ -205,12 +206,54 @@ export function DirectorChatMessageBubble({
             </div>
           ) : null}
 
+          {message.creationSummary ? (
+            <div className="mt-2 space-y-2 rounded-lg border border-violet-500/20 bg-black/20 p-2 text-[11px] text-zinc-300">
+              <p className="font-medium text-violet-200">开始生成方案前，请确认创作摘要</p>
+              <p><span className="text-zinc-500">目标：</span>{message.creationSummary.goal}</p>
+              <p><span className="text-zinc-500">受众：</span>{message.creationSummary.audience ?? '尚未说明'}</p>
+              <p><span className="text-zinc-500">画幅：</span>{message.creationSummary.aspectRatio ?? '按当前设置'}</p>
+              <p><span className="text-zinc-500">时长：</span>{message.creationSummary.durationSec ? `${message.creationSummary.durationSec} 秒` : '按当前设置'}</p>
+              <p><span className="text-zinc-500">风格强度：</span>{message.creationSummary.styleIntensity ?? '按当前设置'}</p>
+              <p><span className="text-zinc-500">必须保留：</span>{message.creationSummary.mustKeep.join('；') || '无额外保留项'}</p>
+              {message.creationSummary.openQuestions.length ? (
+                <p><span className="text-zinc-500">待确认：</span>{message.creationSummary.openQuestions.join('；')}</p>
+              ) : null}
+              <div className="flex flex-wrap gap-1.5">
+                {message.creationDecisionStatus === 'confirmed'
+                  || message.creationDecisionStatus === 'rejected'
+                  || message.creationDecisionStatus === 'failed' ? (
+                  <span className="rounded border border-zinc-600/30 px-2 py-1 text-zinc-400">
+                    {message.creationDecisionStatus === 'confirmed'
+                      ? '已按摘要生成方案'
+                      : message.creationDecisionStatus === 'failed' ? '方案未能生成' : '已取消生成'}
+                  </span>
+                ) : (
+                  <>
+                    <button type="button" disabled={message.creationDecisionStatus === 'confirming' || message.creationDecisionStatus === 'rejecting'}
+                      className="rounded border border-emerald-400/30 px-2 py-1 text-emerald-200 disabled:opacity-50"
+                      onClick={() => onCreationDecision?.({ confirmationId: message.creationConfirmationId!, action: 'confirm' })}>
+                      确认并生成方案
+                    </button>
+                    <button type="button" disabled={message.creationDecisionStatus === 'confirming' || message.creationDecisionStatus === 'rejecting'}
+                      className="rounded border border-zinc-500/30 px-2 py-1 text-zinc-300 disabled:opacity-50"
+                      onClick={() => onCreationDecision?.({ confirmationId: message.creationConfirmationId!, action: 'reject' })}>
+                      暂不生成
+                    </button>
+                  </>
+                )}
+                <button type="button" className="rounded border border-violet-400/25 px-2 py-1 text-violet-200"
+                  onClick={() => setInputText(`请调整这份创作摘要。原始目标：${message.creationSummary!.goal}`)}>
+                  调整摘要
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           {message.revisionReceipt ? (
             <div className="mt-2 space-y-1.5 rounded-lg border border-violet-500/20 bg-black/20 p-2 text-[11px] text-zinc-300">
               <p><span className="text-zinc-500">原始要求：</span>{message.revisionReceipt.originalRequest}</p>
               <p><span className="text-zinc-500">范围：</span>{revisionScopeLabel(message.revisionReceipt.scope)}</p>
               <p><span className="text-zinc-500">目标：</span>{message.revisionReceipt.targetDisplay?.join('；') || '当前方案'}</p>
-              <p><span className="text-zinc-500">修改指令：</span>{message.revisionReceipt.instruction}</p>
               <p><span className="text-zinc-500">预计影响：</span>{message.revisionReceipt.expectedImpact}</p>
               <p><span className="text-zinc-500">保护边界：</span>{message.revisionReceipt.protectedBoundary}</p>
               {message.revisionReceipt.actualDiff ? (

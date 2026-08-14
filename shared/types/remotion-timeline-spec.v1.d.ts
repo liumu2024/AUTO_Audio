@@ -148,6 +148,8 @@ export interface V2CreativeBrief {
         intended_use: string;
     }>;
     sample_methods: string[];
+    /** Recalled user preferences the planner actually adopted for this plan. */
+    applied_preferences: string[];
     /** Server-maintained recovery state; model output cannot write this field. */
     planning_gaps?: V2CreativePlanningGap[];
 }

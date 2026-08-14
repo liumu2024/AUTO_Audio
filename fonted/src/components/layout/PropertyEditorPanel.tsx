@@ -1,6 +1,5 @@
 import { SlidersHorizontal } from 'lucide-react'
 
-import { V2SamplePropertyInspector } from '@/components/layout/V2SamplePropertyInspector'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { v2TransitionDisplayText } from '@/lib/v2-timeline-ui'
@@ -11,28 +10,23 @@ import {
   type V2PlanScenePresentation,
   type V2PlanVisibleText,
 } from '@/services/director/v2DirectorDraftWorkspace'
-import { useEditorStore } from '@/stores/editorStore'
 import { useCreationStore } from '@/stores/creationStore'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 
-/** V2-only inspector. Sample facts are read-only; timeline scene text stays editable. */
+/** V2-only inspector for the editable timeline. */
 export function PropertyEditorPanel() {
-  const mode = useEditorStore((state) => state.timelineMode)
-  if (mode === 'sample') return <V2SamplePropertyInspector />
   return <V2TimelinePropertyInspector />
 }
 
 function V2TimelinePropertyInspector() {
   const spec = useV2TimelineStore((state) => state.spec)
-  const preview = useV2TimelineStore((state) => state.preview)
   const selectedClipId = useV2TimelineStore((state) => state.selectedClipId)
   const updateSpec = useV2TimelineStore((state) => state.updateSpec)
   const setInputText = useCreationStore((state) => state.setInputText)
   const sceneId = spec ? resolveV2PlanSceneIdFromClip(spec, selectedClipId) : undefined
   const scene = sceneId ? spec?.scenes.find((item) => item.id === sceneId) : undefined
-  const presentation = spec ? buildV2PlanPresentation(spec, preview?.review.scenes) : undefined
+  const presentation = spec ? buildV2PlanPresentation(spec) : undefined
   const sceneFacts = sceneId ? presentation?.scenes.find((item) => item.id === sceneId) : undefined
-  const review = sceneId ? preview?.review.scenes.find((item) => item.id === sceneId) : undefined
   const selectedOverlayId = selectedClipId?.startsWith('v2-overlay-')
     ? selectedClipId.slice('v2-overlay-'.length)
     : undefined
@@ -57,7 +51,7 @@ function V2TimelinePropertyInspector() {
               <p className="text-sm font-semibold text-violet-100">{sceneFacts?.title ?? scene.id}</p>
               <p className="mt-1 font-mono text-[10px] text-violet-200/70">{scene.start_sec.toFixed(2)}s – {(scene.start_sec + scene.duration_sec).toFixed(2)}s</p>
             </section>
-            <Detail label="镜头内容" value={sceneFacts?.description ?? review?.description_zh ?? review?.source_zh} />
+            <Detail label="镜头内容" value={sceneFacts?.description} />
             {sceneFacts ? <SceneFacts scene={sceneFacts} selectedOverlayId={selectedOverlayId} /> : null}
             <label className="block space-y-1.5">
               <span className="text-[10px] font-medium text-zinc-500">镜头备注（不会自动执行）</span>

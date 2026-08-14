@@ -11,7 +11,7 @@ export interface V2TimelineDraftHistoryCardInput {
   createdAt: string
   updatedAt: string
   latestRun?: {
-    status: 'running' | 'completed' | 'failed'
+    status: 'running' | 'completed' | 'failed' | 'cancelled'
     outputUrl?: string
   }
 }
@@ -26,7 +26,7 @@ export interface V2TimelineDraftHistoryCard {
   sceneCount?: number
   visibleTextCount?: number
   revision?: number
-  status: 'draft' | 'running' | 'completed' | 'failed'
+  status: 'draft' | 'running' | 'completed' | 'failed' | 'cancelled'
   createdAt: string
   updatedAt: string
   previewUrl?: string
@@ -66,6 +66,8 @@ export function mapV2TimelineDraftHistoryCard(
           ? 'running'
           : runStatus === 'failed'
             ? 'failed'
+            : runStatus === 'cancelled'
+              ? 'cancelled'
             : 'draft',
     createdAt: draft.createdAt,
     updatedAt: draft.updatedAt,

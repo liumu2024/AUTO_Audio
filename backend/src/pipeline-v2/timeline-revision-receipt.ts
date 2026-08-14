@@ -87,16 +87,8 @@ export function buildV2TimelineRevisionIntent(input: {
   return {
     callId: input.callId,
     originalRequest: input.userRequest,
-    instruction: input.userRequest,
     scope: typedScope,
-    targetIds,
     targetDisplay: display,
-    ...(typedScope === 'global' && (input.arguments.mode === 'brief_update' || input.arguments.mode === 'full_replan')
-      ? { globalMode: input.arguments.mode }
-      : {}),
-    ...(typedScope === 'structure' && (input.arguments.durationMode === 'preserve_range' || input.arguments.durationMode === 'resize_timeline')
-      ? { durationMode: input.arguments.durationMode }
-      : {}),
     expectedImpact: `将调整 ${target} 的${IMPACT[typedScope]}`,
     protectedBoundary: BOUNDARY[typedScope],
   }

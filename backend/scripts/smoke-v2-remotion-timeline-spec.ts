@@ -41,6 +41,7 @@ const planningGapSpec = {
       intended_use: 'Use as a faithful visual reference.',
     }],
     sample_methods: [],
+    applied_preferences: [],
     planning_gaps: [{ area: 'image_understanding' as const, message: 'Image facts are not available yet.' }],
   },
 }

@@ -1,6 +1,15 @@
 import type { DirectorContext } from './director-context.js'
-import type { DirectorTimelineRevisionIntent } from './director-stream.js'
+import type { DirectorCreativeSummary, DirectorTimelineRevisionIntent } from './director-stream.js'
 import type { DirectorConversationRuntime } from '../lib/director-understanding.js'
+
+export interface DirectorFrozenExecutionContext {
+  context: DirectorContext
+  runtime: DirectorConversationRuntime
+  confirmedRequirements: ConfirmedRequirement[]
+  selectedItemId?: string
+  recalledCreativeMemories: string[]
+  recalledCreativeKnowledge: string[]
+}
 
 export interface DirectorPendingTimelineRevisionConfirmation {
   confirmationId: string
@@ -21,14 +30,18 @@ export interface DirectorPendingTimelineRevisionConfirmation {
   }>
   revisionIntents: DirectorTimelineRevisionIntent[]
   /** Planner-affecting facts frozen when the user reviewed this proposal. */
-  executionContext: {
-    context: DirectorContext
-    runtime: DirectorConversationRuntime
-    confirmedRequirements: ConfirmedRequirement[]
-    selectedItemId?: string
-    recalledCreativeMemories: string[]
-    recalledCreativeKnowledge: string[]
-  }
+  executionContext: DirectorFrozenExecutionContext
+}
+
+export interface DirectorPendingTimelinePlanConfirmation {
+  confirmationId: string
+  originalTurnRequestId: string
+  originalRequest: string
+  skillRequests: Array<{ skillId: string; purpose: string }>
+  resolvedStateActionRefs: string[]
+  toolRequests: DirectorPendingTimelineRevisionConfirmation['toolRequests']
+  creationSummary: DirectorCreativeSummary
+  executionContext: DirectorFrozenExecutionContext
 }
 
 export type DirectorWorkspaceTurnRole = 'user' | 'assistant' | 'system'
@@ -68,6 +81,8 @@ export interface DirectorWorkspaceState {
   }>
   /** Server-validated revision plan waiting for an explicit UI decision. */
   pendingTimelineRevisionConfirmation?: DirectorPendingTimelineRevisionConfirmation
+  /** First-plan execution waiting for the user to confirm the creative summary. */
+  pendingTimelinePlanConfirmation?: DirectorPendingTimelinePlanConfirmation
   rollingSummary: string
   turns: DirectorWorkspaceTurn[]
   responseId?: string

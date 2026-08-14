@@ -50,6 +50,8 @@ interface LocalV2TimelineRenderRun {
   traceDir: string | null
   materialResolutionJson: unknown
   evaluationJson: unknown
+  providerSubmitClaims: number
+  providerSubmissionsClosed: boolean
   createdAt: string
   completedAt: string | null
 }
@@ -170,7 +172,11 @@ function loadState(): LocalDbState {
     ...saved,
     v2TimelineDrafts: saved.v2TimelineDrafts ?? [],
     v2TimelineRevisions: saved.v2TimelineRevisions ?? [],
-    v2TimelineRenderRuns: saved.v2TimelineRenderRuns ?? [],
+    v2TimelineRenderRuns: (saved.v2TimelineRenderRuns ?? []).map((run) => ({
+      ...run,
+      providerSubmitClaims: Number(run.providerSubmitClaims ?? 0),
+      providerSubmissionsClosed: Boolean(run.providerSubmissionsClosed ?? false),
+    })),
     creativeMemories: (saved.creativeMemories ?? []).map((memory) => ({
       ...memory,
       scopeKey: memory.scopeKey || localMemoryScopeKey(memory),
@@ -191,8 +197,15 @@ function clone<T>(value: T): T {
 }
 
 function localWhereValueMatches(actual: unknown, expected: unknown): boolean {
-  if (expected && typeof expected === 'object' && 'equals' in expected) {
-    return localWhereValueMatches(actual, (expected as { equals: unknown }).equals)
+  if (expected && typeof expected === 'object') {
+    if ('equals' in expected) {
+      return localWhereValueMatches(actual, (expected as { equals: unknown }).equals)
+    }
+    if ('gt' in expected) {
+      return typeof actual === 'number'
+        && typeof (expected as { gt: unknown }).gt === 'number'
+        && actual > (expected as { gt: number }).gt
+    }
   }
   if (Object.is(actual, expected)) return true
   if (actual == null || expected == null || typeof actual !== 'object' || typeof expected !== 'object') return false
@@ -355,6 +368,8 @@ function makeLocalPrisma() {
               traceDir: (runInput.traceDir as string | null | undefined) ?? null,
               materialResolutionJson: runInput.materialResolutionJson ?? null,
               evaluationJson: runInput.evaluationJson ?? null,
+              providerSubmitClaims: Number(runInput.providerSubmitClaims ?? 0),
+              providerSubmissionsClosed: Boolean(runInput.providerSubmissionsClosed ?? false),
               createdAt: new Date().toISOString(),
               completedAt: null,
             })
@@ -657,6 +672,19 @@ function makeLocalPrisma() {
           ))
         return receipt ? idempotencyReceiptOut(receipt) : null
       },
+      findMany: async (args: { where?: Record<string, unknown>; orderBy?: Record<string, 'asc' | 'desc'> }) => {
+        const rows = state.v2IdempotencyReceipts.filter((item) =>
+          Object.entries(args.where ?? {}).every(
+            ([key, value]) => item[key as keyof LocalV2IdempotencyReceipt] === value,
+          ))
+        const [orderKey, orderDirection] = Object.entries(args.orderBy ?? {})[0] ?? []
+        if (orderKey) rows.sort((left, right) => {
+          const comparison = String(left[orderKey as keyof LocalV2IdempotencyReceipt])
+            .localeCompare(String(right[orderKey as keyof LocalV2IdempotencyReceipt]))
+          return orderDirection === 'desc' ? -comparison : comparison
+        })
+        return rows.map(idempotencyReceiptOut)
+      },
       update: async (args: { where: Record<string, unknown>; data: Partial<LocalV2IdempotencyReceipt> }) =>
         write(() => {
           const receipt = state.v2IdempotencyReceipts.find((item) => item.id === args.where.id)
@@ -682,6 +710,8 @@ function makeLocalPrisma() {
             traceDir: (args.data.traceDir as string | null | undefined) ?? null,
             materialResolutionJson: args.data.materialResolutionJson ?? null,
             evaluationJson: args.data.evaluationJson ?? null,
+            providerSubmitClaims: Number(args.data.providerSubmitClaims ?? 0),
+            providerSubmissionsClosed: Boolean(args.data.providerSubmissionsClosed ?? false),
             createdAt: new Date().toISOString(),
             completedAt: null,
           }
@@ -700,6 +730,38 @@ function makeLocalPrisma() {
           if (data.completedAt instanceof Date) run.completedAt = data.completedAt.toISOString()
           return v2RenderRunOut(run)
         }),
+      updateMany: async (args: {
+        where?: Record<string, unknown>
+        data: Partial<LocalV2TimelineRenderRun>
+      }) => write(() => {
+        const runs = state.v2TimelineRenderRuns.filter((run) =>
+          Object.entries(args.where ?? {}).every(
+            ([key, value]) => localWhereValueMatches(run[key as keyof LocalV2TimelineRenderRun], value),
+          ),
+        )
+        for (const run of runs) {
+          const data = args.data as Record<string, unknown>
+          const next = clone(args.data) as Record<string, unknown>
+          const mutableRun = run as unknown as Record<string, unknown>
+          for (const [key, value] of Object.entries(next)) {
+            if (value && typeof value === 'object' && !Array.isArray(value)) {
+              const increment = (value as { increment?: unknown }).increment
+              const decrement = (value as { decrement?: unknown }).decrement
+              if (typeof increment === 'number') {
+                mutableRun[key] = Number(mutableRun[key] ?? 0) + increment
+                continue
+              }
+              if (typeof decrement === 'number') {
+                mutableRun[key] = Number(mutableRun[key] ?? 0) - decrement
+                continue
+              }
+            }
+            mutableRun[key] = value
+          }
+          if (data.completedAt instanceof Date) run.completedAt = data.completedAt.toISOString()
+        }
+        return { count: runs.length }
+      }),
       findFirst: async (args: {
         where?: Record<string, unknown>
         orderBy?: Record<string, 'asc' | 'desc'>

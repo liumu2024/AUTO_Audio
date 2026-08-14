@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 
 import { classifyExternalUrlAccess } from '../../../shared/lib/external-url-access.js'
 import { env } from '../config/env.js'
@@ -54,6 +55,16 @@ function extractStatus(value: unknown): string | undefined {
   )?.toLowerCase()
 }
 
+function normalizedProviderStatus(status: string | undefined): 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'unknown' {
+  if (!status) return 'unknown'
+  if (['queued', 'pending'].includes(status)) return 'queued'
+  if (['running', 'processing', 'in_progress'].includes(status)) return 'running'
+  if (['succeeded', 'success', 'completed', 'done'].includes(status)) return 'succeeded'
+  if (['failed', 'error'].includes(status)) return 'failed'
+  if (['cancelled', 'canceled'].includes(status)) return 'cancelled'
+  return 'unknown'
+}
+
 function extractError(value: unknown): string | undefined {
   return (
     stringAt(value, ['error', 'message']) ??
@@ -92,8 +103,9 @@ function statusUrl(template: string, taskId: string): string {
   return template.replace('{id}', encodeURIComponent(taskId))
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+function requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs)
+  return signal ? AbortSignal.any([signal, timeout]) : timeout
 }
 
 function safeFilePart(value: string): string {
@@ -123,6 +135,7 @@ export function createArkSeedanceMaterialGenerationAdapter(
   async function submitTask(
     input: V2MaterialGenerationRequest,
     onDispatch: () => void,
+    signal?: AbortSignal,
   ): Promise<{ id?: string; raw: unknown }> {
     const imageUrl = input.inputImageUrl ?? options.defaultImageUrl ?? env.v2VideoGenerationDefaultImageUrl
     if (!apiKey) throw new Error('V2_VIDEO_GENERATION_API_KEY or ARK_API_KEY is not configured.')
@@ -162,7 +175,7 @@ export function createArkSeedanceMaterialGenerationAdapter(
         model,
         content,
       }),
-      signal: AbortSignal.timeout(Math.min(timeoutMs, 60_000)),
+      signal: requestSignal(Math.min(timeoutMs, 60_000), signal),
     })
     const raw = await readJsonResponse(response)
     if (!response.ok) {
@@ -171,25 +184,29 @@ export function createArkSeedanceMaterialGenerationAdapter(
     return { id: extractTaskId(raw), raw }
   }
 
-  async function pollTask(taskId: string): Promise<{ raw: unknown; videoUrl: string }> {
+  async function readTask(taskId: string, signal?: AbortSignal): Promise<{ raw: unknown; status?: string }> {
     if (!taskStatusUrlTemplate) throw new Error('V2_VIDEO_GENERATION_STATUS_URL_TEMPLATE is not configured.')
+    const response = await fetchImpl(statusUrl(taskStatusUrlTemplate, taskId), {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      signal: requestSignal(Math.min(pollIntervalMs + 20_000, 60_000), signal),
+    })
+    const raw = await readJsonResponse(response)
+    if (!response.ok) {
+      throw new Error(`Ark Seedance status failed ${response.status}: ${JSON.stringify(raw).slice(0, 1000)}`)
+    }
+    return { raw, status: extractStatus(raw) }
+  }
+
+  async function pollTask(taskId: string, signal?: AbortSignal): Promise<{ raw: unknown; videoUrl: string }> {
     const deadline = Date.now() + timeoutMs
     let lastRaw: unknown
     while (Date.now() < deadline) {
-      const response = await fetchImpl(statusUrl(taskStatusUrlTemplate, taskId), {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        signal: AbortSignal.timeout(Math.min(pollIntervalMs + 20_000, 60_000)),
-      })
-      const raw = await readJsonResponse(response)
+      const { raw, status: currentStatus } = await readTask(taskId, signal)
       lastRaw = raw
-      if (!response.ok) {
-        throw new Error(`Ark Seedance status failed ${response.status}: ${JSON.stringify(raw).slice(0, 1000)}`)
-      }
-      const currentStatus = extractStatus(raw)
       const videoUrl = extractVideoUrl(raw)
       if (videoUrl && (!currentStatus || ['succeeded', 'success', 'completed', 'done'].includes(currentStatus))) {
         return { raw, videoUrl }
@@ -197,7 +214,7 @@ export function createArkSeedanceMaterialGenerationAdapter(
       if (currentStatus && ['failed', 'error', 'cancelled', 'canceled'].includes(currentStatus)) {
         throw new Error(extractError(raw) ?? `Ark Seedance task ${taskId} failed with status ${currentStatus}.`)
       }
-      await sleep(pollIntervalMs)
+      await delay(pollIntervalMs, undefined, { signal })
     }
     throw new Error(`Ark Seedance task ${taskId} timed out. Last response: ${JSON.stringify(lastRaw).slice(0, 1000)}`)
   }
@@ -205,12 +222,13 @@ export function createArkSeedanceMaterialGenerationAdapter(
   async function downloadVideo(input: {
     url: string
     outputAssetId: string
+    signal?: AbortSignal
   }): Promise<string> {
     await mkdir(options.outputDir, { recursive: true })
     const outputPath = path.join(options.outputDir, `${safeFilePart(input.outputAssetId)}.raw.mp4`)
     const response = await fetchImpl(input.url, {
       method: 'GET',
-      signal: AbortSignal.timeout(Math.min(timeoutMs, 120_000)),
+      signal: requestSignal(Math.min(timeoutMs, 120_000), input.signal),
     })
     if (!response.ok) {
       throw new Error(`Ark Seedance video download failed ${response.status}.`)
@@ -221,6 +239,35 @@ export function createArkSeedanceMaterialGenerationAdapter(
   }
 
   return {
+    async getTaskStatus(providerTaskId) {
+      const { status } = await readTask(providerTaskId)
+      return { status: normalizedProviderStatus(status) }
+    },
+    async cancelTask(providerTaskId) {
+      const current = await readTask(providerTaskId)
+      const status = normalizedProviderStatus(current.status)
+      if (status !== 'queued') {
+        return { cancelled: status === 'cancelled', status, reason: `provider_task_${status}` }
+      }
+      if (!taskStatusUrlTemplate) return { cancelled: false, status: 'unknown', reason: 'status_endpoint_unavailable' }
+      const response = await fetchImpl(statusUrl(taskStatusUrlTemplate, providerTaskId), {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        signal: requestSignal(Math.min(timeoutMs, 60_000)),
+      })
+      const raw = await readJsonResponse(response)
+      if (!response.ok) {
+        return { cancelled: false, status: 'queued', reason: extractError(raw) ?? `cancel_failed_${response.status}` }
+      }
+      const confirmed = await readTask(providerTaskId).catch(() => undefined)
+      const cancelledStatus = normalizedProviderStatus(confirmed?.status)
+      return cancelledStatus === 'cancelled'
+        ? { cancelled: true, status: 'cancelled' }
+        : { cancelled: false, status: cancelledStatus, reason: 'provider_cancel_not_confirmed' }
+    },
     async generate(input, generationOptions): Promise<V2MaterialGenerationResult> {
       if (input.type !== 'generate_video') {
         return {
@@ -234,7 +281,7 @@ export function createArkSeedanceMaterialGenerationAdapter(
       try {
         const submitted = await submitTask(input, () => {
           requestDispatched = true
-        })
+        }, generationOptions?.signal)
         if (!submitted.id) {
           return {
             ok: false,
@@ -259,10 +306,11 @@ export function createArkSeedanceMaterialGenerationAdapter(
             }`,
           }
         }
-        const completed = await pollTask(submitted.id)
+        const completed = await pollTask(submitted.id, generationOptions?.signal)
         const src = await downloadVideo({
           url: completed.videoUrl,
           outputAssetId: input.outputAssetId,
+          signal: generationOptions?.signal,
         })
         return {
           ok: true,

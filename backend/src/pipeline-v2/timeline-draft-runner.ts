@@ -50,6 +50,7 @@ const inFlightRuns = new Map<string, {
   requestHash: string
   promise: Promise<V2TimelineDraftRunExecutionResult>
 }>()
+const activeRunControllers = new Map<string, AbortController>()
 
 export class V2TimelineIdempotencyRunningError extends Error {
   constructor(readonly renderRunId: string) {
@@ -67,6 +68,148 @@ export class V2TimelineDeliveryBlockedError extends Error {
   constructor(readonly readiness: V2TimelineDeliveryReadiness) {
     super(readiness.missing.map((item) => item.description).join('；') || 'V2 timeline delivery is blocked.')
   }
+}
+
+export interface V2TimelineRenderRunStatus {
+  status: V2TimelineRenderRunRecord['status']
+  canCancel: boolean
+  providerStatuses: Array<'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'unknown'>
+}
+
+async function providerReceipts(input: {
+  repository: V2IdempotencyRepository
+  userId: number
+  draftId: string
+  runId: string
+}) {
+  return (await input.repository.list({
+    userId: input.userId,
+    draftId: input.draftId,
+    operation: 'material.generate',
+  })).filter((receipt) => receipt.resourceKey.startsWith(`${input.runId}:`))
+}
+
+async function readProviderStatus(
+  adapter: V2MaterialGenerationAdapter | undefined,
+  taskId: string,
+): Promise<'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'unknown'> {
+  if (!adapter?.getTaskStatus) return 'unknown'
+  try {
+    return (await adapter.getTaskStatus(taskId)).status
+  } catch {
+    return 'unknown'
+  }
+}
+
+export async function inspectV2TimelineDraftRun(input: {
+  repository: V2TimelineDraftRepository
+  idempotency?: V2IdempotencyRepository
+  materialAdapter?: V2MaterialGenerationAdapter
+  draftId: string
+  runId: string
+  userId: number
+}): Promise<V2TimelineRenderRunStatus | null> {
+  const run = await input.repository.getRenderRun(input.runId, input.userId)
+  if (!run || run.draftId !== input.draftId) return null
+  if (run.status !== 'running') return { status: run.status, canCancel: false, providerStatuses: [] }
+  if (run.providerSubmitClaims > 0) {
+    return { status: 'running', canCancel: false, providerStatuses: ['unknown'] }
+  }
+  const receipts = await providerReceipts({
+    repository: input.idempotency ?? createV2IdempotencyRepository(),
+    userId: input.userId,
+    draftId: input.draftId,
+    runId: input.runId,
+  })
+  if (receipts.some((receipt) => receipt.phase === 'submitting' && !receipt.providerTaskId)) {
+    return { status: 'running', canCancel: false, providerStatuses: ['unknown'] }
+  }
+  const providerStatuses = await Promise.all(receipts
+    .filter((receipt): receipt is V2IdempotencyReceiptRecord & { providerTaskId: string } => Boolean(receipt.providerTaskId))
+    .map((receipt) => readProviderStatus(input.materialAdapter, receipt.providerTaskId)))
+  const canCancel = providerStatuses.every((status) => status === 'queued'
+    || status === 'succeeded'
+    || status === 'failed'
+    || status === 'cancelled')
+  return { status: 'running', canCancel, providerStatuses }
+}
+
+export async function cancelV2TimelineDraftRun(input: {
+  repository: V2TimelineDraftRepository
+  idempotency?: V2IdempotencyRepository
+  materialAdapter?: V2MaterialGenerationAdapter
+  draftId: string
+  runId: string
+  userId: number
+}): Promise<{ cancelled: boolean; status: V2TimelineRenderRunRecord['status']; reason?: string }> {
+  const cancel = async () => {
+    const run = await input.repository.getRenderRun(input.runId, input.userId)
+    if (!run || run.draftId !== input.draftId) {
+      return { cancelled: false, status: 'failed' as const, reason: 'render_run_not_found' }
+    }
+    if (run.status !== 'running') return { cancelled: run.status === 'cancelled', status: run.status }
+    if (!await input.repository.closeRenderRunProviderSubmissions(input.runId)) {
+      const latest = await input.repository.getRenderRun(input.runId, input.userId)
+      return { cancelled: latest?.status === 'cancelled', status: latest?.status ?? 'failed' }
+    }
+    const closedRun = await input.repository.getRenderRun(input.runId, input.userId)
+    if (!closedRun) {
+      return { cancelled: false, status: 'failed' as const, reason: 'render_run_not_found' }
+    }
+    if (closedRun.providerSubmitClaims > 0) {
+      await input.repository.failRenderRun(input.runId)
+      activeRunControllers.get(input.runId)?.abort(new DOMException('Render cancelled', 'AbortError'))
+      return { cancelled: false, status: 'failed' as const, reason: 'provider_submit_state_unknown' }
+    }
+
+    const receipts = await providerReceipts({
+      repository: input.idempotency ?? createV2IdempotencyRepository(),
+      userId: input.userId,
+      draftId: input.draftId,
+      runId: input.runId,
+    })
+    if (receipts.some((receipt) => receipt.phase === 'submitting' && !receipt.providerTaskId)) {
+      await input.repository.failRenderRun(input.runId)
+      activeRunControllers.get(input.runId)?.abort(new DOMException('Render cancelled', 'AbortError'))
+      return { cancelled: false, status: 'failed' as const, reason: 'provider_submit_state_unknown' }
+    }
+    const providerTasks = await Promise.all(receipts
+      .filter((receipt): receipt is V2IdempotencyReceiptRecord & { providerTaskId: string } => Boolean(receipt.providerTaskId))
+      .map(async (receipt) => ({
+        taskId: receipt.providerTaskId,
+        status: await readProviderStatus(input.materialAdapter, receipt.providerTaskId),
+      })))
+    if (providerTasks.some(({ status }) => status === 'running' || status === 'unknown')) {
+      activeRunControllers.get(input.runId)?.abort(new DOMException('Render cancelled', 'AbortError'))
+      await input.repository.failRenderRun(input.runId)
+      return { cancelled: false, status: 'failed' as const, reason: 'provider_task_not_cancellable' }
+    }
+    const cancellationResults = await Promise.all(providerTasks
+      .filter(({ status }) => status === 'queued')
+      .map(async ({ taskId }) => input.materialAdapter?.cancelTask?.(taskId).catch(() => undefined)))
+    const rejectedCancellation = cancellationResults.find((result) => !result?.cancelled)
+    if (cancellationResults.some((result) => !result?.cancelled)) {
+      activeRunControllers.get(input.runId)?.abort(new DOMException('Render cancelled', 'AbortError'))
+      await input.repository.failRenderRun(input.runId)
+      return {
+        cancelled: false,
+        status: 'failed' as const,
+        reason: rejectedCancellation?.reason ?? 'provider_cancel_not_confirmed',
+      }
+    }
+    const cancelled = await input.repository.cancelRenderRun(input.runId)
+    if (cancelled) {
+      activeRunControllers.get(input.runId)?.abort(new DOMException('Render cancelled', 'AbortError'))
+      return { cancelled: true, status: 'cancelled' as const }
+    }
+    const latest = await input.repository.getRenderRun(input.runId, input.userId)
+    return latest?.status === 'cancelled'
+      ? { cancelled: true, status: 'cancelled' as const }
+      : latest?.status === 'running'
+        ? { cancelled: false, status: 'running' as const, reason: 'provider_task_not_cancellable' }
+        : { cancelled: false, status: latest?.status ?? 'failed', reason: 'render_run_already_finished' }
+  }
+  return cancel()
 }
 
 function resultFromCompletedRun(input: {
@@ -202,6 +345,30 @@ async function executeV2TimelineDraftRunOnce(
   }
   const execution = (async () => {
     let renderRunCreated = false
+    const abortController = new AbortController()
+    const withProviderSubmissionPermit = async <T>(operation: () => Promise<T>): Promise<T> => {
+      const claimed = await input.repository.claimRenderRunProviderSubmission(runId)
+      if (!claimed) {
+        abortController.abort(new DOMException('Render cancelled', 'AbortError'))
+        abortController.signal.throwIfAborted()
+      }
+      let operationFailed = false
+      try {
+        return await operation()
+      } catch (error) {
+        operationFailed = true
+        throw error
+      } finally {
+        await input.repository.releaseRenderRunProviderSubmission(runId).catch((releaseError) => {
+          if (operationFailed) {
+            console.error(`[v2-timeline-run] Provider-submit claim release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`)
+            return
+          }
+          throw releaseError
+        })
+      }
+    }
+    activeRunControllers.set(runId, abortController)
     try {
       await input.repository.createRenderRun({
         id: runId,
@@ -211,6 +378,9 @@ async function executeV2TimelineDraftRunOnce(
         sourceSpec: source.spec,
       })
       renderRunCreated = true
+      await input.onProgress?.({
+        phase: 'prepare', progress: 0, message: '成片任务已经开始。', renderRunId: runId,
+      })
       await ensureTimelineRenderComponentVisualEvidence(source.spec)
       const previousCompletedRun = await input.repository.getLatestCompletedRenderRun(input.draftId, input.userId)
       await idempotency.update({ id: reservation.receipt.id, phase: 'rendering', resultRef: runId })
@@ -223,7 +393,10 @@ async function executeV2TimelineDraftRunOnce(
         {
           materialAdapter: input.materialAdapter,
           outputBaseDir: input.renderOutputBaseDir,
-          onProgress: input.onProgress,
+          signal: abortController.signal,
+          onProgress: input.onProgress
+            ? (event) => input.onProgress?.({ ...event, renderRunId: runId })
+            : undefined,
           traceContext: input.traceContext,
           authorizedDraftComponentIds: timelineRenderComponentReferences(source.spec)
             .map((reference) => reference.id),
@@ -234,6 +407,7 @@ async function executeV2TimelineDraftRunOnce(
               draftId: input.draftId,
               renderRunId: runId,
               renderKey: input.idempotencyKey,
+              withProviderSubmissionPermit,
             },
             reusableRun: previousCompletedRun?.resolvedSpec && previousCompletedRun.materialResolution
               ? {
@@ -245,6 +419,7 @@ async function executeV2TimelineDraftRunOnce(
           },
         },
       )
+      abortController.signal.throwIfAborted()
       const outputUrl = input.renderOutputBaseDir
         ? undefined
         : `/v2-renders/${encodeURIComponent(result.taskId)}/${encodeURIComponent(path.basename(result.outputPath))}`
@@ -275,6 +450,10 @@ async function executeV2TimelineDraftRunOnce(
         evaluation: result.evaluation,
       }
     } catch (error) {
+      const persistedRun = renderRunCreated
+        ? await input.repository.getRenderRun(runId, input.userId).catch(() => null)
+        : null
+      const cancelled = persistedRun?.status === 'cancelled'
       const cleanupTasks: Promise<unknown>[] = [
         rm(path.resolve(input.renderOutputBaseDir ?? path.resolve(process.cwd(), 'v2-renders'), runId), {
           recursive: true,
@@ -283,7 +462,9 @@ async function executeV2TimelineDraftRunOnce(
           retryDelay: 100,
         }),
       ]
-      if (renderRunCreated) cleanupTasks.unshift(input.repository.failRenderRun(runId))
+      if (renderRunCreated) cleanupTasks.unshift(cancelled
+        ? input.repository.cancelRenderRun(runId)
+        : input.repository.failRenderRun(runId))
       const cleanup = await Promise.allSettled(cleanupTasks)
       for (const result of cleanup) {
         if (result.status === 'rejected') {
@@ -296,13 +477,15 @@ async function executeV2TimelineDraftRunOnce(
         status: 'failed',
         resultRef: runId,
         failure: {
-          code: 'render_failed',
-          message: error instanceof Error ? error.message : String(error),
+          code: cancelled ? 'render_cancelled' : 'render_failed',
+          message: cancelled ? 'Render cancelled.' : error instanceof Error ? error.message : String(error),
         },
       }).catch((receiptError) => {
         console.error(`[v2-timeline-run] idempotency failure update failed: ${receiptError instanceof Error ? receiptError.message : String(receiptError)}`)
       })
       throw error
+    } finally {
+      activeRunControllers.delete(runId)
     }
   })()
   return execution

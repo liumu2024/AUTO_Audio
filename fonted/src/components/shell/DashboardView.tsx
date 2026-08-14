@@ -31,6 +31,7 @@ const STATUS_LABEL: Record<string, string> = {
   running: '渲染中',
   completed: '已渲染',
   failed: '渲染失败',
+  cancelled: '已取消',
 }
 
 function statusTone(status: string): string {
@@ -39,6 +40,8 @@ function statusTone(status: string): string {
       return 'bg-emerald-500/15 text-emerald-400 ring-emerald-500/30'
     case 'failed':
       return 'bg-red-500/15 text-red-400 ring-red-500/30'
+    case 'cancelled':
+      return 'bg-zinc-500/15 text-zinc-400 ring-zinc-500/30'
     case 'running':
       return 'bg-violet-500/15 text-violet-300 ring-violet-500/30'
     default:
@@ -60,6 +63,7 @@ export function DashboardView() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [openingId, setOpeningId] = useState<string | null>(null)
+  const [runAction, setRunAction] = useState<'refresh' | 'cancel' | null>(null)
   const [viewing, setViewing] = useState<V2TimelineDraftHistoryDto | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<V2TimelineDraftHistoryDto | null>(null)
   const setActiveView = useAppShellStore((s) => s.setActiveView)
@@ -125,6 +129,45 @@ export function DashboardView() {
       console.error('[DashboardView] failed to delete draft', e)
       addLog('[方案中心] 删除失败，请稍后重试。')
       void loadDrafts()
+    }
+  }
+
+  const refreshViewedRun = async (cancel: boolean) => {
+    const draft = viewing
+    const run = draft?.latestRun
+    if (!draft || !run) return
+    setRunAction(cancel ? 'cancel' : 'refresh')
+    try {
+      if (cancel) {
+        await api.cancelV2TimelineDraftRun({ draftId: draft.draftId, renderRunId: run.id })
+      }
+      const status = await api.getV2TimelineDraftRun({
+        draftId: draft.draftId,
+        renderRunId: run.id,
+      })
+      const update = (item: V2TimelineDraftHistoryDto): V2TimelineDraftHistoryDto => item.draftId === draft.draftId
+        ? {
+            ...item,
+            latestRun: {
+              ...run,
+              status: status.status,
+              outputUrl: status.outputUrl ?? run.outputUrl,
+              traceDir: status.traceDir ?? run.traceDir,
+            },
+          }
+        : item
+      setViewing((current) => current ? update(current) : current)
+      setDrafts((items) => items.map(update))
+      addLog(cancel
+        ? status.status === 'cancelled'
+          ? '[方案中心] 当前任务已停止。'
+          : '[方案中心] 当前任务无法确认停止，已按真实状态更新。'
+        : '[方案中心] 已刷新当前任务状态。')
+    } catch (error) {
+      console.error('[DashboardView] failed to inspect run', error)
+      addLog('[方案中心] 当前任务状态暂时无法更新，请稍后重试。')
+    } finally {
+      setRunAction(null)
     }
   }
 
@@ -321,9 +364,31 @@ export function DashboardView() {
                 {viewing.latestRun && (
                   <div className="col-span-2">
                     <dt className="text-zinc-600">最近运行</dt>
-                    <dd className="break-all font-mono">
+                    <dd className="break-all">
                       {STATUS_LABEL[viewing.latestRun.status] ?? '状态未知'}
                     </dd>
+                    {viewing.latestRun.status === 'running' ? (
+                      <div className="mt-2 flex gap-2">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          disabled={runAction !== null}
+                          onClick={() => void refreshViewedRun(false)}
+                        >
+                          刷新状态
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          disabled={runAction !== null}
+                          onClick={() => void refreshViewedRun(true)}
+                        >
+                          停止任务
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
                 )}
               </dl>

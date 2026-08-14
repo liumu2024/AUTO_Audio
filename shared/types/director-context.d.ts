@@ -61,6 +61,12 @@ export interface DirectorIntentResult {
     requiresConfirmation: boolean;
     nextAction: DirectorNextAction;
     assistantMessage: string;
+    /** Model summary for the server-owned first-plan confirmation card. */
+    creationSummary?: {
+        goal: string;
+        audience?: string;
+        openQuestions: string[];
+    };
     /** Optional for wire compatibility; V2 agent responses always provide it. */
     executionEffect?: DirectorExecutionEffect;
     /** Exact user wording that the model treated as authorisation for a side effect. */

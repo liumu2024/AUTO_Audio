@@ -10,7 +10,7 @@
 - 新的视频生成、规划、素材生成、渲染能力优先接入 `backend/src/pipeline-v2/`。
 - V2 的核心协议是 `shared/types/remotion-timeline-spec.v1.ts` 中的 `RemotionTimelineSpecV1`。
 - V2 导演正式执行入口是后端 `modules/director-agent/director-agent.service.ts`，Tool/Skill 权威目录与调度位于 `backend/src/pipeline-v2/agent-tools/`、`agent-skills/`；前端只发送输入、展示事件并同步服务端草稿快照。
-- V2 的后端 API 是 `/api/v2/sample/analyze`、`/api/v2/timeline/preview`、`/api/v2/timeline-drafts/:draftId/runs`。
+- V2 的主要后端入口是 `/api/director/chat`、`/api/v2/sample/analyze`、`/api/v2/timeline-drafts/:draftId/runs`；方案创建与修订必须经过 Director 的确认边界。
 - V2 的 trace 在 `backend/tmp/v2-traces/`：导演会话走 `sessions/<workspace>/operations/<operation>/`，独立调用走 `tasks/<taskId>/`；不要把旧的 `backend/tmp/agent-trace` 当成主线证据。
 - V2 支持三条分支：有样例视频的 `sample_replicate`、无样例但有素材的 `material_brief`、纯文字的 `text_to_video`。
 - 不要把“生成视频”重新绑定成“必须先上传样例视频”。
@@ -86,7 +86,7 @@
 - `POST /api/director/chat`：导演智能体对话入口。
 - `GET/POST /api/creative-memories`、`GET /api/creative-memories/search`、`PATCH/DELETE /api/creative-memories/:memoryId`：创作偏好记忆的查询、新增、检索、修改与删除。
 - `POST /api/v2/sample/analyze`：V2 样例视频理解。
-- `POST /api/v2/timeline/preview`：V2 时间线方案预览，只规划和校验，不渲染。
+- `POST /api/director/chat`：V2 方案创建与修订入口；首次创建先返回创作摘要，确认后才规划。
 - `POST /api/v2/timeline-drafts/:draftId/runs`：对已保存的 V2 草稿版本执行素材生成、标准化、Remotion 渲染和基础评估，并持久化 RenderRun。
 - `/uploads`：本地上传素材静态访问。
 - `/renders`：旧渲染结果静态访问。
@@ -121,7 +121,7 @@ V2 是目前应当优先维护的主链路，核心目录是 `backend/src/pipeli
 - `remotion-timeline-material-resolver.ts`：执行 `material_jobs`，生成或复用素材。
 - `media-standardizer.ts`：FFmpeg 标准化生成视频素材。
 - `remotion-timeline-renderer.ts`：把 V2 spec 交给 Remotion 渲染。
-- `remotion-timeline-service.ts`：V2 preview/run 的总编排服务。
+- `remotion-timeline-service.ts`：V2 内部规划与正式渲染的总编排服务。
 - `trace.ts`：V2 trace 写入器。
 - `ffmpeg-binary.ts`、`ffmpeg-preflight.ts`：FFmpeg 检测和预检。
 
@@ -142,7 +142,7 @@ V2 支持三种创作分支：
    - 目标：Planner 规划 `generate_video` 任务，由外部视频生成模型补充真实画面。
    - 兜底：如果模型生成失败，可以保留 Remotion 卡片/字幕类 fallback，避免任务直接断掉。
 
-V2 preview 链路：
+V2 内部规划链路（仅由 Director Tool 调用，不再公开直连）：
 
 1. 接收 `V2PlannerInput`。
 2. 写入 `01-input/timeline-planner-input.json`。
@@ -177,11 +177,11 @@ V2 run 链路：
 - `components/sidebar/ChatInput.tsx`：输入框、附件、画幅等控制项。
 - `components/canvas/MigrationCanvas.tsx`、`GeneratedPlayer.tsx`：V2 方案画布与播放器（沿用迁移期命名）。
 - `services/director/v2DirectorDraftWorkspace.ts`：V2 草稿激活桥接，把持久化 spec 打开到时间线工作区。
-- `services/director/v2DirectorTimeline.ts`：前端组装 V2 API payload、上传 blob、同步工作台状态。
+- `services/director/v2DirectorTimeline.ts`：保存当前草稿，并提交经过导出确认的 RenderRun。
 - `lib/api.ts`：前端 HTTP API 封装。
 - `stores/directorChatStore.ts`：对话消息状态。
 - `stores/directorContextStore.ts`：导演上下文，包括样例、素材、用户意图等。
-- `stores/v2TimelineStore.ts`：V2 timeline spec、preview、result 和 trace 状态。
+- `stores/v2TimelineStore.ts`：当前 V2 timeline spec、成片结果、trace 和待处理修订状态。
 - `stores/taskStore.ts`：任务进度和后台状态。
 - `stores/timelineStore.ts`、`pipelineStore.ts`、`migrationProjectStore.ts`：兼容旧工作台的数据同步层。
 
@@ -194,7 +194,7 @@ V2 run 链路：
 5. Tool 真实结果先写回 V2 草稿/会话，再由理解模型基于结果生成自然回复。
 6. 前端消费 `skill_selected`、`skill_loaded`、`tool_*`、`assistant_reply` 和唯一的 `workspace_session` 事件，更新右侧预览区、时间线和 trace 地址。
 
-`/api/v2/sample/analyze`、`/api/v2/timeline/preview` 和草稿 RenderRun API 仍可直接调用；导演正式链路不再由前端 action 映射决定执行顺序。
+`/api/v2/sample/analyze` 和草稿 RenderRun API 可直接调用；方案创建与修订不再公开直连 Planner，统一经过 Director 的确认与工具调度。
 
 当前前端同时存在 V1 数据结构适配层和 V2 timeline store，这能保证旧 UI 仍可显示，但也增加了状态同步复杂度。
 
@@ -321,9 +321,9 @@ V2 run 链路：
   - 传入样例视频路径、任务 ID 和 prompt。
   - 返回 `V2SampleUnderstandingResult` 和 traceDir。
 
-- 时间线预览：
-  - `POST /api/v2/timeline/preview`
-  - 返回 `RemotionTimelineSpecV1`、validation、review、traceDir。
+- 方案创建与修订：
+  - `POST /api/director/chat`
+  - 首次创建先返回创作摘要；用户确认后，工具结果同步 `RemotionTimelineSpecV1`、校验结果和工作区状态。
 
 - 时间线渲染：
   - `POST /api/v2/timeline-drafts/:draftId/runs`
@@ -401,7 +401,7 @@ V2 使用“固定渲染器 + 严格 JSON”模式。缺少合适预设或已注
 V2 trace 默认写入（2026-08-04 起统一根目录与分层，旧目录与运行产物已清理）：
 
 - `backend/tmp/v2-traces/sessions/<workspace>/operations/<operation>/`：导演会话（含事件流 `events.jsonl`）。
-- `backend/tmp/v2-traces/tasks/<taskId>/`：样例理解、时间线 preview/run 等独立调用。
+- `backend/tmp/v2-traces/tasks/<taskId>/`：样例理解、内部规划和正式渲染等独立调用。
 
 主要阶段：
 
@@ -429,7 +429,7 @@ V2 trace 默认写入（2026-08-04 起统一根目录与分层，旧目录与运
 
 查看顺序建议：
 
-1. 先看 `00-summary/summary.zh.md`，判断本次任务是 preview 还是 run。
+1. 先看 `00-summary/summary.zh.md`，判断本次任务是规划还是正式渲染。
 2. 再看 `01-input/timeline-planner-input.json`，确认用户输入、素材、画幅、分支是否正确。
 3. 看 `02-planning/llm-timeline-planner-prompt.md` 和最终 `timeline-spec.json`，确认模型输入输出是否对齐。
 4. 看 `timeline-validation.json` 和 `timeline-hard-requirement-check.json`，确认结构和字幕硬要求是否通过。
@@ -664,7 +664,7 @@ V2 trace 默认写入（2026-08-04 起统一根目录与分层，旧目录与运
 
 - 用户对话最终应进入 V2 director action。
 - 视频方案协议应以 `RemotionTimelineSpecV1` 为准。
-- 生成方案应走 `/api/v2/timeline/preview`。
+- 生成或修订方案应走 `/api/director/chat`，并遵守首次创建/修订确认边界。
 - 渲染成片应走 `/api/v2/timeline-drafts/:draftId/runs`。
 - 样例理解应走 `/api/v2/sample/analyze`。
 - 新增能力优先接入 `backend/src/pipeline-v2/` 和 V2 前端 store。
@@ -704,7 +704,7 @@ V1 代码不是全部无用。它目前仍承担历史兼容、UI 适配、旧�
 - `text_to_video`
 - `RemotionTimelineSpecV1`
 - `/api/v2/sample/analyze`
-- `/api/v2/timeline/preview`
+- `/api/director/chat`
 - `/api/v2/timeline-drafts/:draftId/runs`
 - `v2TimelineStore`
 - `tmp/v2-traces`
@@ -766,7 +766,7 @@ V1 代码不是全部无用。它目前仍承担历史兼容、UI 适配、旧�
 后续 agent 在判断当前任务状态时，应按以下优先级读取：
 
 1. 用户最新消息和当前 UI 控件。
-2. `v2TimelineStore.spec`、`v2TimelineStore.preview`、`v2TimelineStore.result`。
+2. `v2TimelineStore.spec`、`v2TimelineStore.result` 和待处理修订状态。
 3. `RemotionTimelineSpecV1.task_id`、`canvas`、`scenes`、`assets`、`material_jobs`。
 4. V2 trace 目录：`backend/tmp/v2-traces/<taskId>`。
 5. director context 中的 sample/material/slot 状态。
@@ -824,7 +824,7 @@ V1 代码不是全部无用。它目前仍承担历史兼容、UI 适配、旧�
 5. 后端 `npm run build` 通过。
 6. 前端 `npm run build` 通过。
 7. 根目录 `npm run v2:check` 或对应 V2 smoke 通过。
-8. 至少跑一次 V2 preview，确认 trace 仍写入 `tmp/v2-traces`。
+8. 至少跑一次 Director 创建确认回归，确认规划 trace 仍写入 `tmp/v2-traces`。
 
 如果只是不想让 V1 影响 V2，优先选择“隔离判断”和“改桥接层优先级”，而不是直接删除。
 
@@ -1277,7 +1277,7 @@ Content-Type: application/json
 
 | 项目 | 当前状态 | 风险 | 建议下一步 |
 |---|---|---|---|
-| V2 主链路 | 已建立 preview/run/sample analyze | 桥接层仍可能被 V1 状态影响 | 继续收敛状态源到 V2 spec。 |
+| V2 主链路 | 已建立确认后规划、正式 RenderRun 与样例分析 | 桥接层仍可能被 V1 状态影响 | 继续收敛状态源到 V2 spec。 |
 | V1 隔离 | 已识别 legacy 和桥接层 | 直接删除会破坏 UI 或 shared build | 先标记 legacy，再分批替换。 |
 | 纯文生视频 | 代码层允许 text-only submit | Seedance 实际能力未完全验证 | 用真实 API 跑 `text_to_video`。 |
 | 图生视频 | 已有 Ark Seedance adapter | 本地图片必须公网可访问 | 完善 asset publisher 和失败提示。 |
@@ -1304,7 +1304,7 @@ Content-Type: application/json
 - `RemotionTimelineSpecV1` 仍能通过 validator。
 - V2 trace 仍写入 `backend/tmp/v2-traces/<taskId>`。
 - `sample_replicate`、`material_brief`、`text_to_video` 三分支没有被破坏。
-- “生成方案”走 `/api/v2/timeline/preview`。
+- “生成方案”走 `/api/director/chat`，确认创作摘要后才调用 Planner。
 - “渲染当前方案”走 `/api/v2/timeline-drafts/:draftId/runs`。
 - 没有新增 V1 对 V2 的硬依赖。
 - 没有把样例视频重新设为所有生成任务的必要条件。
@@ -1364,12 +1364,14 @@ flowchart TD
   FE --> CHAT["POST /api/director/chat"]
   CHAT --> ROUTER["Director Intent Router"]
   ROUTER --> ACTION{"nextAction"}
-  ACTION -->|ANALYZE_SAMPLE| SAMPLE["POST /api/v2/sample/analyze"]
-  ACTION -->|GENERATE_VIDEO| PREVIEW["POST /api/v2/timeline/preview"]
+  ACTION -->|ANALYZE_SAMPLE| SAMPLE["sample.analyze Tool"]
+  SAMPLE --> SAMPLE_SERVICE["analyzeV2Sample service"]
+  HTTP_SAMPLE["独立 POST /api/v2/sample/analyze"] --> SAMPLE_SERVICE
+  ACTION -->|GENERATE_VIDEO| PREVIEW["POST /api/director/chat（确认后规划）"]
   ACTION -->|RENDER| RUN["POST /api/v2/timeline-drafts/:draftId/runs"]
   ACTION -->|ASK_USER / ACKNOWLEDGE| MSG["只返回自然语言消息"]
   SAMPLE --> UNDERSTANDING["V2SampleUnderstandingResult"]
-  UNDERSTANDING --> STORE_SAMPLE["前端同步样例理解状态"]
+  UNDERSTANDING --> STORE_SAMPLE["Director workspace 保存样例理解"]
   PREVIEW --> SPEC["RemotionTimelineSpecV1"]
   SPEC --> REVIEW["Validation / Review / Trace"]
   REVIEW --> STORE_TIMELINE["前端 v2TimelineStore"]
@@ -1399,7 +1401,7 @@ flowchart LR
   SPEC --> RUN["material resolver + Remotion render"]
 ```
 
-preview 与 run 的区别：
+可编辑方案与正式渲染的区别：
 
 ```mermaid
 sequenceDiagram
@@ -1411,7 +1413,7 @@ sequenceDiagram
   participant R as Remotion
 
   User->>FE: 生成一版方案
-  FE->>BE: /api/v2/timeline/preview
+  FE->>BE: /api/director/chat（先提案，确认后执行）
   BE->>LLM: 生成 timeline spec
   LLM-->>BE: JSON spec
   BE-->>FE: spec + review + trace
@@ -1433,7 +1435,7 @@ sequenceDiagram
 |---|---|---|---:|---|
 | `directorChatStore` | `fonted/src/stores/directorChatStore.ts` | 聊天消息、附件消息、用户可见对话 | 是，面向聊天 UI | 不应存放最终协议真相。 |
 | `directorContextStore` | `fonted/src/stores/directorContextStore.ts` | 样例、素材、用户意图、slots、上下文摘要 | 是，面向智能体上下文 | 修改时避免把旧 V1 状态当作 V2 真相。 |
-| `v2TimelineStore` | `fonted/src/stores/v2TimelineStore.ts` | V2 preview/result/spec/trace/asset preview | 是，V2 方案真相 | V2 渲染和修改应优先读这里。 |
+| `v2TimelineStore` | `fonted/src/stores/v2TimelineStore.ts` | 当前 spec、成片结果、trace、保存与待处理修订状态 | 是，V2 方案真相 | V2 渲染和修改应优先读这里。 |
 | `taskStore` | `fonted/src/stores/taskStore.ts` | 后台任务进度、完成状态、错误状态 | 是，面向任务 UI | 不应决定 V2 是否有 spec。 |
 | `creationStore` | `fonted/src/stores/creationStore.ts` | 输入附件、样例上传、创作入口状态 | 部分是 | 注意发送后附件清理和素材状态同步。 |
 | `materialLibraryStore` | `fonted/src/stores/materialLibraryStore.ts` | 素材库、素材卡片、已上传素材记录 | 部分是 | 后续素材知识库可从这里扩展。 |
@@ -1445,7 +1447,7 @@ sequenceDiagram
 状态源使用原则：
 
 - 判断“当前是否有可渲染方案”：优先看 `v2TimelineStore.spec`。
-- 判断“当前是否有样例理解”：优先看 `v2TimelineStore.sampleUnderstanding` 和 director context。
+- 判断“当前是否有样例理解”：看 Director workspace session 的样例理解与当前 director context。
 - 判断“用户刚刚上传了什么”：看 `creationStore` 附件和 `directorContextStore.materials`。
 - 判断“旧 UI 是否能显示”：才看 `pipelineStore`、`timelineStore`、`migrationProjectStore`。
 - 不允许 legacy store 覆盖 V2 spec。

@@ -27,16 +27,15 @@ import {
 } from './modules/creative-knowledge/creative-knowledge.controller.js'
 import {
   postV2SampleAnalyze,
-  postV2TimelinePreview,
 } from './pipeline-v2/controller.js'
 import {
   deleteV2TimelineDraft,
   getV2TimelineDraft,
   getV2TimelineDraftReadiness,
   getV2TimelineDrafts,
-  postV2TimelineDraftPreview,
   postV2TimelineDraftRun,
   getV2TimelineDraftRun,
+  deleteV2TimelineDraftRun,
   putV2TimelineDraft,
 } from './pipeline-v2/timeline-draft-controller.js'
 
@@ -70,15 +69,14 @@ app.patch('/api/creative-knowledge/:knowledgeId', patchCreativeKnowledge)
 app.delete('/api/creative-knowledge/:knowledgeId', removeCreativeKnowledge)
 app.use('/v2-renders', express.static(path.resolve(process.cwd(), 'v2-renders')))
 app.post('/api/v2/sample/analyze', postV2SampleAnalyze)
-app.post('/api/v2/timeline-drafts/preview', postV2TimelineDraftPreview)
 app.get('/api/v2/timeline-drafts', getV2TimelineDrafts)
 app.get('/api/v2/timeline-drafts/:draftId', getV2TimelineDraft)
 app.get('/api/v2/timeline-drafts/:draftId/readiness', getV2TimelineDraftReadiness)
 app.put('/api/v2/timeline-drafts/:draftId', putV2TimelineDraft)
 app.post('/api/v2/timeline-drafts/:draftId/runs', postV2TimelineDraftRun)
 app.get('/api/v2/timeline-drafts/:draftId/runs/:runId', getV2TimelineDraftRun)
+app.delete('/api/v2/timeline-drafts/:draftId/runs/:runId', deleteV2TimelineDraftRun)
 app.delete('/api/v2/timeline-drafts/:draftId', deleteV2TimelineDraft)
-app.post('/api/v2/timeline/preview', postV2TimelinePreview)
 
 app.use(
   (

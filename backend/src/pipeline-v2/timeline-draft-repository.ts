@@ -54,12 +54,14 @@ export interface V2TimelineRenderRunRecord {
   sourceRevision: number
   sourceSpec: RemotionTimelineSpecV1
   resolvedSpec?: RemotionTimelineSpecV1
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
   outputPath?: string
   outputUrl?: string
   traceDir?: string
   materialResolution?: unknown
   evaluation?: unknown
+  providerSubmitClaims: number
+  providerSubmissionsClosed: boolean
   createdAt: Date
   completedAt?: Date
 }
@@ -75,7 +77,7 @@ export interface V2TimelineRevisionSummary {
 export interface V2TimelineRenderRunSummary {
   id: string
   sourceRevision: number
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
   outputUrl?: string
   traceDir?: string
   createdAt: Date
@@ -134,7 +136,15 @@ function hydrateStoredTimelineSpec(
   plannerInput: V2StoredPlannerInput,
 ): RemotionTimelineSpecV1 {
   const hydrated = hydrateV2TimelineAssetIds(spec, plannerInput)
-  if (hydrated.creative_brief) return hydrated
+  if (hydrated.creative_brief) {
+    return {
+      ...hydrated,
+      creative_brief: {
+        ...hydrated.creative_brief,
+        applied_preferences: hydrated.creative_brief.applied_preferences ?? [],
+      },
+    }
+  }
 
   const imageAssets = new Set(
     hydrated.assets
@@ -181,6 +191,7 @@ function hydrateStoredTimelineSpec(
         intended_use: reference.intendedUse,
       })),
       sample_methods: [],
+      applied_preferences: [],
     },
   }
 }
@@ -242,6 +253,8 @@ function runFromRow(row: Record<string, unknown>): V2TimelineRenderRunRecord {
     traceDir: (row.traceDir as string | null) ?? undefined,
     materialResolution: row.materialResolutionJson ?? undefined,
     evaluation: row.evaluationJson ?? undefined,
+    providerSubmitClaims: Number(row.providerSubmitClaims ?? 0),
+    providerSubmissionsClosed: Boolean(row.providerSubmissionsClosed ?? false),
     createdAt: row.createdAt as Date,
     completedAt: (row.completedAt as Date | null) ?? undefined,
   }
@@ -329,6 +342,9 @@ export interface V2TimelineDraftRepository {
     sourceRevision: number
     sourceSpec: RemotionTimelineSpecV1
   }): Promise<V2TimelineRenderRunRecord>
+  closeRenderRunProviderSubmissions(id: string): Promise<boolean>
+  claimRenderRunProviderSubmission(id: string): Promise<boolean>
+  releaseRenderRunProviderSubmission(id: string): Promise<void>
   completeRenderRun(input: {
     id: string
     resolvedSpec: RemotionTimelineSpecV1
@@ -339,6 +355,7 @@ export interface V2TimelineDraftRepository {
     evaluation: unknown
   }): Promise<V2TimelineRenderRunRecord>
   failRenderRun(id: string, traceDir?: string): Promise<void>
+  cancelRenderRun(id: string, traceDir?: string): Promise<boolean>
 }
 
 export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
@@ -653,8 +670,8 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
     },
 
     async completeRenderRun(input) {
-      const row = await prisma.v2TimelineRenderRun.update({
-        where: { id: input.id },
+      const updated = await prisma.v2TimelineRenderRun.updateMany({
+        where: { id: input.id, status: 'running', providerSubmissionsClosed: false },
         data: {
           status: 'completed',
           resolvedSpecJson: asJson(input.resolvedSpec),
@@ -666,18 +683,57 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
           completedAt: new Date(),
         },
       })
+      if (updated.count !== 1) throw new Error(`RenderRun ${input.id} is no longer running.`)
+      const row = await prisma.v2TimelineRenderRun.findFirst({ where: { id: input.id } })
+      if (!row) throw new Error(`RenderRun ${input.id} was not found after completion.`)
       return runFromRow(asRecord(row))
     },
 
+    async claimRenderRunProviderSubmission(id) {
+      const result = await prisma.v2TimelineRenderRun.updateMany({
+        where: { id, status: 'running', providerSubmissionsClosed: false },
+        data: { providerSubmitClaims: { increment: 1 } },
+      })
+      return result.count === 1
+    },
+
+    async closeRenderRunProviderSubmissions(id) {
+      const result = await prisma.v2TimelineRenderRun.updateMany({
+        where: { id, status: 'running' },
+        data: { providerSubmissionsClosed: true },
+      })
+      return result.count === 1
+    },
+
+    async releaseRenderRunProviderSubmission(id) {
+      const result = await prisma.v2TimelineRenderRun.updateMany({
+        where: { id, providerSubmitClaims: { gt: 0 } },
+        data: { providerSubmitClaims: { decrement: 1 } },
+      })
+      if (result.count !== 1) throw new Error(`RenderRun ${id} lost its Provider-submit claim.`)
+    },
+
     async failRenderRun(id, traceDir) {
-      await prisma.v2TimelineRenderRun.update({
-        where: { id },
+      await prisma.v2TimelineRenderRun.updateMany({
+        where: { id, status: 'running' },
         data: {
           status: 'failed',
           traceDir,
           completedAt: new Date(),
         },
       })
+    },
+
+    async cancelRenderRun(id, traceDir) {
+      const result = await prisma.v2TimelineRenderRun.updateMany({
+        where: { id, status: 'running', providerSubmitClaims: 0, providerSubmissionsClosed: true },
+        data: {
+          status: 'cancelled',
+          traceDir,
+          completedAt: new Date(),
+        },
+      })
+      return result.count === 1
     },
   }
 }

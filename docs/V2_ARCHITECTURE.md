@@ -49,7 +49,7 @@ fonted/src/components/shell/V2TimelineView.tsx
 ## API
 
 ```http
-POST /api/v2/timeline-drafts/preview
+POST /api/director/chat
 POST /api/v2/timeline-drafts/:draftId/runs
 ```
 

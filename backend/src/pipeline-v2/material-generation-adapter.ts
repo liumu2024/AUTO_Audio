@@ -33,8 +33,17 @@ export interface V2MaterialGenerationAdapter {
     input: V2MaterialGenerationRequest,
     options?: {
       onProviderTaskSubmitted?: (providerTaskId: string) => void | Promise<void>
+      signal?: AbortSignal
     },
   ): Promise<V2MaterialGenerationResult>
+  getTaskStatus?(providerTaskId: string): Promise<{
+    status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'unknown'
+  }>
+  cancelTask?(providerTaskId: string): Promise<{
+    cancelled: boolean
+    status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'unknown'
+    reason?: string
+  }>
 }
 
 export function createNoopMaterialGenerationAdapter(): V2MaterialGenerationAdapter {

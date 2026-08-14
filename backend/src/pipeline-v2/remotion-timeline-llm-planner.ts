@@ -38,7 +38,7 @@ const TimelineJsonSchema = {
     task_id: { type: 'string' },
     creative_brief: {
       type: 'object',
-      required: ['direction', 'image_references', 'sample_methods'],
+      required: ['direction', 'image_references', 'sample_methods', 'applied_preferences'],
       additionalProperties: false,
       properties: {
         direction: { type: 'string', minLength: 1 },
@@ -56,6 +56,7 @@ const TimelineJsonSchema = {
           },
         },
         sample_methods: { type: 'array', items: { type: 'string', minLength: 1 } },
+        applied_preferences: { type: 'array', items: { type: 'string', minLength: 1 }, uniqueItems: true },
       },
     },
     canvas: {
@@ -277,6 +278,7 @@ export function buildV2TimelinePlannerPrompt(
     '- creative_brief.direction is the single whole-video creative direction. material_job.prompt contains only scene-specific semantics.',
     '- For every attached image actually used, record only visible facts in creative_brief.image_references.observed_facts and explain its intended use. Do not invent unseen facts.',
     '- creative_brief.sample_methods contains only sample methods selected because they help this task; it must not mechanically copy sample chapter boundaries.',
+    '- creative_brief.applied_preferences contains only exact statements from planning_context.recalledCreativeMemories that were actually adopted in this plan. Do not list merely recalled, conflicting, or unused preferences.',
     '- Never output creative_brief.planning_gaps. Only the server records unresolved planning work.',
     '- assets contains only already-resolved, renderable assets and every asset src must be non-empty. Do not add an empty placeholder asset for a planned generation; reference its material_job output_asset_id from the scene instead.',
     '- This V2 plan has no audio-generation tool. When the user requests a BGM strategy but provides no audio asset, describe it in notes only; do not create audio clips, empty audio assets, or generate_video jobs for music.',
@@ -476,6 +478,15 @@ async function bindAuthoritativePlannerAssets(
   }
   if (spec.creative_brief?.planning_gaps?.length) {
     throw new Error('planning_gaps are server-maintained and cannot be returned by the planner model.')
+  }
+  const recalledPreferences = new Set([
+    ...(input.planningContext?.recalledCreativeMemories ?? []),
+    ...(input.revisionBaseSpec?.creative_brief?.applied_preferences ?? []),
+  ])
+  for (const preference of spec.creative_brief?.applied_preferences ?? []) {
+    if (!recalledPreferences.has(preference)) {
+      throw new Error('creative_brief applied preference was not recalled by the server.')
+    }
   }
   const authoritativeAssets = authoritativePlannerAssets(input)
   const conditionedAssetIds = new Set(

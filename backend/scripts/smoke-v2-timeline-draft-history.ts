@@ -6,6 +6,7 @@ import path from 'node:path'
 process.env.DPL304_LOCAL_MODE = 'true'
 const localDataDir = await mkdtemp(path.join(tmpdir(), 'dpl304-v2-history-'))
 process.env.DPL304_LOCAL_DATA_DIR = localDataDir
+process.env.V2_TRACE_BASE_DIR = path.join(localDataDir, 'traces')
 let idempotentOutputDir = ''
 
 try {
@@ -16,8 +17,11 @@ const { createV2TimelineDraftRepository } = await import(
   '../src/pipeline-v2/timeline-draft-repository.js'
 )
 const { prisma } = await import('../src/shared/prisma.service.js')
-const { postV2TimelinePreview } = await import('../src/pipeline-v2/controller.js')
-const { executeV2TimelineDraftRun } = await import('../src/pipeline-v2/timeline-draft-runner.js')
+const {
+  cancelV2TimelineDraftRun,
+  executeV2TimelineDraftRun,
+  inspectV2TimelineDraftRun,
+} = await import('../src/pipeline-v2/timeline-draft-runner.js')
 const {
   createV2IdempotencyRepository,
   executeV2JsonIdempotentOperation,
@@ -36,7 +40,6 @@ const {
   getV2TimelineDraft,
   getV2TimelineDrafts,
   postV2TimelineDraftRun,
-  postV2TimelineDraftPreview,
   putV2TimelineDraft,
 } = await import('../src/pipeline-v2/timeline-draft-controller.js')
 
@@ -85,40 +88,19 @@ const plannerInput = {
   plannerMode: 'deterministic' as const,
 }
 const spec = buildDeterministicRemotionTimelineSpec(plannerInput)
-const ephemeralPreviewRequest = request({
-  idempotencyKey: 'ephemeral-preview-idempotency',
-  body: {
-    prompt: '无持久化幂等预览', plannerMode: 'deterministic', durationSec: 6,
-    canvas: { width: 640, height: 360, fps: 12 },
-  },
+const previewDraftRecord = await repository.createDraft({
+  userId: 1,
+  plannerInput,
+  spec,
+  plannerSource: 'deterministic',
+  review: { summary_zh: 'draft save idempotency fixture' },
+  traceDir: 'draft-save-idempotency-fixture',
 })
-const ephemeralPreviewA = response()
-await postV2TimelinePreview(ephemeralPreviewRequest, ephemeralPreviewA.res)
-const ephemeralPreviewB = response()
-await postV2TimelinePreview(ephemeralPreviewRequest, ephemeralPreviewB.res)
-assert.deepEqual(
-  ephemeralPreviewB.result().body,
-  JSON.parse(JSON.stringify(ephemeralPreviewA.result().body)),
-)
-const previewRequest = request({
-  idempotencyKey: 'draft-preview-idempotency',
-  body: {
-    prompt: '幂等预览草稿',
-    plannerMode: 'deterministic',
-    durationSec: 8,
-    canvas: { width: 640, height: 360, fps: 12 },
-  },
-})
-const previewResponseA = response()
-await postV2TimelineDraftPreview(previewRequest, previewResponseA.res)
-const previewResponseB = response()
-await postV2TimelineDraftPreview(previewRequest, previewResponseB.res)
-assert.equal(previewResponseA.result().statusCode, 200)
-assert.deepEqual(
-  previewResponseB.result().body,
-  JSON.parse(JSON.stringify(previewResponseA.result().body)),
-)
-const previewDraft = (previewResponseA.result().body as { draft: { draftId: string; revision: number; spec: typeof spec } }).draft
+const previewDraft = {
+  draftId: previewDraftRecord.id,
+  revision: previewDraftRecord.revision,
+  spec: previewDraftRecord.spec,
+}
 const saveRequest = request({
   draftId: previewDraft.draftId,
   idempotencyKey: 'draft-save-idempotency',
@@ -292,41 +274,41 @@ await assert.rejects(
   }),
   V2IdempotencyConflictError,
 )
-let previewExecutions = 0
-const previewOperation = () => executeV2JsonIdempotentOperation({
+let planExecutions = 0
+const planOperation = () => executeV2JsonIdempotentOperation({
   repository: idempotency,
   reservation: {
     userId: 1,
-    operation: 'timeline.preview',
-    idempotencyKey: 'preview-result-replay',
-    resourceKey: 'new-preview',
-    requestHash: 'preview-request-a',
+    operation: 'timeline.plan',
+    idempotencyKey: 'plan-result-replay',
+    resourceKey: 'new-plan',
+    requestHash: 'plan-request-a',
   },
   execute: async () => {
-    previewExecutions += 1
-    return { previewId: 'preview_1', ok: true }
+    planExecutions += 1
+    return { draftId: 'draft_1', ok: true }
   },
 })
-assert.equal((await previewOperation()).kind, 'executed')
-const previewReplay = await previewOperation()
-assert.equal(previewReplay.kind, 'replayed')
-assert.deepEqual(previewReplay.kind === 'replayed' ? previewReplay.value : null, {
-  previewId: 'preview_1', ok: true,
+assert.equal((await planOperation()).kind, 'executed')
+const planReplay = await planOperation()
+assert.equal(planReplay.kind, 'replayed')
+assert.deepEqual(planReplay.kind === 'replayed' ? planReplay.value : null, {
+  draftId: 'draft_1', ok: true,
 })
-assert.equal(previewExecutions, 1)
+assert.equal(planExecutions, 1)
 let thrownExecutions = 0
 const thrownOperation = () => executeV2JsonIdempotentOperation({
   repository: idempotency,
   reservation: {
     userId: 1,
-    operation: 'timeline.preview',
-    idempotencyKey: 'preview-thrown-failure-replay',
-    resourceKey: 'failed-preview',
-    requestHash: 'failed-preview-request',
+    operation: 'timeline.plan',
+    idempotencyKey: 'plan-thrown-failure-replay',
+    resourceKey: 'failed-plan',
+    requestHash: 'failed-plan-request',
   },
   execute: async () => {
     thrownExecutions += 1
-    throw new Error('stable preview failure')
+    throw new Error('stable plan failure')
   },
 })
 for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -334,7 +316,7 @@ for (let attempt = 0; attempt < 2; attempt += 1) {
     thrownOperation,
     (error: unknown) => error instanceof V2IdempotencyOperationFailedError
       && error.code === 'operation_failed'
-      && error.message === 'stable preview failure',
+      && error.message === 'stable plan failure',
   )
 }
 assert.equal(thrownExecutions, 1, 'a thrown idempotent failure must replay without executing again')
@@ -374,6 +356,118 @@ await repository.completeRenderRun({
   materialResolution: { ok: true },
   evaluation: { ok: true },
 })
+assert.equal(await repository.cancelRenderRun(run.id), false, 'a completed run must not be overwritten as cancelled')
+assert.equal((await repository.getRenderRun(run.id, 1))?.status, 'completed')
+
+const providerClaimRunId = `provider-claim-${Date.now()}`
+const providerClaimDraft = await repository.getDraft(draft.id, 1)
+assert.ok(providerClaimDraft)
+await repository.createRenderRun({
+  id: providerClaimRunId,
+  draftId: draft.id,
+  userId: 1,
+  sourceRevision: providerClaimDraft.revision,
+  sourceSpec: providerClaimDraft.spec,
+})
+assert.equal(await repository.claimRenderRunProviderSubmission(providerClaimRunId), true)
+assert.deepEqual(await cancelV2TimelineDraftRun({
+  repository,
+  idempotency,
+  draftId: draft.id,
+  runId: providerClaimRunId,
+  userId: 1,
+}), { cancelled: false, status: 'failed', reason: 'provider_submit_state_unknown' })
+assert.equal(
+  await repository.claimRenderRunProviderSubmission(providerClaimRunId),
+  false,
+  'closing the persistent gate must reject every later Provider-submit claim',
+)
+await repository.releaseRenderRunProviderSubmission(providerClaimRunId)
+assert.equal((await repository.getRenderRun(providerClaimRunId, 1))?.status, 'failed')
+assert.equal(
+  await repository.claimRenderRunProviderSubmission(providerClaimRunId),
+  false,
+  'a failed RenderRun must never grant a later Provider-submit claim',
+)
+
+const staleSnapshotRunId = `stale-snapshot-${Date.now()}`
+await repository.createRenderRun({
+  id: staleSnapshotRunId,
+  draftId: draft.id,
+  userId: 1,
+  sourceRevision: providerClaimDraft.revision,
+  sourceSpec: providerClaimDraft.spec,
+})
+let markReceiptSnapshot!: () => void
+const receiptSnapshot = new Promise<void>((resolve) => { markReceiptSnapshot = resolve })
+let releaseReceiptSnapshot!: () => void
+const receiptSnapshotReleased = new Promise<void>((resolve) => { releaseReceiptSnapshot = resolve })
+const snapshotIdempotency = {
+  ...idempotency,
+  list: async (input: Parameters<typeof idempotency.list>[0]) => {
+    if (input.operation === 'material.generate') {
+      markReceiptSnapshot()
+      await receiptSnapshotReleased
+    }
+    return idempotency.list(input)
+  },
+}
+const staleSnapshotCancellation = cancelV2TimelineDraftRun({
+  repository,
+  idempotency: snapshotIdempotency,
+  draftId: draft.id,
+  runId: staleSnapshotRunId,
+  userId: 1,
+})
+await receiptSnapshot
+assert.equal(
+  await repository.claimRenderRunProviderSubmission(staleSnapshotRunId),
+  false,
+  'cancellation must close the persistent submit gate before reading Provider receipts',
+)
+releaseReceiptSnapshot()
+assert.deepEqual(await staleSnapshotCancellation, { cancelled: true, status: 'cancelled' })
+
+const partialCancellationRunId = `partial-cancel-${Date.now()}`
+await repository.createRenderRun({
+  id: partialCancellationRunId,
+  draftId: draft.id,
+  userId: 1,
+  sourceRevision: providerClaimDraft.revision,
+  sourceSpec: providerClaimDraft.spec,
+})
+const partialReceipts = await Promise.all(['provider_task_cancelled', 'provider_task_rejected'].map(async (taskId) => {
+  const reservation = await idempotency.reserve({
+    userId: 1,
+    draftId: draft.id,
+    operation: 'material.generate',
+    idempotencyKey: `${partialCancellationRunId}:${taskId}`,
+    resourceKey: `${partialCancellationRunId}:${taskId}`,
+    requestHash: `${partialCancellationRunId}:${taskId}:hash`,
+  })
+  return idempotency.update({ id: reservation.receipt.id, phase: 'polling', providerTaskId: taskId })
+}))
+assert.equal(partialReceipts.length, 2)
+const cancelledProviderTasks: string[] = []
+assert.deepEqual(await cancelV2TimelineDraftRun({
+  repository,
+  idempotency,
+  materialAdapter: {
+    async generate() { throw new Error('not used') },
+    async getTaskStatus() { return { status: 'queued' as const } },
+    async cancelTask(taskId) {
+      cancelledProviderTasks.push(taskId)
+      return taskId === 'provider_task_cancelled'
+        ? { cancelled: true, status: 'cancelled' as const }
+        : { cancelled: false, status: 'queued' as const, reason: 'provider_rejected_cancel' }
+    },
+  },
+  draftId: draft.id,
+  runId: partialCancellationRunId,
+  userId: 1,
+}), { cancelled: false, status: 'failed', reason: 'provider_rejected_cancel' })
+assert.deepEqual(cancelledProviderTasks.sort(), ['provider_task_cancelled', 'provider_task_rejected'])
+assert.equal((await repository.getRenderRun(partialCancellationRunId, 1))?.status, 'failed')
 
 let idempotentRenderCalls = 0
 const idempotentKey = `render-key-${Date.now()}`
@@ -519,6 +613,167 @@ const pendingRaceReplay = await executeV2TimelineDraftRun({
 })
 assert.equal(pendingRaceReplay.renderRunId, idempotentA.renderRunId)
 assert.equal(pendingRaceReceiptReads, 2)
+
+const cancellableDraft = await repository.getDraft(draft.id, 1)
+assert.ok(cancellableDraft)
+let cancellableRunId = ''
+let markRunEntered!: () => void
+const runEntered = new Promise<void>((resolve) => { markRunEntered = resolve })
+const cancellableExecution = executeV2TimelineDraftRun({
+  repository,
+  idempotency,
+  idempotencyKey: `cancellable-render-${Date.now()}`,
+  draftId: draft.id,
+  revision: cancellableDraft.revision,
+  userId: 1,
+  renderOutputBaseDir: path.join(localDataDir, 'cancel-output'),
+  onProgress: (event) => {
+    if (event.renderRunId) cancellableRunId = event.renderRunId
+  },
+  runTimeline: async (_input, options) => {
+    markRunEntered()
+    return new Promise<never>((_resolve, reject) => {
+      const abort = () => reject(new DOMException('Render cancelled', 'AbortError'))
+      if (options.signal?.aborted) abort()
+      else options.signal?.addEventListener('abort', abort, { once: true })
+    })
+  },
+})
+const cancellableOutcome = cancellableExecution.then(
+  () => ({ error: undefined }),
+  (error: unknown) => ({ error }),
+)
+await runEntered
+assert.ok(cancellableRunId, 'the queued progress event must expose the authoritative RenderRun ID')
+assert.deepEqual(await inspectV2TimelineDraftRun({
+  repository,
+  idempotency,
+  draftId: draft.id,
+  runId: cancellableRunId,
+  userId: 1,
+}), { status: 'running', canCancel: true, providerStatuses: [] })
+assert.equal(
+  Number((await prisma.v2TimelineRenderRun.findFirst({ where: { id: cancellableRunId } }))?.providerSubmitClaims),
+  0,
+  'a RenderRun that has not entered Provider submission must have no active submit claim',
+)
+assert.deepEqual(await cancelV2TimelineDraftRun({
+  repository,
+  idempotency,
+  draftId: draft.id,
+  runId: cancellableRunId,
+  userId: 1,
+}), { cancelled: true, status: 'cancelled' })
+const cancellableError = (await cancellableOutcome).error
+assert.equal(cancellableError instanceof DOMException && cancellableError.name === 'AbortError', true)
+assert.equal((await repository.getRenderRun(cancellableRunId, 1))?.status, 'cancelled')
+await repository.failRenderRun(cancellableRunId)
+assert.equal(
+  (await repository.getRenderRun(cancellableRunId, 1))?.status,
+  'cancelled',
+  'a late failure from another execution process must not overwrite a confirmed cancellation',
+)
+
+const submissionRaceDraft = await repository.createDraft({
+  userId: 1,
+  plannerInput: {
+    taskId: `cancel_submission_race_${Date.now()}`,
+    prompt: 'generate one conditioned shot',
+    creationMode: 'material_brief',
+    plannerMode: 'deterministic',
+  },
+  spec: {
+    schema_version: 'remotion_timeline_spec.v1',
+    task_id: `cancel_submission_race_${Date.now()}`,
+    canvas: { width: 360, height: 640, fps: 12, duration_sec: 2 },
+    creative_brief: {
+      direction: 'Create one short moving portrait.',
+      image_references: [{
+        asset_id: 'race_reference', observed_facts: ['A portrait subject is visible.'], intended_use: 'Keep the subject identity.',
+      }],
+      sample_methods: [],
+      applied_preferences: [],
+    },
+    assets: [{
+      id: 'race_reference', type: 'image', src: 'https://cdn.example.com/race-reference.png', source: 'user_asset',
+    }],
+    scenes: [{
+      id: 'race_scene', type: 'ai_video', start_sec: 0, duration_sec: 2, asset_id: 'race_output',
+      creative_intent: {
+        title: 'Moving portrait',
+        description: 'Use the supplied portrait as the identity reference while adding subtle natural movement.',
+        material_label: 'Portrait reference',
+      },
+    }],
+    transitions: [],
+    overlays: [],
+    audio: [],
+    material_jobs: [{
+      id: 'race_job', scene_id: 'race_scene', type: 'generate_video', status: 'planned',
+      prompt: 'Animate the portrait subject.', input_asset_id: 'race_reference', output_asset_id: 'race_output',
+      fallback_kind: 'none', provider: 'ark_seedance',
+    }],
+    render_policy: { renderer: 'remotion_timeline' },
+  },
+  plannerSource: 'deterministic',
+  review: {},
+  traceDir: 'cancel-submission-race',
+})
+let raceRunId = ''
+let markRacePrepared!: () => void
+const racePrepared = new Promise<void>((resolve) => { markRacePrepared = resolve })
+let releaseRaceRun!: () => void
+const raceRunReleased = new Promise<void>((resolve) => { releaseRaceRun = resolve })
+let releaseTaskId!: () => void
+const taskIdReleased = new Promise<void>((resolve) => { releaseTaskId = resolve })
+let providerSubmitCalls = 0
+const submissionRaceExecution = executeV2TimelineDraftRun({
+  repository,
+  idempotency,
+  idempotencyKey: `cancel-submission-race-${Date.now()}`,
+  draftId: submissionRaceDraft.id,
+  revision: submissionRaceDraft.revision,
+  userId: 1,
+  renderOutputBaseDir: path.join(localDataDir, 'cancel-submission-race-output'),
+  onProgress: async (event) => {
+    if (event.phase === 'prepare' && event.progress === 0 && event.renderRunId) {
+      raceRunId = event.renderRunId
+      markRacePrepared()
+      await raceRunReleased
+    }
+  },
+  materialAdapter: {
+    async generate(_request, options) {
+      providerSubmitCalls += 1
+      await taskIdReleased
+      await options?.onProviderTaskSubmitted?.('provider_task_race')
+      return new Promise((_resolve, reject) => {
+        const abort = () => reject(options?.signal?.reason ?? new DOMException('Render cancelled', 'AbortError'))
+        if (options?.signal?.aborted) abort()
+        else options?.signal?.addEventListener('abort', abort, { once: true })
+      })
+    },
+    async getTaskStatus() { return { status: 'queued' as const } },
+    async cancelTask() { return { cancelled: true, status: 'cancelled' as const } },
+  },
+})
+const submissionRaceOutcome = submissionRaceExecution.then(
+  () => ({ error: undefined }),
+  (error: unknown) => ({ error }),
+)
+await racePrepared
+assert.equal(await repository.closeRenderRunProviderSubmissions(raceRunId), true)
+assert.equal(await repository.cancelRenderRun(raceRunId), true)
+releaseRaceRun()
+releaseTaskId()
+assert.equal(
+  providerSubmitCalls,
+  0,
+  'a cancellation committed outside the execution process must prevent a later Provider submission',
+)
+const submissionRaceError = (await submissionRaceOutcome).error
+assert.equal(submissionRaceError instanceof DOMException && submissionRaceError.name === 'AbortError', true)
+await repository.deleteDraft(submissionRaceDraft.id, 1)
 
 const foreignDeleteResponse = response()
 await deleteV2TimelineDraft(request({ userId: '2', draftId: draft.id }), foreignDeleteResponse.res)

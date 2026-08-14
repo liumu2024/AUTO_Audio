@@ -18,8 +18,8 @@ output.
 
 The backend treats `RemotionTimelineSpecV1` as the active renderable plan.
 
-1. `POST /api/v2/timeline-drafts/preview` creates or repairs a timeline spec,
-   saves its revision, and returns a Chinese planning review.
+1. `POST /api/director/chat` proposes a server-owned creative summary; planning
+   starts only after the user confirms it and then saves the resulting revision.
 2. The frontend lets the user revise before an expensive render run.
 3. `POST /api/v2/timeline-drafts/:draftId/runs` consumes a saved revision,
    resolves material jobs, normalizes assets, and renders through Remotion.
@@ -68,8 +68,7 @@ npm.cmd run dev
 | --- | --- | --- |
 | `GET` | `/health` | Health check. |
 | `POST` | `/api/uploads` | Upload sample or material files; optionally publish them for external image-to-video providers. |
-| `POST` | `/api/v2/timeline/preview` | Stateless diagnostic preview; does not render or persist a revision. |
-| `POST` | `/api/v2/timeline-drafts/preview` | Create or revise a saved V2 timeline draft. |
+| `POST` | `/api/director/chat` | Discuss, confirm, create, or revise a V2 timeline through the Director boundary. |
 | `POST` | `/api/v2/timeline-drafts/:draftId/runs` | Render a saved revision and persist its output/trace. |
 | `WS` | `/ws/tasks?taskId=...` | Optional task progress and trace events. V2 runs remain driven by their direct API responses. |
 

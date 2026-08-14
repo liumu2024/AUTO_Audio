@@ -40,6 +40,14 @@ const dashboardSource = await readFile(
   new URL('../../fonted/src/components/shell/DashboardView.tsx', import.meta.url),
   'utf8',
 )
+const frontendApiSource = await readFile(
+  new URL('../../fonted/src/lib/api.ts', import.meta.url),
+  'utf8',
+)
+const directorTimelineSource = await readFile(
+  new URL('../../fonted/src/services/director/v2DirectorTimeline.ts', import.meta.url),
+  'utf8',
+)
 const assetsShellSource = await readFile(
   new URL('../../fonted/src/components/shell/AssetsShellView.tsx', import.meta.url),
   'utf8',
@@ -60,8 +68,8 @@ assert.doesNotMatch(
 assert.match(directorPanelSource, /timelineRevisionDecision/)
 assert.match(
   directorPanelSource,
-  /if \(!timelineRevisionDecision && creationSnapshot\.attachmentUploads\.length > 0\) return/,
-  'confirming a persisted revision proposal must not be blocked by an unrelated upload',
+  /if \(!hasDecision && creationSnapshot\.attachmentUploads\.length > 0\) return/,
+  'confirming a persisted proposal must not be blocked by an unrelated upload',
 )
 assert.match(
   directorPanelSource,
@@ -92,8 +100,25 @@ assert.match(directorStoreSource, /revisionDecisionStatus\?:[^\n]*'failed'/)
 assert.match(chatMessageSource, /revisionDecisionStatus === 'failed'[\s\S]*修改提案已失效/)
 assert.match(
   directorPanelSource,
-  /if \(!timelineRevisionDecision\) clearInputTray\(\)/,
-  'a revision decision must not consume the normal chat input tray',
+  /if \(!hasDecision\) clearInputTray\(\)/,
+  'a proposal decision must not consume the normal chat input tray',
+)
+assert.match(chatMessageSource, /开始生成方案前，请确认创作摘要/)
+assert.match(chatMessageSource, /确认并生成方案/)
+assert.match(directorPanelSource, /result\.cancelled[\s\S]{0,200}当前生成任务仍在继续/)
+assert.match(dashboardSource, /cancelled: '已取消'/)
+assert.match(
+  dashboardSource,
+  /getV2TimelineDraftRun/,
+  'history must let a user inspect and stop a running task after reconnecting',
+)
+assert.match(dashboardSource, /cancelV2TimelineDraftRun/)
+assert.doesNotMatch(frontendApiSource, /previewV2Timeline(?:Draft)?/)
+assert.doesNotMatch(directorTimelineSource, /previewV2DirectorTimeline|analyzeV2DirectorSample/)
+assert.match(
+  dashboardSource,
+  /viewing\.latestRun\.status === 'running'[\s\S]*停止任务/,
+  'the recovered run controls must only be shown for a running task',
 )
 assert.match(
   directorPanelSource,
@@ -330,10 +355,6 @@ const chatPanelSource = await readFile(
   new URL('../../fonted/src/components/sidebar/DirectorChatPanel.tsx', import.meta.url),
   'utf8',
 )
-const frontendApiSource = await readFile(
-  new URL('../../fonted/src/lib/api.ts', import.meta.url),
-  'utf8',
-)
 const editorHeaderSource = await readFile(
   new URL('../../fonted/src/components/layout/EditorHeader.tsx', import.meta.url),
   'utf8',
@@ -480,7 +501,20 @@ assert.doesNotMatch(
   /revisionMessageIdsRef\.current\.delete/,
   'a replayed proposal/result pair must update the original revision card instead of creating a duplicate',
 )
+const proposalBranch = chatPanelSource.match(
+  /if \(event\.type === 'tool_proposed'\)[\s\S]*?if \(event\.type === 'tool_started'\)/,
+)?.[0] ?? ''
+assert.equal(
+  proposalBranch.match(/findDirectorConfirmationMessage/g)?.length,
+  2,
+  'replayed revision and creation proposals must upsert by stable identity even before component refs hydrate',
+)
 assert.match(chatPanelSource, /停止等待本轮结果[\s\S]*当前处理可能仍在继续/)
+assert.match(
+  chatPanelSource,
+  /if \(streamCancelRef\.current\) \{\s*return\s*\}/,
+  'the aborted stream must not overwrite the authoritative cancellation result message',
+)
 assert.doesNotMatch(chatPanelSource, /后台模型或工具/)
 assert.doesNotMatch(chatPanelSource, /导演分析已中止/)
 assert.doesNotMatch(frontendApiSource, /Director request is still running/)

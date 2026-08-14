@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ChatInput } from '@/components/sidebar/ChatInput'
 import { DirectorChatThread } from '@/components/sidebar/DirectorChatThread'
 import {
+  cancelV2TimelineDraftRun,
   streamDirectorChat,
   getDirectorWorkspaceSession,
   getV2TimelineDraft,
@@ -26,7 +27,11 @@ import {
   restoreWorkspaceDraft,
 } from '@/services/director/workspaceSessionLifecycle'
 import { useCreationStore, type InputAttachment } from '@/stores/creationStore'
-import { useDirectorChatStore, type DirectorChatMessage } from '@/stores/directorChatStore'
+import {
+  findDirectorConfirmationMessage,
+  useDirectorChatStore,
+  type DirectorChatMessage,
+} from '@/stores/directorChatStore'
 import { useDirectorContextStore } from '@/stores/directorContextStore'
 import { useTaskStore } from '@/stores/taskStore'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
@@ -157,23 +162,8 @@ function currentV2TimelineSnapshot(): DirectorTimelineSnapshot | undefined {
 
 function buildV2ConversationSummary() {
   const v2 = useV2TimelineStore.getState()
-  if (!v2.spec && !v2.sampleSession) return ''
-  const sample = v2.sampleSession?.understanding
-  const sampleText = sample
-    ? [
-        `Sample understanding: ${sample.summary}`,
-        `Transferable methods: ${sample.method_observations.map((item) => `${item.expression} (${item.purpose})`).join('; ')}`,
-        `Transferable knowledge: ${sample.transferable_knowledge.map((item) => item.statement).join('; ')}`,
-      ].join('\n')
-    : ''
-  const timelineText = v2.spec
-    ? [
-        `Current editable video plan: ${v2.spec.scenes.length} scenes, ${v2.spec.canvas.width}x${v2.spec.canvas.height}, ${v2.spec.canvas.duration_sec}s.`,
-      ]
-        .filter(Boolean)
-        .join('\n')
-    : ''
-  return [sampleText, timelineText].filter(Boolean).join('\n')
+  if (!v2.spec) return ''
+  return `Current editable video plan: ${v2.spec.scenes.length} scenes, ${v2.spec.canvas.width}x${v2.spec.canvas.height}, ${v2.spec.canvas.duration_sec}s.`
 }
 
 function buildConversationSummary() {
@@ -243,7 +233,9 @@ export function DirectorChatPanel() {
   const streamCancelRef = useRef(false)
   const workspaceRevisionsRef = useRef(new Map<string, number>())
   const activeProgressMessageIdRef = useRef<string | null>(null)
+  const activeRenderRunIdRef = useRef<string | null>(null)
   const revisionMessageIdsRef = useRef(new Map<string, string>())
+  const creationMessageIdRef = useRef<string | null>(null)
   const setRevisionDecisionMessages = (
     confirmationId: string,
     status: NonNullable<DirectorChatMessage['revisionDecisionStatus']>,
@@ -276,7 +268,12 @@ export function DirectorChatPanel() {
         )
         for (const intent of session.state.pendingTimelineRevisionConfirmation?.revisionIntents ?? []) {
           if (revisionMessageIdsRef.current.has(intent.callId)) continue
-          const messageId = addAssistantMessage({
+          const confirmationId = session.state.pendingTimelineRevisionConfirmation!.confirmationId
+          const existing = findDirectorConfirmationMessage(
+            useDirectorChatStore.getState().messages,
+            { kind: 'revision', confirmationId, callId: intent.callId },
+          )
+          const messageId = existing?.id ?? addAssistantMessage({
             content: '已恢复一项尚未执行的修改提案，请核对后确认。',
             kind: 'revision',
             status: 'done',
@@ -284,8 +281,26 @@ export function DirectorChatPanel() {
           revisionMessageIdsRef.current.set(intent.callId, messageId)
           updateMessage(messageId, {
             revisionIntent: intent,
-            revisionConfirmationId: session.state.pendingTimelineRevisionConfirmation!.confirmationId,
+            revisionConfirmationId: confirmationId,
             revisionDecisionStatus: 'pending',
+          })
+        }
+        if (session.state.pendingTimelinePlanConfirmation) {
+          const confirmationId = session.state.pendingTimelinePlanConfirmation.confirmationId
+          const existing = findDirectorConfirmationMessage(
+            useDirectorChatStore.getState().messages,
+            { kind: 'creation', confirmationId },
+          )
+          const messageId = existing?.id ?? addAssistantMessage({
+            content: '已恢复一份尚未执行的创作摘要，请核对后确认。',
+            kind: 'text',
+            status: 'done',
+          })
+          creationMessageIdRef.current = messageId
+          updateMessage(messageId, {
+            creationSummary: session.state.pendingTimelinePlanConfirmation.creationSummary,
+            creationConfirmationId: confirmationId,
+            creationDecisionStatus: 'pending',
           })
         }
         await restoreWorkspaceDraft({
@@ -328,22 +343,26 @@ export function DirectorChatPanel() {
   const handleSend = async (
     text: string,
     timelineRevisionDecision?: { confirmationId: string; action: 'confirm' | 'reject' },
+    timelinePlanDecision?: { confirmationId: string; action: 'confirm' | 'reject' },
   ) => {
     let revisionDecisionCommitted = false
+    let creationDecisionCommitted = false
+    activeRenderRunIdRef.current = null
+    const hasDecision = Boolean(timelineRevisionDecision || timelinePlanDecision)
     const creationSnapshot = useCreationStore.getState()
-    if (!timelineRevisionDecision && creationSnapshot.attachmentUploads.length > 0) return
+    if (!hasDecision && creationSnapshot.attachmentUploads.length > 0) return
     const prompt = text.trim()
-    const pendingAttachmentIdsSnapshot = timelineRevisionDecision
+    const pendingAttachmentIdsSnapshot = hasDecision
       ? []
       : [...creationSnapshot.pendingAttachmentIds]
-    const contextMaterialsAuthoritative = timelineRevisionDecision
+    const contextMaterialsAuthoritative = hasDecision
       ? false
       : creationSnapshot.materialsSnapshotAuthoritative
-    const contextSampleAuthoritative = timelineRevisionDecision
+    const contextSampleAuthoritative = hasDecision
       ? false
       : creationSnapshot.sampleSnapshotAuthoritative
     const showSampleInInputTraySnapshot = creationSnapshot.showSampleInInputTray
-    if (!timelineRevisionDecision) clearInputTray()
+    if (!hasDecision) clearInputTray()
     const effectiveSampleUrl = creationSnapshot.sampleUrl
     const effectiveSampleName = creationSnapshot.sampleName
     const contextAttachments = [...creationSnapshot.attachments]
@@ -411,7 +430,7 @@ export function DirectorChatPanel() {
             ? '解析样例视频，识别导演结构和可复用风格'
             : '根据当前创作意图和附件生成一版时间线方案'),
       attachments: [
-        ...(!timelineRevisionDecision && effectiveSampleUrl && showSampleInInputTraySnapshot
+        ...(!hasDecision && effectiveSampleUrl && showSampleInInputTraySnapshot
           ? [
               {
                 id: 'sample_video',
@@ -460,6 +479,7 @@ export function DirectorChatPanel() {
           workspaceStateRevision,
           workspaceSessionId: requestWorkspaceSessionId,
           timelineRevisionDecision,
+          timelinePlanDecision,
           context: directorContext,
           runtime: {
             backendEnabled: true,
@@ -503,6 +523,16 @@ export function DirectorChatPanel() {
             debugThoughts.push('已经整理好本轮需要处理的步骤。')
             if (event.revisionIntent) {
               const existingMessageId = revisionMessageIdsRef.current.get(event.callId)
+                ?? (event.revisionConfirmationId
+                  ? findDirectorConfirmationMessage(
+                      useDirectorChatStore.getState().messages,
+                      {
+                        kind: 'revision',
+                        confirmationId: event.revisionConfirmationId,
+                        callId: event.callId,
+                      },
+                    )?.id
+                  : undefined)
               const messageId = existingMessageId ?? addAssistantMessage({
                 content: '修改范围已解析，尚未执行。请核对后确认。',
                 kind: 'revision',
@@ -517,6 +547,36 @@ export function DirectorChatPanel() {
                   : timelineRevisionDecision?.action === 'reject' ? 'rejecting' : 'pending',
               })
             }
+            if (event.creationSummary && event.creationConfirmationId) {
+              let messageId = creationMessageIdRef.current
+              if (messageId) {
+                const previous = useDirectorChatStore.getState().messages.find((item) => item.id === messageId)
+                if (previous?.creationConfirmationId !== event.creationConfirmationId) {
+                  updateMessage(messageId, {
+                    creationDecisionStatus: 'failed',
+                    content: '这份摘要已由新的创作要求替代。',
+                  })
+                  messageId = null
+                }
+              }
+              messageId ??= findDirectorConfirmationMessage(
+                useDirectorChatStore.getState().messages,
+                { kind: 'creation', confirmationId: event.creationConfirmationId },
+              )?.id ?? null
+              messageId ??= addAssistantMessage({
+                content: '创作摘要已整理，尚未开始生成方案。',
+                kind: 'text',
+                status: 'done',
+              })
+              creationMessageIdRef.current = messageId
+              updateMessage(messageId, {
+                creationSummary: event.creationSummary,
+                creationConfirmationId: event.creationConfirmationId,
+                creationDecisionStatus: timelinePlanDecision?.action === 'confirm'
+                  ? 'confirming'
+                  : timelinePlanDecision?.action === 'reject' ? 'rejecting' : 'pending',
+              })
+            }
           }
           if (event.type === 'tool_started') {
             debugThoughts.push('正在处理你的请求。')
@@ -525,6 +585,7 @@ export function DirectorChatPanel() {
             }
           }
           if (event.type === 'tool_progress') {
+            if (event.renderRunId) activeRenderRunIdRef.current = event.renderRunId
             const elapsedLabel = event.elapsedMs == null
               ? ''
               : ` · 总用时 ${(event.elapsedMs / 1000).toFixed(1)} 秒`
@@ -535,6 +596,14 @@ export function DirectorChatPanel() {
             )
           }
           if (event.type === 'tool_result') {
+            if (event.toolId === 'timeline.plan' && timelinePlanDecision?.action === 'confirm') {
+              creationDecisionCommitted = true
+              const messageId = creationMessageIdRef.current
+              if (messageId) updateMessage(messageId, {
+                creationDecisionStatus: event.ok ? 'confirmed' : 'failed',
+                content: event.ok ? '创作摘要' : '方案未能生成，可调整摘要后重试。',
+              })
+            }
             if (event.revisionReceipt) {
               const revisionMessageId = revisionMessageIdsRef.current.get(event.callId)
               if (revisionMessageId) {
@@ -549,7 +618,7 @@ export function DirectorChatPanel() {
             }
             if (event.toolId === 'timeline.render') {
               if (event.ok && isTimelineDraftRunResult(event.result)) {
-                useV2TimelineStore.getState().setResult(event.result, prompt)
+                useV2TimelineStore.getState().setResult(event.result)
                 useTaskStore.getState().completeTask()
               }
               else useTaskStore.getState().setFailed(event.summary)
@@ -610,6 +679,18 @@ export function DirectorChatPanel() {
                 },
               )
             }
+            if (
+              timelinePlanDecision
+              && !creationDecisionCommitted
+              && event.state.pendingTimelinePlanConfirmation?.confirmationId !== timelinePlanDecision.confirmationId
+            ) {
+              creationDecisionCommitted = true
+              const messageId = creationMessageIdRef.current
+              if (messageId) updateMessage(messageId, {
+                creationDecisionStatus: timelinePlanDecision.action === 'reject' ? 'rejected' : 'failed',
+                content: timelinePlanDecision.action === 'reject' ? '已取消生成方案。' : '这份创作摘要已失效。',
+              })
+            }
             debugThoughts.push('本轮对话状态已经同步。')
           }
         },
@@ -631,6 +712,13 @@ export function DirectorChatPanel() {
           '确认未被服务端确认，原提案仍待确认。',
           { unresolvedOnly: true },
         )
+      }
+      if (timelinePlanDecision && !creationDecisionCommitted) {
+        const messageId = creationMessageIdRef.current
+        if (messageId) updateMessage(messageId, {
+          creationDecisionStatus: 'pending',
+          content: '这次操作未被服务端确认，创作摘要仍待确认。',
+        })
       }
 
       if (streamErrorMessage) {
@@ -669,11 +757,6 @@ export function DirectorChatPanel() {
       }
     } catch (e) {
       if (streamCancelRef.current) {
-        updateMessage(thinkingId, {
-          content: '已停止等待本轮结果。当前处理可能仍在继续；重新打开当前方案可以同步已经保存的结果。',
-          kind: 'text',
-          status: 'done',
-        })
         return
       }
       console.error('[DirectorChatPanel] request failed', e)
@@ -728,11 +811,41 @@ export function DirectorChatPanel() {
     )
   }
 
+  const handleCreationDecision = (decision: { confirmationId: string; action: 'confirm' | 'reject' }) => {
+    const messageId = creationMessageIdRef.current
+    if (messageId) updateMessage(messageId, {
+      creationDecisionStatus: decision.action === 'confirm' ? 'confirming' : 'rejecting',
+      content: decision.action === 'confirm' ? '正在生成方案。' : '正在取消生成。',
+    })
+    void handleSend(
+      decision.action === 'confirm' ? '确认这份创作摘要并生成方案。' : '暂不按这份创作摘要生成方案。',
+      undefined,
+      decision,
+    )
+  }
+
   const handleCancelDirectorStream = () => {
     if (!abortRef.current) return
     streamCancelRef.current = true
     abortRef.current.abort()
     const progressId = activeProgressMessageIdRef.current
+    const renderRunId = activeRenderRunIdRef.current
+    const draftId = useV2TimelineStore.getState().draftId
+    if (renderRunId && draftId) {
+      void cancelV2TimelineDraftRun({ draftId, renderRunId }).then((result) => {
+        const content = result.cancelled
+          ? '成片任务已经取消。'
+          : '已停止等待；当前生成任务仍在继续，稍后可重新打开方案查看状态。'
+        if (progressId) updateMessage(progressId, { content, kind: 'text', status: 'done' })
+        else addAssistantMessage({ content })
+      }).catch(() => {
+        if (progressId) updateMessage(progressId, {
+          content: '已停止等待；取消状态暂时无法确认，当前任务可能仍在继续。', kind: 'text', status: 'done',
+        })
+      })
+      setSending(false)
+      return
+    }
     if (progressId) {
       updateMessage(progressId, {
         content: '已停止等待本轮结果。当前处理可能仍在继续；重新打开当前方案可以同步已经保存的结果。',
@@ -753,7 +866,10 @@ export function DirectorChatPanel() {
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
     >
-      <DirectorChatThread onRevisionDecision={handleRevisionDecision} />
+      <DirectorChatThread
+        onRevisionDecision={handleRevisionDecision}
+        onCreationDecision={handleCreationDecision}
+      />
       <ChatInput
         disabled={busy}
         busyLabel={isSending ? '停止等待' : '后台处理中'}

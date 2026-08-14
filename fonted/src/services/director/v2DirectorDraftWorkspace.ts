@@ -2,7 +2,6 @@ import type { V2TimelineDraftDetailDto, V2TimelineDraftDto } from '@/lib/api'
 import { useCreationStore } from '@/stores/creationStore'
 import { useDirectorChatStore } from '@/stores/directorChatStore'
 import { useDirectorContextStore } from '@/stores/directorContextStore'
-import type { TimelineMode } from '@/stores/editorStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { usePlaybackStore } from '@/stores/playbackStore'
 import { useTaskStore } from '@/stores/taskStore'
@@ -15,7 +14,6 @@ export type V2DraftWorkspaceInput = Pick<
 > & Pick<Partial<V2TimelineDraftDetailDto>, 'latestRun' | 'pendingTimelineRevisions'>
 
 export type V2CanvasSurface =
-  | 'sample_analysis'
   | 'timeline_plan'
   | 'rendered_output'
   | 'empty'
@@ -76,25 +74,15 @@ export interface V2PlanPresentation {
   durationSec: number
   width: number
   height: number
+  appliedPreferences: string[]
   scenes: V2PlanScenePresentation[]
-}
-
-interface ReviewScene {
-  id: string
-  title_zh?: string
-  role_zh?: string
-  description_zh?: string
-  source_zh?: string
 }
 
 /** A persisted V2 spec is sufficient to display a plan; preview review is optional enrichment. */
 export function resolveV2CanvasSurface(input: {
-  timelineMode: TimelineMode
-  hasSample: boolean
   hasSpec: boolean
   hasRenderedOutput: boolean
 }): V2CanvasSurface {
-  if (input.timelineMode === 'sample' && input.hasSample) return 'sample_analysis'
   if (input.hasRenderedOutput) return 'rendered_output'
   if (input.hasSpec) return 'timeline_plan'
   return 'empty'
@@ -102,27 +90,20 @@ export function resolveV2CanvasSurface(input: {
 
 export function buildV2PlanSceneCards(
   spec: RemotionTimelineSpecV1,
-  reviewScenes: ReviewScene[] = [],
 ): V2PlanSceneCard[] {
-  const reviews = new Map(reviewScenes.map((scene) => [scene.id, scene]))
   return spec.scenes
     .slice()
     .sort((a, b) => a.start_sec - b.start_sec)
     .map((scene) => {
-      const review = reviews.get(scene.id)
       return {
         id: scene.id,
         title:
           scene.creative_intent?.title ??
-          review?.title_zh ??
           scene.title ??
-          review?.role_zh ??
           '未命名镜头',
         description:
           scene.creative_intent?.description ??
-          review?.description_zh ??
-          scene.body ??
-          review?.source_zh,
+          scene.body,
         startSec: scene.start_sec,
         durationSec: scene.duration_sec,
       }
@@ -135,9 +116,8 @@ export function buildV2PlanSceneCards(
  */
 export function buildV2PlanPresentation(
   spec: RemotionTimelineSpecV1,
-  reviewScenes: ReviewScene[] = [],
 ): V2PlanPresentation {
-  const cards = new Map(buildV2PlanSceneCards(spec, reviewScenes).map((scene) => [scene.id, scene]))
+  const cards = new Map(buildV2PlanSceneCards(spec).map((scene) => [scene.id, scene]))
   const assets = new Map(spec.assets.map((asset) => [asset.id, asset]))
   const tracks = new Map((spec.caption_tracks ?? []).map((track) => [track.id, track]))
   const materialJobs = new Map(spec.material_jobs.map((job) => [job.scene_id, job]))
@@ -228,6 +208,7 @@ export function buildV2PlanPresentation(
     durationSec: spec.canvas.duration_sec,
     width: spec.canvas.width,
     height: spec.canvas.height,
+    appliedPreferences: spec.creative_brief?.applied_preferences ?? [],
     scenes,
   }
 }
@@ -339,8 +320,6 @@ export function activateV2DraftWorkspace(draft: V2DraftWorkspaceInput): void {
   useV2TimelineStore.getState().openPersistedDraft(draft)
   useCreationStore.getState().setAspectRatio(aspectRatioForCanvas(draft.spec.canvas))
   useCreationStore.getState().setDurationSec(draft.spec.canvas.duration_sec)
-  useEditorStore.getState().setGenerationEditEnabled(true)
-  useEditorStore.getState().setTimelineMode('generation')
   usePlaybackStore.getState().pause()
   usePlaybackStore.getState().setDuration(draft.spec.canvas.duration_sec)
   usePlaybackStore.getState().seek(0)
@@ -380,8 +359,6 @@ export function startNewV2DraftWorkspace(): void {
     sidebarTab: 'config',
     sidebarSubView: 'main',
     materialLibraryMode: 'manage',
-    timelineMode: 'sample',
-    generationEditEnabled: false,
   })
   usePlaybackStore.setState({
     isPlaying: false,

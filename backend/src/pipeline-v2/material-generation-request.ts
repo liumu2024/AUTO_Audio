@@ -31,6 +31,9 @@ export function prepareV2MaterialGenerationRequest(input: {
     input.spec.creative_brief?.sample_methods.length
       ? `Adopted sample methods: ${input.spec.creative_brief.sample_methods.join('; ')}`
       : undefined,
+    input.spec.creative_brief?.applied_preferences.length
+      ? `Adopted user preferences: ${input.spec.creative_brief.applied_preferences.join('; ')}`
+      : undefined,
   ].filter((value): value is string => Boolean(value?.trim())).join('\n')
   const request: V2MaterialGenerationRequest = {
     jobId: input.job.id,

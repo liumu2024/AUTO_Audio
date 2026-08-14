@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process'
 import { mkdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 import { env } from '../config/env.js'
+import { runAbortableCommand } from './abortable-command.js'
 import { findV2FfmpegBinary } from './ffmpeg-binary.js'
 
 export interface V2StandardizedVideoAsset {
@@ -16,31 +16,6 @@ function resolveFromCwd(value: string, cwd = process.cwd()): string {
   return path.isAbsolute(value) ? value : path.resolve(cwd, value)
 }
 
-function runCommand(command: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    })
-    const stdoutChunks: Buffer[] = []
-    const stderrChunks: Buffer[] = []
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdoutChunks.push(chunk)
-    })
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderrChunks.push(chunk)
-    })
-    child.on('error', reject)
-    child.on('close', (code) => {
-      const stdout = Buffer.concat(stdoutChunks).toString('utf8')
-      const stderr = Buffer.concat(stderrChunks).toString('utf8')
-      if (code === 0) resolve({ stdout, stderr })
-      else reject(new Error(`${command} ${args.join(' ')} exited with ${code}\n${stdout}\n${stderr}`))
-    })
-  })
-}
-
 function isRemotionBundledFfmpeg(ffmpeg: string): boolean {
   return ffmpeg.includes(`@remotion${path.sep}compositor`)
 }
@@ -52,6 +27,7 @@ export async function standardizeGeneratedVideoAsset(input: {
   width?: number
   height?: number
   fps?: number
+  signal?: AbortSignal
 }): Promise<V2StandardizedVideoAsset> {
   const outputDir = resolveFromCwd(input.outputDir)
   await mkdir(outputDir, { recursive: true })
@@ -96,7 +72,7 @@ export async function standardizeGeneratedVideoAsset(input: {
     '+faststart',
     outputPath,
   ]
-  const result = await runCommand(ffmpeg, args, process.cwd())
+  const result = await runAbortableCommand(ffmpeg, args, process.cwd(), input.signal)
   const file = await stat(outputPath)
   return {
     src: outputPath,

@@ -79,6 +79,8 @@ model V2TimelineRenderRun {
   traceDir              String?   @map("trace_dir")
   materialResolutionJson Json?    @map("material_resolution_json")
   evaluationJson        Json?     @map("evaluation_json")
+  providerSubmitClaims  Int       @default(0) @map("provider_submit_claims")
+  providerSubmissionsClosed Boolean @default(false) @map("provider_submissions_closed")
   createdAt             DateTime  @default(now()) @map("created_at")
   completedAt           DateTime? @map("completed_at")
 

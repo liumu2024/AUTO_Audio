@@ -25,7 +25,9 @@ export function mapV2TimelineDraftHistoryCard(draft) {
                 ? 'running'
                 : runStatus === 'failed'
                     ? 'failed'
-                    : 'draft',
+                    : runStatus === 'cancelled'
+                        ? 'cancelled'
+                        : 'draft',
         createdAt: draft.createdAt,
         updatedAt: draft.updatedAt,
         previewUrl: runStatus === 'completed' ? draft.latestRun?.outputUrl : undefined,

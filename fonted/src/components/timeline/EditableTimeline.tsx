@@ -1,18 +1,15 @@
 import { Film, Music2, Sparkles, Type } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { V2SampleTimeline } from '@/components/timeline/V2SampleTimeline'
 import { TimelineRuler } from '@/components/timeline/TimelineRuler'
 import { TimelineTrackRow } from '@/components/timeline/TimelineTrackRow'
 import { PIXELS_PER_SECOND, RULER_HEIGHT, TRACK_HEADER_WIDTH, TRACK_HEIGHT } from '@/components/timeline/constants'
 import { buildV2TimelineProject } from '@/lib/v2-timeline-ui'
-import type { TimelineMode } from '@/stores/editorStore'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
 
 const TRACK_ICONS = { video: Film, overlay: Type, audio: Music2, effect: Sparkles } as const
 
-export function EditableTimeline({ mode = 'generation' }: { mode?: TimelineMode }) {
-  if (mode === 'sample') return <V2SampleTimeline />
+export function EditableTimeline() {
   return <V2EditableTimeline />
 }
 

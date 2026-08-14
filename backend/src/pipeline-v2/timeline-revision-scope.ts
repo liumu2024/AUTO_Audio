@@ -354,6 +354,7 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
           ? {
               direction: input.candidateSpec.creative_brief.direction,
               sample_methods: input.candidateSpec.creative_brief.sample_methods,
+              applied_preferences: input.candidateSpec.creative_brief.applied_preferences,
               image_references: candidateImageReferences,
             }
           : undefined,
