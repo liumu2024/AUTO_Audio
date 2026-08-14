@@ -25,7 +25,6 @@ export function EditorHeader() {
   const projectName = useEditorStore((s) => s.projectName)
   const v2Spec = useV2TimelineStore((s) => s.spec)
   const v2HasLocalEdits = useV2TimelineStore((s) => s.hasLocalEdits)
-  const draftRevision = useV2TimelineStore((s) => s.draftRevision)
   const renderedOutputUrl = useV2TimelineStore((s) => s.renderedOutputUrl)
   const activeTaskId = useTaskStore((s) => s.activeTaskId)
   const backendReady = useTaskStore((s) => s.backendReady)
@@ -51,14 +50,12 @@ export function EditorHeader() {
     const taskStore = useTaskStore.getState()
     const v2Timeline = useV2TimelineStore.getState()
     if (!v2Timeline.spec) {
-      taskStore.addLog('[编辑] 请先在对话中生成 V2 Timeline 方案。')
+      taskStore.addLog('[编辑] 请先在对话中生成视频方案。')
       return null
     }
 
     const draft = await saveV2DirectorTimelineDraft()
-    taskStore.addLog(
-      `[编辑] V2 Timeline 草稿已保存为 revision ${draft.revision}。导出会使用这个不可变 revision。`,
-    )
+    taskStore.addLog('[编辑] 当前方案已保存，导出时会使用刚保存的内容。')
     return draft
   }
 
@@ -81,11 +78,11 @@ export function EditorHeader() {
       return
     }
     if (!env.useBackend || !backendReady) {
-      taskStore.addLog('[导出] 后端未就绪，请先启动 backend。')
+      taskStore.addLog('[导出] 视频处理服务暂未就绪，请稍后重试。')
       return
     }
     if (!useV2TimelineStore.getState().spec) {
-      taskStore.addLog('[导出] 当前没有 V2 Timeline 方案，请先在左侧对话中生成方案。')
+      taskStore.addLog('[导出] 当前还没有视频方案，请先在左侧对话中生成方案。')
       return
     }
 
@@ -103,9 +100,9 @@ export function EditorHeader() {
         const readiness = await getV2TimelineDraftReadiness(saved.draftId, saved.revision)
         setPreflight(readiness)
         if (readiness.status === 'blocked') {
-          taskStore.addLog(`[导出预飞检查] ${readiness.missing.map((item) => item.description).join('；')}`)
+          taskStore.addLog(`[导出检查] ${readiness.missing.map((item) => item.description).join('；')}`)
         } else {
-          taskStore.addLog(`[导出预飞检查] revision ${readiness.revision} 可执行；有 ${readiness.generationJobCount} 个生成任务待解析，未命中复用时才会调用 Provider。请再次确认导出。`)
+          taskStore.addLog(`[导出检查] 当前方案可以导出；有 ${readiness.generationJobCount} 个镜头需要准备，不能复用时才会重新生成。请再次确认导出。`)
         }
         return
       }
@@ -115,7 +112,7 @@ export function EditorHeader() {
       )
       if (confirmedReadiness.status === 'blocked') {
         setPreflight(confirmedReadiness)
-        taskStore.addLog(`[导出预飞检查] 状态已变化：${confirmedReadiness.missing.map((item) => item.description).join('；')}`)
+        taskStore.addLog(`[导出检查] 状态已变化：${confirmedReadiness.missing.map((item) => item.description).join('；')}`)
         return
       }
       const creation = useCreationStore.getState()
@@ -126,12 +123,12 @@ export function EditorHeader() {
         || latest.hasLocalEdits
       ) {
         setPreflight(null)
-        taskStore.addLog('[导出预飞检查] 当前草稿已变化，请重新确认导出。')
+        taskStore.addLog('[导出检查] 当前方案已变化，请重新确认导出。')
         return
       }
       await renderV2DirectorTimeline({
         taskId,
-        prompt: creation.inputText || '导出当前 V2 Timeline 成片',
+        prompt: creation.inputText || '导出当前视频成片',
         sampleVideoUrl: creation.sampleUrl,
         sampleVideoName: creation.sampleName,
         aspectRatio: creation.aspectRatio,
@@ -140,7 +137,7 @@ export function EditorHeader() {
       }, { draftId: preflight!.draftId, revision: preflight!.revision })
       setPreflight(null)
     } catch (error) {
-      taskStore.addLog(`[导出] 提交失败：${error instanceof Error ? error.message : String(error)}`)
+      taskStore.addLog('[导出] 当前成片没有开始生成，请检查方案提示后重试。')
     } finally {
       setExporting(false)
     }
@@ -173,8 +170,8 @@ export function EditorHeader() {
             {v2HasLocalEdits
               ? '未保存修改'
               : renderedOutputUrl
-                ? `已渲染 v${draftRevision}`
-                : `已保存 v${draftRevision}`}
+                ? '当前方案已生成成片'
+                : '当前方案已保存'}
           </p>
         ) : null}
       </div>
@@ -200,9 +197,9 @@ export function EditorHeader() {
           title={
             v2Spec
               ? v2HasLocalEdits
-                ? '保存当前 V2 草稿；导出会使用保存后的 revision'
-                : '当前 V2 草稿已保存'
-              : '请先生成 V2 Timeline 方案'
+                ? '保存当前方案；导出会使用保存后的内容'
+                : '当前方案已保存'
+              : '请先生成视频方案'
           }
         >
           <Save className="h-3.5 w-3.5" />
@@ -214,7 +211,7 @@ export function EditorHeader() {
           type="button"
           disabled={exportDisabled}
           onClick={() => void handleExport()}
-          title="渲染当前 V2 Timeline 成片"
+          title="导出当前视频成片"
         >
           {exporting ? '检查中' : preflight?.status === 'ready' ? '确认导出' : '导出成片'}
         </Button>
@@ -222,12 +219,12 @@ export function EditorHeader() {
       {preflight ? (
         <aside className="absolute right-4 top-16 z-50 w-96 rounded-lg border border-zinc-700 bg-zinc-950 p-4 shadow-xl">
           <div className="flex items-center justify-between gap-3">
-            <strong className="text-sm text-zinc-100">导出预飞检查 · revision {preflight.revision}</strong>
+            <strong className="text-sm text-zinc-100">导出前检查</strong>
             <button type="button" className="text-xs text-zinc-400" onClick={() => setPreflight(null)}>关闭</button>
           </div>
           {preflight.status === 'ready' ? (
             <p className="mt-2 text-xs leading-5 text-emerald-300">
-              可渲染；有 {preflight.generationJobCount} 个生成任务待解析，未命中复用时才会调用 Provider。再次点击“确认导出”才会开始。
+              当前方案可以导出；有 {preflight.generationJobCount} 个镜头需要准备，不能复用时才会重新生成。再次点击“确认导出”才会开始。
             </p>
           ) : (
             <div className="mt-2 space-y-2 text-xs leading-5 text-amber-300">

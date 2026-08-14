@@ -117,9 +117,66 @@ const LlmIntentResultSchema = z.discriminatedUnion('intent', [
     intent: z.enum(['create', 'revise', 'execute']),
     toolRequests: z.array(ToolRequestSchema).max(20).default([]),
   }).strict(),
-])
+]).superRefine((decision, context) => {
+  const refs = [
+    ...decision.stateActions.map((action) => action.ref),
+    ...decision.memoryActions.map((action) => action.ref),
+    ...decision.toolRequests.map((request) => request.ref),
+  ]
+  const duplicate = refs.find((ref, index) => refs.indexOf(ref) !== index)
+  if (duplicate) {
+    context.addIssue({
+      code: 'custom',
+      message: `globally unique action ref required: ${duplicate}`,
+      path: ['ref'],
+    })
+  }
+  const memoryRefs = new Set(decision.memoryActions.map((action) => action.ref))
+  for (const [index, request] of decision.toolRequests.entries()) {
+    if (request.dependsOn.some((ref) => memoryRefs.has(ref))) {
+      context.addIssue({
+        code: 'custom',
+        message: 'memory actions cannot be execution dependencies',
+        path: ['toolRequests', index, 'dependsOn'],
+      })
+    }
+  }
+})
 
 const DirectorDecisionJsonSchema = z.toJSONSchema(LlmIntentResultSchema, {
+  target: 'draft-7',
+}) as Record<string, unknown>
+
+const DirectorFinalReplyOpeningSchema = z.enum([
+  '',
+  '我看过这次的处理结果了',
+  '我把这次的处理结果整理好了',
+  '我把刚才的处理情况核对了一遍',
+  '这次的处理情况我已经梳理好了',
+  '我按你的要求逐项看过结果了',
+  '刚才的处理结果我已经逐项确认过了',
+])
+const DirectorFinalReplyNextStepSchema = z.enum([
+  '',
+  '你可以继续告诉我接下来想怎么调整',
+  '你可以先看看当前结果，再决定下一步',
+  '如果需要，我可以继续按当前结果往下处理',
+  '你可以先确认这些结果，再告诉我下一步想怎么处理',
+  '接下来想继续调整哪一部分，直接告诉我就可以',
+  '如果想换一种处理方式，也可以继续告诉我',
+  '你可以根据当前结果决定继续调整还是先保留',
+])
+const DirectorFinalReplyConnectorSchema = z.enum(['', '另外，', '同时，', '不过，', '至于另一项，'])
+const DirectorFinalReplySchema = z.object({
+  opening: DirectorFinalReplyOpeningSchema,
+  outcomes: z.array(z.object({
+    ref: z.string().trim().min(1).max(80),
+    status: z.enum(['succeeded', 'failed', 'skipped']),
+    connector: DirectorFinalReplyConnectorSchema,
+  }).strict()).max(50),
+  nextStep: DirectorFinalReplyNextStepSchema,
+}).strict()
+const DirectorFinalReplyJsonSchema = z.toJSONSchema(DirectorFinalReplySchema, {
   target: 'draft-7',
 }) as Record<string, unknown>
 
@@ -149,6 +206,20 @@ export interface LlmIntentRouterOutput {
   stateActions: DirectorStateAction[]
   memoryActions: DirectorMemoryAction[]
   missingInformation: string[]
+}
+
+export interface DirectorFinalReplyFact {
+  ref: string
+  status: 'succeeded' | 'failed' | 'skipped'
+  summary: string
+}
+
+export interface DirectorFinalReplyResult {
+  message: string
+  source: 'llm' | 'fallback'
+  responseId?: string
+  audit?: unknown
+  validationError?: string
 }
 
 function summarizeCurrentTimeline(context: DirectorContext) {
@@ -304,13 +375,13 @@ export function buildDirectorModelPrompt(input: {
 - 回答当前方案“哪些内容会由 AI 生成”或判断方案是否实现画面要求时，只能依据 timelineFacts 的 type、assetId 和 materialJobs：image_motion 只能移动或裁剪原图像素，不能生成原图中不存在的内容；只有 ai_video 配套 generate_video（或明确实现该效果的已注册 scene 组件）才算新增动态画面。不得把 creative_intent 的文字描述当成已实现结果。
 - creativeConfigDelta 只写本轮新确认的创作参数；UI 明确值优先，不能被模型覆盖。
 - 用户明确要求记录、替换或撤销创作要求时，输出一个 requirements.update stateAction。replace/revoke 只能使用 activeRequirements 中的 id，并填写 targetRequirementId；不得使用字幕、场景、素材、样例或草稿 ID。
-- stateActions 和 toolRequests 使用本轮局部 ref。Tool 只有真实依赖前序状态或 Tool 结果时才写 dependsOn；独立动作使用空数组。
+- stateActions、memoryActions 和 toolRequests 的 ref 在本轮必须全局唯一。Tool 只有真实依赖前序状态或 Tool 结果时才写 dependsOn；记忆是附加动作，不能作为 Tool 的执行依赖；独立动作使用空数组。
 - 用户用“只有 A 成功后才做 B、先 A 再基于结果 B”等条件明确建立依赖时，B 的 dependsOn 必须引用 A 的 ref；不能因为同轮返回就省略真实依赖。
 - 每个 toolRequest 的 skillId 是该 Tool 的主 Skill 选择；skillRequests 只用于本轮额外需要的 Skill 上下文，不要重复声明 Tool 已选择的主 Skill。
-- replyDraft 不能声称要求、长期知识或 Tool 已成功保存/执行，服务端会根据实际 receipts 生成最终回复。
+- replyDraft 不能声称要求、长期知识或执行动作已成功保存/完成；有真实执行结果时，服务端会根据回执生成最终回复。replyDraft 必须像正常对话，不得出现内部版本号、V2 Timeline、revision、Tool、Skill、Provider、Backend、Worker、调用 ID 或协议字段。
 - missingInformation 只列出真正阻塞当前目标的事实；可选补充不算阻塞。
 - Tool arguments 必须严格符合 Tool 卡片中的 inputSchema，不得增加字段。
-- 用户在本轮明确请求修改草稿（改字幕、换转场、换视觉策略、重排镜头）即为本轮执行授权；draft 修订不需要再次确认，直接选择 timeline.patch 执行。
+- 用户在本轮明确请求修改方案时，可以提出对应修改动作；服务端会先形成可核对的修改提案，只有用户确认后才执行。
 - 对滤镜、合成、动画和转场需求，先确定用户想要的效果语义，再在内置实现与 Current context 的 renderedComponents 中选择语义匹配的实现；两者都不能满足时才通过 render.author 创作组件（用户无需明确要求写代码）。
 - render.author 提交 purpose、用户原话中的简短 displayName、effectBrief 和逐项 acceptanceCriteria，不得生成 React 源码或组件 ID。displayName 优先沿用用户给出的中文效果名，不得使用“自定义转场”等含糊名称。服务端编码 Agent 负责生成、试渲染和验收；同轮需要立即应用时，让 timeline.plan/timeline.patch 显式 dependsOn 该 author 动作。
 - Treat presets and renderedComponents as implementation candidates, not recommendations. Decide the intended effect semantics before choosing its implementation; source and list order do not imply priority.
@@ -430,6 +501,8 @@ async function callResponsesApi(input: {
   previousResponseId?: string
   allowStructuredOutput?: boolean
   structuredOutput?: { name: string; schema: Record<string, unknown> }
+  maxOutputTokens?: number
+  retryWithoutSchema?: boolean
 }): Promise<{
   raw: unknown
   structuredOutput: { requested: boolean; providerFallback: boolean; reason?: string }
@@ -445,6 +518,7 @@ async function callResponsesApi(input: {
   }
   const body = (useSchema: boolean) => ({
     model: env.directorAgentModel,
+    ...(input.maxOutputTokens ? { max_output_tokens: input.maxOutputTokens } : {}),
     ...(env.directorAgentResponseContinuity && input.previousResponseId
       ? { previous_response_id: input.previousResponseId }
       : {}),
@@ -473,7 +547,7 @@ async function callResponsesApi(input: {
   let response = await request(requested)
   let text = await response.text()
   const schemaRejected = requested && !response.ok && [400, 404, 422].includes(response.status)
-  if (schemaRejected) {
+  if (schemaRejected && input.retryWithoutSchema !== false) {
     response = await request(false)
     const retryText = await response.text()
     if (!response.ok) throw new Error(`Responses API returned ${response.status}: ${retryText.slice(0, 500)}`)
@@ -496,6 +570,92 @@ async function callResponsesApi(input: {
     return { raw: JSON.parse(text), structuredOutput: { requested, providerFallback: false } }
   } catch {
     return { raw: text, structuredOutput: { requested, providerFallback: false } }
+  }
+}
+
+function validateFinalReply(input: {
+  candidate: z.infer<typeof DirectorFinalReplySchema>
+  facts: DirectorFinalReplyFact[]
+}) {
+  if (input.candidate.outcomes.length !== input.facts.length) {
+    throw new Error('final reply did not acknowledge every authoritative receipt')
+  }
+  input.candidate.outcomes.forEach((outcome, index) => {
+    const fact = input.facts[index]
+    if (!fact || outcome.ref !== fact.ref || outcome.status !== fact.status) {
+      throw new Error(`outcome order or status mismatch at index ${index}`)
+    }
+    if ((index === 0) !== (outcome.connector === '')) {
+      throw new Error('only the first outcome may omit its connector')
+    }
+  })
+}
+
+function punctuateReplyPart(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  return /[。！？!?；;]$/u.test(trimmed) ? trimmed : `${trimmed}。`
+}
+
+function finalReplyPrompt(input: {
+  userPrompt: string
+  replyDraft: string
+  facts: DirectorFinalReplyFact[]
+}) {
+  return [
+    '你是直接与视频创作者对话的 AI 导演。请根据已经发生的真实结果，写一段自然、简洁的中文回复。',
+    'outcomes 是唯一事实来源；replyDraft 只供参考语气，不能覆盖真实结果。',
+    '请为 opening 和 nextStep 各选择一个最合适的安全承接语。outcomes 必须严格保持给定顺序；第一项 connector 必须为空，后续项根据并列或转折关系选择 connector。',
+    'outcomes 只返回 ref 和 status；不要复述 summary。服务端会按 ref 放回对应的权威事实，不能改写、对调或遗漏。',
+    '不要使用“模块已执行/未执行”式清单。最终回复会由 opening、按你排列的权威结果和 nextStep 组成。',
+    '不要向用户展示内部版本号、revision、V2 Timeline、Tool、Skill、Provider、Backend、Worker、调用 ID 或协议字段。',
+    '失败、跳过或部分完成时必须如实保留对应 summary，不能把计划、尝试、预览或失败说成已经完成。',
+    `用户原话：${JSON.stringify(input.userPrompt)}`,
+    `执行前回复草稿：${JSON.stringify(input.replyDraft)}`,
+    `权威 outcomes：${JSON.stringify(input.facts)}`,
+    '只输出符合给定 JSON Schema 的 JSON。',
+  ].join('\n')
+}
+
+export async function composeDirectorFinalReply(input: {
+  userPrompt: string
+  replyDraft: string
+  facts: DirectorFinalReplyFact[]
+  previousResponseId?: string
+  fallbackMessage: string
+}): Promise<DirectorFinalReplyResult> {
+  let rawText = ''
+  try {
+    const response = await callResponsesApi({
+      promptText: finalReplyPrompt(input),
+      previousResponseId: input.previousResponseId,
+      maxOutputTokens: 512,
+      retryWithoutSchema: false,
+      structuredOutput: {
+        name: 'v2_director_final_reply',
+        schema: DirectorFinalReplyJsonSchema,
+      },
+    })
+    rawText = extractText(response.raw)
+    const candidate = DirectorFinalReplySchema.parse(extractJson(rawText))
+    validateFinalReply({ candidate, facts: input.facts })
+    const message = [
+      candidate.opening,
+      ...candidate.outcomes.map((outcome, index) => `${outcome.connector}${input.facts[index]?.summary ?? ''}`),
+      candidate.nextStep,
+    ].map(punctuateReplyPart).filter(Boolean).join('')
+    return {
+      message,
+      source: 'llm',
+      responseId: responseIdFrom(response.raw),
+      audit: responseAudit(response.raw, rawText),
+    }
+  } catch (error) {
+    return {
+      message: input.fallbackMessage,
+      source: 'fallback',
+      validationError: error instanceof Error ? error.message : String(error),
+    }
   }
 }
 
@@ -581,12 +741,7 @@ function fallbackContextFacts(input: {
   const facts: string[] = []
 
   if (timeline) {
-    const revision = timeline.currentRevision ?? timeline.savedRevision
-    facts.push(
-      revision == null
-        ? `当前有一版 ${timeline.kind} 草稿`
-        : `当前有一版 ${timeline.kind} 草稿（修订 ${revision}）`,
-    )
+    facts.push('当前有一份可继续编辑的视频方案')
   }
   if (input.context.sampleVideo?.reference?.summary) {
     facts.push(`样例理解摘要：${input.context.sampleVideo.reference.summary}`)
@@ -599,7 +754,7 @@ function fallbackContextFacts(input: {
     facts.push(`可用素材：${names}${input.context.materials.length > 3 ? ' 等' : ''}`)
   }
   if (!facts.length && input.runtime.hasV2Timeline) {
-    facts.push('当前存在可编辑的 V2 时间线')
+    facts.push('当前存在可编辑的视频方案')
   }
   return facts
 }
@@ -622,10 +777,10 @@ export function buildDirectorContextFallback(input: {
 }): LlmIntentRouterOutput {
   const facts = fallbackContextFacts(input)
   const question = quotedPrompt(input.prompt)
-  const contextLine = facts.length ? ` 当前保留的 V2 事实是：${facts.join('；')}。` : ''
+  const contextLine = facts.length ? ` 当前保留的信息是：${facts.join('；')}。` : ''
   const assistantMessage = question
     ? `我没能可靠完成这轮判断，因此不会擅自把“${question}”变成修改、生成或渲染。${contextLine}`
-    : `这一轮无法可靠判断下一步；当前讨论和已有 V2 方案都会保留，也不会触发任何执行。${contextLine}`
+    : `这一轮无法可靠判断下一步；当前讨论和已有方案都会保留，也不会触发任何执行。${contextLine}`
 
   return {
     source: 'context_fallback',
@@ -645,7 +800,7 @@ export function buildDirectorContextFallback(input: {
       assistantMessage,
     },
     fallbackReason: input.reason,
-    publicThoughts: ['本轮未得到可执行模型决策；已保留问题与 V2 上下文，未触发工作流。'],
+    publicThoughts: ['这一轮没有得到可靠的执行判断；已保留当前问题和方案，也没有开始修改或导出。'],
     stateActions: [],
     memoryActions: [],
     missingInformation: [],

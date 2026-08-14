@@ -19,7 +19,12 @@ import {
   deliveryAuthorizationFromDirectorDecision,
   pendingDismissalAuthorizationFromDirectorDecision,
 } from '../../pipeline-v2/agent-tools/authorization.js'
-import { routeDirectorIntentWithLlm, type LlmIntentRouterOutput } from './llm-intent-router.js'
+import {
+  composeDirectorFinalReply,
+  routeDirectorIntentWithLlm,
+  type DirectorFinalReplyResult,
+  type LlmIntentRouterOutput,
+} from './llm-intent-router.js'
 import {
   applyCreativeMemoryActions,
   searchCreativeMemories,
@@ -194,46 +199,82 @@ function stripUnsupportedPersistenceClaims(message: string) {
 
 function requirementConfirmation(changes: RequirementChanges) {
   const messages = [
-    ...changes.added.map((item) => `已记录：${item.statement}`),
-    ...changes.replaced.map((item) => `已更新：${item.previous.statement} → ${item.current.statement}`),
-    ...changes.revoked.map((item) => `已撤销：${item.statement}`),
+    ...changes.added.map((item) => `我已经记下“${item.statement}”`),
+    ...changes.replaced.map((item) => `我已经把“${item.previous.statement}”更新为“${item.current.statement}”`),
+    ...changes.revoked.map((item) => `我已经不再沿用“${item.statement}”`),
   ]
   if (messages.length === 0 && changes.unchanged.length > 0) {
-    messages.push('相关要求已在当前有效要求中，无需重复记录')
+    messages.push('这项要求已经在当前方案中生效，不需要重复记录')
   }
-  return messages.join('。')
+  return messages.join('；')
+}
+
+function userFacingExecutionText(message: string) {
+  return message
+    .replace(/V2\s+正式渲染/giu, '成片导出')
+    .replace(/V2\s+(?:Timeline|时间线)/giu, '视频方案')
+    .replace(/\bV\d+(?:\s+Timeline)?\b/giu, '当前方案')
+    .replace(/\bRemotion\b/giu, '程序化画面')
+    .replace(/\bTool\b/giu, '处理')
+    .replace(/\bSkill\b/giu, '能力')
+    .replace(/\bProvider\b/giu, '生成服务')
+    .replace(/\bBackend\b/giu, '创作服务')
+    .replace(/\bWorker\b/giu, '后台任务')
+    .replace(/API\s*Key/giu, '创作服务配置')
+    .replace(/input_asset(?:_id)?/giu, '参考素材')
+    .replace(/output_asset(?:_id)?/giu, '生成产物')
+    .replace(/\bsceneIds?\b/giu, '目标镜头')
+    .replace(/\bcustom_render\b/giu, '自定义画面效果')
+    .replace(/\bpendingTimelineRevisions?\b/giu, '待处理修改')
+    .replace(/\bscene_[a-z0-9_-]+\b/giu, '目标镜头')
+    .replace(/\boverlay_[a-z0-9_-]+\b/giu, '目标字幕')
+    .replace(/\btransition_[a-z0-9_-]+\b/giu, '目标转场')
+    .replace(/\b(?:component|cmp)_[a-z0-9_-]+\b/giu, '画面效果')
+    .replace(/\bmat_[a-z0-9_-]+\b/giu, '素材')
+    .replace(/call\s*id/giu, '处理标识')
+    .replace(/\brevision\s*\d*/giu, '当前方案')
+    .trim()
+}
+
+function userFacingRevisionDiff(
+  diff: NonNullable<Extract<DirectorAgentStreamEvent, { type: 'tool_result' }>['revisionReceipt']>['actualDiff'],
+) {
+  if (!diff) return undefined
+  return {
+    scenes: diff.scenes.length ? ['镜头内容或呈现已更新'] : [],
+    visibleText: diff.visibleText.length ? ['字幕或画面文字已更新'] : [],
+    transitions: diff.transitions.length ? ['转场已更新'] : [],
+    audio: diff.audio.length ? ['音频已更新'] : [],
+    other: diff.other.length ? ['方案设置或素材安排已更新'] : [],
+    hasAudienceFacingChange: diff.hasAudienceFacingChange,
+  }
 }
 
 function toolOutcomeConfirmation(
   results: V2AgentToolResult[],
   receipts: DirectorActionReceipt[],
-  requests: Array<{ callId: string; arguments: Record<string, unknown> }>,
 ) {
   const friendlyError = (summary: string) => {
     if (summary.startsWith('invalid tool arguments: sceneId is only valid')) {
       return '修订参数不合法：目标场景只能用于场景或视觉策略范围。'
     }
-    return summary
+    return userFacingExecutionText(summary)
   }
   return results.map((result) => {
     const status = receipts.find((receipt) => receipt.callId === result.callId)?.status
-    const instruction = requests.find((request) => request.callId === result.callId)?.arguments.instruction
-    const target = typeof instruction === 'string' && instruction.trim()
-      ? `“${instruction.trim()}”`
-      : undefined
-    if (status === 'skipped') return `已跳过 ${result.toolId}：${result.summary}`
-    if (result.ok) return target ? `${result.summary} 已按本轮指令处理：${target}` : result.summary
-    return `未完成 ${target ?? result.toolId}：${friendlyError(result.summary)}${result.recovery ? `；恢复建议：${result.recovery}` : ''}`
+    if (status === 'skipped') return `这一步没有继续：${userFacingExecutionText(result.summary)}`
+    if (result.ok) return userFacingExecutionText(result.summary)
+    return `这次没能完成这项操作：${friendlyError(result.summary).replace(/[。；;]+$/u, '')}${result.recovery ? `；${userFacingExecutionText(result.recovery)}` : ''}`
   }).join('；')
 }
 
 function workspaceSaveFailureConfirmation(results: V2AgentToolResult[]) {
   const savedDraft = [...results].reverse().find((result) => result.ok && result.draft)?.draft
   if (savedDraft) {
-    return `草稿 v${savedDraft.revision} 已保存，但会话状态同步失败；重新打开该草稿可恢复结果。`
+    return '方案修改已经保存，但对话状态没有同步成功；重新打开当前方案即可恢复结果。'
   }
   if (results.some((result) => result.ok)) {
-    return '工具执行已返回成功，但依赖工作区的状态未保存，请重试。'
+    return '这次处理已经返回结果，但对话中的状态没有保存成功，请重试。'
   }
   return '工作区保存失败，本轮要求和状态均不能确认为已保存，请稍后重试。'
 }
@@ -286,11 +327,11 @@ function creativeMemoryConfirmation(
     receipt.status === 'skipped' && receipt.reason === 'duplicate_of_requirement').length
   const failed = receipts.filter((receipt) => receipt.status === 'failed')
   return [
-    active ? `已沉淀 ${active} 条创作偏好，可在“创作偏好”中查看或撤销` : '',
-    candidates ? `另有 ${candidates} 条仅作为待观察候选，不会直接影响创作` : '',
-    duplicates ? `${duplicates} 条已作为当前项目要求记录，未重复沉淀为长期偏好` : '',
+    active ? `我已经保存了 ${active} 条创作偏好，你可以在“创作偏好”中查看或撤销` : '',
+    candidates ? `另有 ${candidates} 条暂时作为候选观察，不会直接影响创作` : '',
+    duplicates ? `${duplicates} 条内容已经是当前项目要求，因此没有重复保存为长期偏好` : '',
     failed.length
-      ? `${failed.length} 条偏好未保存：${failed.map((item) => memoryErrorLabels[item.reason ?? ''] ?? item.reason).filter(Boolean).join('；')}`
+      ? `${failed.length} 条偏好没有保存成功：${failed.map((item) => memoryErrorLabels[item.reason ?? ''] ?? '创作偏好暂时无法更新，请稍后重试。').join('；')}`
       : '',
   ].filter(Boolean).join('；')
 }
@@ -308,6 +349,7 @@ export async function* streamDirectorAgentChat(
   dependencies: {
     dispatchTool?: typeof dispatchV2AgentTool
     saveWorkspace?: typeof workspaceSessions.save
+    composeFinalReply?: typeof composeDirectorFinalReply
   } = {},
 ): AsyncGenerator<DirectorAgentStreamEvent> {
   const id = normalizeDirectorWorkspaceId(input.workspaceSessionId)
@@ -322,7 +364,18 @@ export async function* streamDirectorAgentChat(
   ) {
     yield {
       type: 'error',
-      message: `工作区已从 v${input.workspaceStateRevision} 更新到 v${before.stateRevision}，请基于最新状态重试本轮请求。`,
+      code: 'workspace_changed',
+      message: '你操作期间当前方案已经发生了其他修改。本轮输入仍会保留，请基于最新方案重试。',
+    }
+    yield {
+      type: 'workspace_session',
+      workspaceSessionId: id,
+      turnRequestId,
+      stateRevision: before.stateRevision,
+      state: before,
+      traceDir: before.latestExecution?.traceDir ?? '',
+      modelCalled: false,
+      responseId: before.responseId,
     }
     yield { type: 'done' }
     return
@@ -425,7 +478,7 @@ export async function* streamDirectorAgentChat(
       || workspaceState.draftId !== pendingRevisionConfirmation.draftId
       || workspaceState.baseRevision !== pendingRevisionConfirmation.baseRevision
     ) {
-      const assistantMessage = '草稿版本已变化，这项旧修改提案没有执行。请基于当前方案重新提出修改。'
+      const assistantMessage = '你确认前，当前方案已经发生了其他修改，所以这项旧提案没有执行。请基于最新方案重新提出修改。'
       workspaceState = applyDirectorWorkspacePatch(before, {
         pendingTimelineRevisionConfirmation: null,
         ...(currentDraft && before.draftId === pendingRevisionConfirmation.draftId
@@ -889,13 +942,14 @@ export async function* streamDirectorAgentChat(
       if (awaitsRevisionConfirmation) continue
       let result: V2AgentToolResult
       let didDispatch = false
+      let internalDispatchError: { message: string; stack?: string } | undefined
       if (invalidUnconfirmedRevisionPlan) {
         result = {
           callId: request.callId,
           toolId: request.toolId,
           ok: false,
           gate: 'revision_confirmation',
-          summary: '修改提案包含未通过协议校验的动作；为避免部分执行，本轮没有运行任何 Tool。',
+          summary: '修改提案中有未通过校验的动作；为避免只改一部分，本轮没有开始执行。',
           recovery: '请基于当前草稿重新提出一组完整、可确认的修改。',
         }
       } else if (failedDependency) {
@@ -904,7 +958,7 @@ export async function* streamDirectorAgentChat(
           toolId: request.toolId,
           ok: false,
           gate: 'dependency',
-          summary: `因依赖动作 ${failedDependency.ref} 未成功，本动作已跳过。`,
+          summary: '前一步没有完成，因此这一步没有继续执行。',
         }
       } else if (rejected || !stage) {
         result = {
@@ -912,8 +966,8 @@ export async function* streamDirectorAgentChat(
           toolId: request.toolId,
           ok: false,
           gate: 'registry',
-          summary: rejected?.reason ?? '本轮 Skill/Tool 执行阶段无法建立。',
-          recovery: '请让导演模型重新选择一致且可用的 Skill 与 Tool。',
+          summary: rejected ? '本轮步骤存在重复、无效依赖或不受支持的执行方式，因此没有继续。' : '本轮没有找到可靠的执行方式。',
+          recovery: '请重新理解本轮要求，并选择当前可用的处理方式。',
         }
       } else {
         didDispatch = true
@@ -984,15 +1038,18 @@ export async function* streamDirectorAgentChat(
             wakeProgress = undefined
           }
           if (dispatchError) throw dispatchError
-          if (!dispatchResult) throw new Error('V2 Tool completed without a result.')
+          if (!dispatchResult) throw new Error('处理结束后没有返回结果。')
           result = dispatchResult
         } catch (error) {
+          internalDispatchError = error instanceof Error
+            ? { message: error.message, ...(error.stack ? { stack: error.stack } : {}) }
+            : { message: String(error) }
           result = {
             callId: request.callId,
             toolId: request.toolId,
             ok: false,
-            summary: `Tool 执行异常：${error instanceof Error ? error.message : String(error)}`,
-            recovery: '当前 V2 会话和草稿保持不变；修复异常后可从本轮继续。',
+            summary: '处理过程中遇到异常，本次没有应用任何修改。',
+            recovery: '当前对话和方案保持不变；问题解决后可以从这里继续。',
           }
         }
       }
@@ -1054,6 +1111,7 @@ export async function* streamDirectorAgentChat(
           draft: result.draft ? { id: result.draft.id, revision: result.draft.revision, trace_dir: result.draft.traceDir ?? null } : null,
           trace_dir: result.draft?.traceDir ?? result.output?.traceDir ?? null,
           recovery: result.recovery ?? null,
+          internal_error: internalDispatchError ?? null,
         },
       })
       const facts = toolResultTimelineFacts(result)
@@ -1107,14 +1165,19 @@ export async function* streamDirectorAgentChat(
           : workspaceState.pendingTimelineRevisions,
       })
       const revisionActualDiff = result.output?.revisionActualDiff
+      const visibleResultSummary = userFacingExecutionText(result.summary)
       const revisionReceipt = revisionIntent
         ? {
             ...revisionIntent,
             status: receiptStatus,
-            summary: result.summary,
+            summary: visibleResultSummary,
             revision: result.draft?.revision,
             ...(revisionActualDiff && typeof revisionActualDiff === 'object'
-              ? { actualDiff: revisionActualDiff as NonNullable<Extract<DirectorAgentStreamEvent, { type: 'tool_result' }>['revisionReceipt']>['actualDiff'] }
+              ? {
+                  actualDiff: userFacingRevisionDiff(
+                    revisionActualDiff as NonNullable<Extract<DirectorAgentStreamEvent, { type: 'tool_result' }>['revisionReceipt']>['actualDiff'],
+                  ),
+                }
               : {}),
           }
         : undefined
@@ -1125,7 +1188,7 @@ export async function* streamDirectorAgentChat(
         callId: result.callId,
         toolId: result.toolId,
         ok: result.ok,
-        summary: result.summary,
+        summary: visibleResultSummary,
         revisionReceipt,
         result: result.output,
         draft: result.draft
@@ -1148,7 +1211,7 @@ export async function* streamDirectorAgentChat(
   const shouldReportToolOutcome = dispatchedToolCount > 0
     || (toolResults.length > 0 && routed.conversationIntent !== 'chat' && routed.conversationIntent !== 'clarify')
   const toolConfirmation = shouldReportToolOutcome
-    ? toolOutcomeConfirmation(toolResults, actionReceipts, requestedTools)
+    ? toolOutcomeConfirmation(toolResults, actionReceipts)
     : ''
   const modelAssistantMessage = awaitsRevisionConfirmation
     ? `修改范围已解析并保存，尚未执行。请先核对修改目标与保护边界，再选择确认执行或取消。${requestedTools.some((request) => request.toolId === 'timeline.render') ? '正式渲染不包含在本次修改确认中，修改完成后仍需单独确认导出。' : ''}`
@@ -1177,12 +1240,77 @@ export async function* streamDirectorAgentChat(
       && hasUnsupportedRequirementPersistenceClaim(modelAssistantMessage)
       ? '本轮没有产生可验证的要求变更，因此未将其标记为已保存。'
       : modelAssistantMessage
-  const assistantMessage = memoryMessage
+  const nonReceiptAssistantMessage = memoryMessage
     ? [memoryMessage, baseAssistantMessage]
         .filter(Boolean)
         .map((message) => message.replace(/[。！!；;]+$/u, ''))
         .join('。')
     : baseAssistantMessage
+  const finalReplyFacts = actionReceipts.map((receipt) => {
+    const memoryReceipt = receipt.kind === 'memory.update'
+      ? memoryActionReceipts.find((item) => item.ref === receipt.ref)
+      : undefined
+    const toolResult = receipt.kind === 'tool.call'
+      ? toolResults.find((item) => item.callId === receipt.callId)
+      : undefined
+    const summary = receipt.kind === 'requirements.update'
+      ? requirementResult.ok ? requirementMessage : '本轮创作要求没有保存，因为内容未通过校验。'
+      : receipt.kind === 'memory.update' && memoryReceipt
+        ? creativeMemoryConfirmation(
+            [memoryReceipt],
+            routed.memoryActions.filter((item) => item.ref === receipt.ref),
+          )
+        : toolResult
+          ? toolOutcomeConfirmation([toolResult], [receipt])
+          : receipt.status === 'skipped'
+            ? '这项处理没有继续，当前方案保持不变。'
+            : '这项处理没有返回可确认的结果。'
+    return {
+      ref: receipt.ref,
+      status: memoryReceipt?.status ?? receipt.status,
+      summary: userFacingExecutionText(summary),
+    }
+  })
+  const receiptFallbackTail = !stateAction
+    && toolResults.length === 0
+    && memoryActionReceipts.length > 0
+    && hasUnsupportedRequirementPersistenceClaim(modelAssistantMessage)
+    ? stripUnsupportedPersistenceClaims(modelAssistantMessage)
+    : ''
+  const fallbackAssistantMessage = !awaitsRevisionConfirmation && finalReplyFacts.length > 0
+    ? [...finalReplyFacts.map((fact) => fact.summary), receiptFallbackTail]
+        .map((message) => message.replace(/[。！!？?]+$/u, ''))
+        .filter(Boolean)
+        .join('。')
+    : nonReceiptAssistantMessage
+  let finalReply: DirectorFinalReplyResult = {
+    message: fallbackAssistantMessage,
+    source: 'fallback',
+  }
+  if (!awaitsRevisionConfirmation && finalReplyFacts.length > 0) {
+    try {
+      finalReply = await (dependencies.composeFinalReply ?? composeDirectorFinalReply)({
+        userPrompt: executionPrompt,
+        replyDraft: routed.result.assistantMessage,
+        facts: finalReplyFacts,
+        previousResponseId: routed.responseId,
+        fallbackMessage: fallbackAssistantMessage,
+      })
+    } catch (error) {
+      finalReply = {
+        message: fallbackAssistantMessage,
+        source: 'fallback',
+        validationError: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+  const assistantMessage = userFacingExecutionText(finalReply.message)
+    || '这次结果已经整理完成，你可以继续告诉我下一步想怎么调整。'
+  if (finalReply.responseId) {
+    workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+      responseId: finalReply.responseId,
+    })
+  }
   const failedReceiptCount = actionReceipts.filter((receipt) => receipt.status !== 'succeeded').length
   const succeededReceiptCount = actionReceipts.filter((receipt) => receipt.status === 'succeeded').length
   workspaceState = appendDirectorWorkspaceTurn(workspaceState, {
@@ -1220,6 +1348,9 @@ export async function* streamDirectorAgentChat(
     tool_called: dispatchedToolCount > 0,
     tool_call_count: dispatchedToolCount,
     source: routed.source,
+    final_reply_source: finalReply.source,
+    final_reply_validation_error: finalReply.validationError ?? null,
+    final_reply_audit: finalReply.audit ?? null,
     intent: intentForWorkspace({ actionType: action.type, modelIntent: routed.conversationIntent }),
     action: action.type,
     previous_response_id: before.responseId ?? null,

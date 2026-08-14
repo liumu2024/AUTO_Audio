@@ -209,14 +209,14 @@ export function recoverableErrorFromMessage(message, actionType) {
     const suggestionsByCode = {
         ARK_FILE_QUOTA_EXCEEDED: [
             {
-                label: '清理 Ark 历史文件后重试',
-                action: { type: 'ANALYZE_SAMPLE', message: '清理 Ark 文件额度后重新解析样例。' },
+                label: '清理历史文件后重试',
+                action: { type: 'ANALYZE_SAMPLE', message: '请清理样例分析服务中的历史文件后重新解析样例。' },
             },
         ],
         API_KEY_INVALID: [
             {
-                label: '更新 API Key 后重试',
-                action: { type: actionType ?? 'ASK_USER', message: '请更新后端 API Key 后重试。' },
+                label: '检查创作服务配置后重试',
+                action: { type: actionType ?? 'ASK_USER', message: '请检查创作服务配置后重试。' },
             },
         ],
         MISSING_SAMPLE: [
@@ -254,7 +254,7 @@ export function recoverableErrorFromMessage(message, actionType) {
                 label: '降级为基础效果',
                 action: {
                     type: 'REQUEST_PLUGIN',
-                    message: '记录缺失组件能力，并使用基础 Remotion 效果兜底。',
+                    message: '记录缺失的画面能力，并使用基础效果替代。',
                 },
             },
         ],
@@ -272,8 +272,8 @@ export function recoverableErrorFromMessage(message, actionType) {
         ],
         UNKNOWN: [
             {
-                label: '查看技术详情',
-                action: { type: 'ASK_USER', message: '请查看技术详情后选择下一步。' },
+                label: '查看处理详情',
+                action: { type: 'ASK_USER', message: '请查看处理详情后选择下一步。' },
             },
         ],
     };
@@ -439,10 +439,10 @@ export function summarizeDirectorSessionState(state) {
         return 'No director session state yet.';
     const timeline = state.timeline;
     const revision = timeline?.currentRevision
-        ? `revision ${timeline.currentRevision}`
-        : 'no revision';
+        ? 'current plan saved'
+        : 'no saved plan';
     const rendered = timeline?.renderedRevision
-        ? `rendered revision ${timeline.renderedRevision}`
+        ? 'current plan rendered'
         : 'not rendered';
     const diff = timeline?.lastChangeSummary
         ? `Last change: ${timeline.lastChangeSummary}`

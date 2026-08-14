@@ -150,7 +150,7 @@ export function ProgressOverlay() {
           <div className="flex max-h-64 flex-col bg-zinc-900/50">
             <div className="flex shrink-0 items-center justify-between border-b border-zinc-800/50 px-4 py-2">
               <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-                实时日志 · task:progress
+                实时进度
               </span>
             </div>
             <div className="min-h-[96px] flex-1 overflow-y-auto px-4 py-3 font-mono text-[11px] leading-relaxed">

@@ -101,29 +101,26 @@ function isTimelineDraftRunResult(value: unknown): value is V2TimelineDraftRunRe
 function eventThought(event: DirectorAgentStreamEvent): string | null {
   if (event.type === 'thought') return `${event.title}：${event.content}`
   if (event.type === 'intent') {
-    const source =
-      event.source === 'llm'
-        ? '导演模型'
-        : event.source === 'llm_unstructured_safe_reply'
-          ? '模型自由回复（未执行）'
-          : event.source === 'context_fallback'
-            ? '保留上下文的降级回复'
-            : '导演服务'
-    return `本轮理解：${event.intent}；${source}。`
+    const label = {
+      chat: '继续讨论',
+      create: '创建方案',
+      revise: '修改方案',
+      execute: '导出成片',
+      clarify: '补充信息',
+    }[event.intent] ?? '处理当前请求'
+    return `正在按“${label}”理解你的要求。`
   }
   if (event.type === 'slot_update') {
     return event.missingSlots.length
-      ? `条件检查：还缺 ${event.missingSlots.join(', ')}。`
-      : `条件检查：画幅 ${event.slots.aspectRatio}，风格强度 ${event.slots.styleIntensity}，素材状态 ${event.slots.materialStatus}。`
+      ? '还有完成当前请求所需的信息没有确认。'
+      : `已核对当前画幅、风格和素材状态。`
   }
   if (event.type === 'constraint_resolution') {
     const conflicts = event.config.conflicts
     if (!conflicts.length) {
-      return `条件检查：最终采用画幅 ${event.config.aspectRatio}（${event.config.sources.aspectRatio ?? 'default'}）。`
+      return `当前方案将采用 ${event.config.aspectRatio} 画幅。`
     }
-    return `条件冲突：${conflicts
-      .map((item) => `${item.field} 的 UI 值 ${item.uiValue} 覆盖模型理解 ${item.modelValue}`)
-      .join('；')}；最终采用 ${event.config.aspectRatio}。`
+    return `检测到创作设置不一致，已按你在界面中确认的设置处理。`
   }
   if (event.type === 'error') return `分析失败：${event.message}`
   return null
@@ -171,9 +168,7 @@ function buildV2ConversationSummary() {
     : ''
   const timelineText = v2.spec
     ? [
-        `Current V2 timeline draft: ${v2.spec.scenes.length} scenes, ${v2.spec.canvas.width}x${v2.spec.canvas.height}, ${v2.spec.canvas.duration_sec}s.`,
-        v2.preview?.traceDir ? `Latest preview trace: ${v2.preview.traceDir}` : '',
-        v2.result?.traceDir ? `Latest render trace: ${v2.result.traceDir}` : '',
+        `Current editable video plan: ${v2.spec.scenes.length} scenes, ${v2.spec.canvas.width}x${v2.spec.canvas.height}, ${v2.spec.canvas.duration_sec}s.`,
       ]
         .filter(Boolean)
         .join('\n')
@@ -214,6 +209,17 @@ function currentRecoverySuggestions() {
       label: suggestion.label,
       prompt: suggestion.action.message,
     }))
+}
+
+function restoreInputTrayAfterWorkspaceConflict(input: {
+  prompt: string
+  attachments: InputAttachment[]
+  sample?: { url: string; name: string }
+}) {
+  const creation = useCreationStore.getState()
+  creation.setInputText(input.prompt)
+  for (const attachment of input.attachments) creation.addAttachment(attachment)
+  if (input.sample?.url) creation.setSampleUrl(input.sample.url, input.sample.name)
 }
 
 export function DirectorChatPanel() {
@@ -430,6 +436,8 @@ export function DirectorChatPanel() {
 
     let directMessage: string | null = null
     let streamErrorMessage: string | null = null
+    let streamErrorCode: 'workspace_changed' | null = null
+    let workspaceRefreshPromise: Promise<void> | null = null
     const debugThoughts: string[] = []
     const requestWorkspaceSessionId = browserWorkspaceSessionId()
     const turnRequestId = crypto.randomUUID()
@@ -480,29 +488,19 @@ export function DirectorChatPanel() {
           if (browserWorkspaceSessionId() !== requestWorkspaceSessionId) return
           if (event.type === 'surface') {
             if (shouldShowThoughtSurface(event)) {
-              debugThoughts.push(
-                `对话模式：${event.mode}，置信度 ${Math.round(
-                  event.confidence * 100,
-                )}%。`,
-              )
+              debugThoughts.push('正在重新核对你的要求。')
             }
             return
           }
 
           const thought = eventThought(event)
           if (thought) debugThoughts.push(thought)
-           if (event.type === 'skill_selected') debugThoughts.push(`已选择创作能力：${event.skillId}。`)
+           if (event.type === 'skill_selected') debugThoughts.push('正在准备完成这项请求所需的能力。')
            if (event.type === 'skill_loaded') {
-             debugThoughts.push(
-               `${event.dependency ? '已加载依赖说明' : '已加载能力说明'}：${event.skillId} v${event.version}。`,
-             )
+             debugThoughts.push('所需能力已经准备好。')
            }
           if (event.type === 'tool_proposed') {
-            debugThoughts.push(
-              event.modeNormalized
-                ? `后端已提案：${event.toolId}；调用范围由 ${event.requestedMode} 归一为 ${event.effectiveMode}。`
-                : `后端已提案：${event.toolId}（${event.effectiveMode}）。`,
-            )
+            debugThoughts.push('已经整理好本轮需要处理的步骤。')
             if (event.revisionIntent) {
               const existingMessageId = revisionMessageIdsRef.current.get(event.callId)
               const messageId = existingMessageId ?? addAssistantMessage({
@@ -521,7 +519,7 @@ export function DirectorChatPanel() {
             }
           }
           if (event.type === 'tool_started') {
-            debugThoughts.push(`后端正在执行：${event.toolId}。`)
+            debugThoughts.push('正在处理你的请求。')
             if (event.toolId === 'timeline.render') {
               useTaskStore.getState().startTask(prompt, event.callId)
             }
@@ -533,7 +531,7 @@ export function DirectorChatPanel() {
             useTaskStore.getState().updateProgress(
               event.progress,
               `${event.message}${elapsedLabel}`,
-              `[${event.phase}] ${event.message}${elapsedLabel}`,
+              `${event.message}${elapsedLabel}`,
             )
           }
           if (event.type === 'tool_result') {
@@ -541,13 +539,12 @@ export function DirectorChatPanel() {
               const revisionMessageId = revisionMessageIdsRef.current.get(event.callId)
               if (revisionMessageId) {
                 updateMessage(revisionMessageId, {
-                  content: event.ok ? '修改已按服务端回执完成。' : '修改未完成。',
+                  content: '本次修改记录',
                   revisionIntent: undefined,
                   revisionReceipt: event.revisionReceipt,
                   revisionDecisionStatus: undefined,
                   status: event.ok ? 'done' : 'error',
                 })
-                revisionMessageIdsRef.current.delete(event.callId)
               }
             }
             if (event.toolId === 'timeline.render') {
@@ -559,12 +556,15 @@ export function DirectorChatPanel() {
             }
             if (event.ok && event.draft) {
               activateV2DraftWorkspace(event.draft)
-              debugThoughts.push(`已同步 V2 草稿 v${event.draft.revision} 到时间线工作区。`)
+              debugThoughts.push('最新方案已同步到编辑区。')
             }
-            debugThoughts.push(event.ok ? `后端结果：${event.summary}` : `后端未完成：${event.summary}`)
+            debugThoughts.push(event.ok ? '这一步已经处理完成。' : '这一步没有完成，具体原因会在回复中说明。')
           }
           if (event.type === 'assistant_reply') directMessage = event.message
-          if (event.type === 'error') streamErrorMessage = event.message
+          if (event.type === 'error') {
+            streamErrorMessage = event.message
+            streamErrorCode = event.code ?? null
+          }
           if (event.type === 'state_update') {
             useDirectorContextStore.getState().setDirectorState(event.state)
           }
@@ -582,6 +582,16 @@ export function DirectorChatPanel() {
               true,
               event.state.pendingTimelineRevisions ?? [],
             )
+            if (streamErrorCode === 'workspace_changed' && event.state.draftId) {
+              workspaceRefreshPromise = getV2TimelineDraft(event.state.draftId)
+                .then(({ draft }) => {
+                  if (browserWorkspaceSessionId() !== requestWorkspaceSessionId) return
+                  activateV2DraftWorkspace(draft)
+                })
+                .catch(() => {
+                  streamErrorMessage = '当前方案已发生变化，但最新内容暂时无法加载。你的输入已经保留，请稍后重试。'
+                })
+            }
             if (
               timelineRevisionDecision
               && !revisionDecisionCommitted
@@ -600,13 +610,12 @@ export function DirectorChatPanel() {
                 },
               )
             }
-            debugThoughts.push(
-              `V2 会话已同步；本轮${event.modelCalled ? '已调用导演模型' : '使用上下文降级'}。`,
-            )
+            debugThoughts.push('本轮对话状态已经同步。')
           }
         },
         abort.signal,
       )
+      if (workspaceRefreshPromise) await workspaceRefreshPromise
 
       if (timelineRevisionDecision?.action === 'reject' && !revisionDecisionCommitted) {
         setRevisionDecisionMessages(
@@ -625,6 +634,15 @@ export function DirectorChatPanel() {
       }
 
       if (streamErrorMessage) {
+        if (streamErrorCode === 'workspace_changed' && !timelineRevisionDecision) {
+          restoreInputTrayAfterWorkspaceConflict({
+            prompt,
+            attachments: messageAttachments,
+            sample: showSampleInInputTraySnapshot && effectiveSampleUrl
+              ? { url: effectiveSampleUrl, name: effectiveSampleName }
+              : undefined,
+          })
+        }
         updateMessage(thinkingId, {
           content: streamErrorMessage,
           kind: 'error',
@@ -642,7 +660,7 @@ export function DirectorChatPanel() {
         })
         if (debugThoughts.length) {
           addThoughtMessage({
-            content: '技术详情',
+            content: '处理过程',
             thoughts: debugThoughts,
             status: 'done',
           })
@@ -652,13 +670,14 @@ export function DirectorChatPanel() {
     } catch (e) {
       if (streamCancelRef.current) {
         updateMessage(thinkingId, {
-          content: '已停止等待本轮结果。后台模型或工具可能仍在执行；重新打开当前草稿可同步已保存结果。',
+          content: '已停止等待本轮结果。当前处理可能仍在继续；重新打开当前方案可以同步已经保存的结果。',
           kind: 'text',
           status: 'done',
         })
         return
       }
-      const msg = e instanceof Error ? e.message : String(e)
+      console.error('[DirectorChatPanel] request failed', e)
+      const msg = '这轮处理暂时没有完成。你的输入和当前方案都已保留，可以稍后重试。'
       if (timelineRevisionDecision?.action === 'reject' && !revisionDecisionCommitted) {
         setRevisionDecisionMessages(
           timelineRevisionDecision.confirmationId,
@@ -682,7 +701,7 @@ export function DirectorChatPanel() {
       })
       if (debugThoughts.length) {
         addThoughtMessage({
-          content: '技术详情',
+          content: '处理过程',
           thoughts: debugThoughts,
           status: 'done',
         })
@@ -716,12 +735,12 @@ export function DirectorChatPanel() {
     const progressId = activeProgressMessageIdRef.current
     if (progressId) {
       updateMessage(progressId, {
-        content: '已停止等待本轮结果。后台模型或工具可能仍在执行；重新打开当前草稿可同步已保存结果。',
+        content: '已停止等待本轮结果。当前处理可能仍在继续；重新打开当前方案可以同步已经保存的结果。',
         kind: 'text',
         status: 'done',
       })
     } else {
-      addAssistantMessage({ content: '已停止等待本轮结果。后台模型或工具可能仍在执行；重新打开当前草稿可同步已保存结果。' })
+      addAssistantMessage({ content: '已停止等待本轮结果。当前处理可能仍在继续；重新打开当前方案可以同步已经保存的结果。' })
     }
     setSending(false)
   }

@@ -20,6 +20,38 @@ const chatMessageSource = await readFile(
   new URL('../../fonted/src/components/sidebar/DirectorChatMessage.tsx', import.meta.url),
   'utf8',
 )
+const attachmentPreviewSource = await readFile(
+  new URL('../../fonted/src/components/sidebar/AttachmentPreviewStrip.tsx', import.meta.url),
+  'utf8',
+)
+const preferencesSource = await readFile(
+  new URL('../../fonted/src/components/shell/CreativePreferencesView.tsx', import.meta.url),
+  'utf8',
+)
+const dispatcherSource = await readFile(
+  new URL('../src/pipeline-v2/agent-tools/dispatcher.ts', import.meta.url),
+  'utf8',
+)
+const timelineServiceSource = await readFile(
+  new URL('../src/pipeline-v2/remotion-timeline-service.ts', import.meta.url),
+  'utf8',
+)
+const dashboardSource = await readFile(
+  new URL('../../fonted/src/components/shell/DashboardView.tsx', import.meta.url),
+  'utf8',
+)
+const assetsShellSource = await readFile(
+  new URL('../../fonted/src/components/shell/AssetsShellView.tsx', import.meta.url),
+  'utf8',
+)
+const progressOverlaySource = await readFile(
+  new URL('../../fonted/src/components/ai/ProgressOverlay.tsx', import.meta.url),
+  'utf8',
+)
+const pipelineBootstrapSource = await readFile(
+  new URL('../../fonted/src/hooks/usePipelineBootstrap.ts', import.meta.url),
+  'utf8',
+)
 assert.doesNotMatch(
   directorPanelSource,
   /revisionReceipt:\s*\{\s*\.\.\.event\.revisionIntent/s,
@@ -63,6 +95,41 @@ assert.match(
   /if \(!timelineRevisionDecision\) clearInputTray\(\)/,
   'a revision decision must not consume the normal chat input tray',
 )
+assert.match(
+  directorPanelSource,
+  /event\.type === 'error'[\s\S]{0,160}event\.code/,
+  'the UI must consume a structured stream error code instead of parsing localized copy',
+)
+assert.match(
+  directorPanelSource,
+  /function restoreInputTrayAfterWorkspaceConflict[\s\S]{0,500}setInputText\(input\.prompt\)[\s\S]{0,500}addAttachment/,
+  'a workspace conflict must restore the prompt and selected attachments for an explicit retry',
+)
+assert.match(
+  directorPanelSource,
+  /streamErrorCode === 'workspace_changed'[\s\S]{0,500}restoreInputTrayAfterWorkspaceConflict/,
+)
+assert.match(
+  directorPanelSource,
+  /streamErrorCode === 'workspace_changed'[\s\S]{0,900}getV2TimelineDraft[\s\S]{0,300}activateV2DraftWorkspace/,
+  'workspace conflict recovery must reload the latest persisted timeline before asking the user to retry',
+)
+assert.doesNotMatch(directorPanelSource, /content: '技术详情'/)
+assert.doesNotMatch(directorPanelSource, /服务端回执/)
+assert.doesNotMatch(directorPanelSource, /对话模式：.*置信度/)
+assert.match(attachmentPreviewSource, /样例参考/)
+assert.match(attachmentPreviewSource, /成片素材/)
+assert.match(preferencesSource, /待观察不会参与创作/)
+assert.match(preferencesSource, /已停用/)
+assert.match(preferencesSource, /重新启用/)
+assert.doesNotMatch(dashboardSource, /<p[^>]*font-mono[^>]*>[\s\S]{0,100}\{card\.id\}/)
+assert.doesNotMatch(assetsShellSource, /同步至后端/)
+assert.doesNotMatch(progressOverlaySource, /task:progress/)
+assert.doesNotMatch(pipelineBootstrapSource, /\[前端\]|\[联调\]|后端不可达|setBootstrapError\(msg\)/)
+assert.match(chatMessageSource, /目标理解不对/)
+assert.match(chatMessageSource, /改动范围不对/)
+assert.match(chatMessageSource, /不该改的内容变了/)
+assert.match(chatMessageSource, /请先说明你理解的修改目标和必须保留的内容/)
 
 const context = buildDirectorContextFromUI({
   sampleUrl: '',
@@ -283,6 +350,17 @@ const generatedPlayerSource = await readFile(
   new URL('../../fonted/src/components/canvas/GeneratedPlayer.tsx', import.meta.url),
   'utf8',
 )
+assert.doesNotMatch(propertyEditorSource, /Remotion 程序化画面/)
+assert.doesNotMatch(generatedPlayerSource, /Remotion 程序化画面/)
+const recoveryCopySource = await readFile(
+  new URL('../../shared/lib/director-state-machine.ts', import.meta.url),
+  'utf8',
+)
+assert.doesNotMatch(recoveryCopySource, /后端 API Key|基础 Remotion|Ark 历史文件/)
+assert.doesNotMatch(dispatcherSource, /message: '编码 Agent 正在生成并验证 Remotion 组件。'/)
+assert.doesNotMatch(timelineServiceSource, /message: '正在读取并校验当前 V2 草稿。'|message: '素材已齐备，正在由 Remotion 编排并渲染。'|message: 'V2 视频渲染已完成。'/)
+assert.doesNotMatch(frontendApiSource, /后端上传接口|原始错误|HTTP \$\{res\.status\} \/api\/uploads/)
+assert.doesNotMatch(editorHeaderSource, /\[导出\] 提交失败：\$\{/)
 assert.match(
   chatInputSource,
   /attachmentUploads\.length > 0[\s\S]*handleSend[\s\S]*attachmentUploads\.length > 0/,
@@ -324,12 +402,12 @@ assert.match(
 )
 assert.match(
   frontendApiSource,
-  /MAX_IDEMPOTENCY_POLL_ATTEMPTS[\s\S]*idempotentJsonRequest[\s\S]*still running/,
+  /MAX_IDEMPOTENCY_POLL_ATTEMPTS[\s\S]*idempotentJsonRequest[\s\S]*这项处理仍在继续/,
   'preview and save polling must terminate instead of leaving the UI pending forever',
 )
 assert.match(
   frontendApiSource,
-  /runV2TimelineDraft[\s\S]*MAX_IDEMPOTENCY_POLL_ATTEMPTS[\s\S]*still running/,
+  /runV2TimelineDraft[\s\S]*MAX_IDEMPOTENCY_POLL_ATTEMPTS[\s\S]*成片仍在生成中/,
   'render polling must use the same finite boundary',
 )
 assert.match(
@@ -393,9 +471,23 @@ assert.match(
   /applyDirectorWorkspaceContext\([\s\S]*event\.state\.pendingTimelineRevisions/,
   'workspace synchronization must deliver the pending revision gate to direct UI export',
 )
-assert.match(editorHeaderSource, /getV2TimelineDraftReadiness[\s\S]*预飞检查/)
-assert.match(editorHeaderSource, /未保存修改[\s\S]*已保存 v/)
-assert.match(chatPanelSource, /停止等待本轮结果[\s\S]*后台模型或工具可能仍在执行/)
+assert.match(editorHeaderSource, /getV2TimelineDraftReadiness[\s\S]*导出检查/)
+assert.match(editorHeaderSource, /未保存修改[\s\S]*当前方案已保存/)
+assert.doesNotMatch(editorHeaderSource, /已保存 v\$\{|已渲染 v\$\{|revision \$\{|Provider|V2 Timeline/)
+assert.doesNotMatch(chatPanelSource, /event\.skillId} v\$\{event\.version}|后端已提案|后端正在执行|V2 草稿 v\$\{/)
+assert.doesNotMatch(
+  chatPanelSource.match(/if \(event\.type === 'tool_result'\)[\s\S]*?if \(event\.toolId === 'timeline\.render'\)/)?.[0] ?? '',
+  /revisionMessageIdsRef\.current\.delete/,
+  'a replayed proposal/result pair must update the original revision card instead of creating a duplicate',
+)
+assert.match(chatPanelSource, /停止等待本轮结果[\s\S]*当前处理可能仍在继续/)
+assert.doesNotMatch(chatPanelSource, /后台模型或工具/)
 assert.doesNotMatch(chatPanelSource, /导演分析已中止/)
+assert.doesNotMatch(frontendApiSource, /Director request is still running/)
+assert.doesNotMatch(
+  directorPanelSource,
+  /const msg = e instanceof Error \? e\.message : String\(e\)/,
+  'unknown transport errors must not be rendered verbatim to users',
+)
 
 console.log('V2 director UI constraints smoke passed')

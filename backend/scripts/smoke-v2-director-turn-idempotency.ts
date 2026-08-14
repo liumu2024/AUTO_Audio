@@ -94,6 +94,30 @@ try {
     V2IdempotencyConflictError,
   )
 
+  const failedRequest = {
+    ...request,
+    workspaceSessionId: 'workspace_failed_turn',
+    turnRequestId: 'turn_failed_once',
+  }
+  const failedReservation = await prepareDirectorTurn(failedRequest)
+  const failWithInternalError = async function* () {
+    throw new Error('Provider input_asset_id internal failure')
+    yield { type: 'done' } as const
+  }
+  const firstFailureEvents = []
+  for await (const event of streamPreparedDirectorTurn(failedReservation, failWithInternalError)) {
+    firstFailureEvents.push(event)
+  }
+  const replayedFailureEvents = []
+  for await (const event of streamPreparedDirectorTurn(await prepareDirectorTurn(failedRequest), execute)) {
+    replayedFailureEvents.push(event)
+  }
+  for (const events of [firstFailureEvents, replayedFailureEvents]) {
+    const message = events.find((event) => event.type === 'error')?.message ?? ''
+    assert.match(message, /这轮处理暂时没有完成/)
+    assert.doesNotMatch(message, /Provider|input_asset_id|internal/)
+  }
+
   let activeExecutions = 0
   let maximumConcurrentExecutions = 0
   const serializedExecute = (label: string) => async function* () {

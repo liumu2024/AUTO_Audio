@@ -239,8 +239,8 @@ export function ChatInput({
 
         <p className="mt-1.5 px-1 text-[10px] text-zinc-600">
           {isSampleParsed
-            ? 'Enter 发送。样例只提供结构和风格；附件作为成片候选素材。'
-            : 'Enter 发送。附件默认作为创作素材；明确要求解析或复刻时，才会把视频作为样例。'}
+            ? 'Enter 发送。样例参考只提供表达方法；成片素材会参与当前创作，移除后本轮不使用。'
+            : 'Enter 发送。附件默认作为成片素材；明确要求分析或借鉴时，才会把视频作为样例参考。'}
         </p>
       </div>
 

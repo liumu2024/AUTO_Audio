@@ -206,12 +206,12 @@ function plannerInput(input: {
 async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise<V2AgentToolResult> {
   const request = input.stage.toolRequest
   if (input.stage.primarySkill.id !== request.skillId) {
-    return { callId: request.callId, toolId: request.toolId, ok: false, summary: 'Tool 与本轮主 Skill 不一致。', recovery: '重新生成一致的 Skill/Tool 提案。' }
+    return { callId: request.callId, toolId: request.toolId, ok: false, summary: '当前处理步骤与所需能力不一致。', recovery: '请重新理解本轮要求后再试。' }
   }
   const checked = validateV2AgentToolRequest(request, {
     selectedSkillIds: new Set([input.stage.primarySkill.id]),
   })
-  if (!checked.ok) return { callId: request.callId, toolId: request.toolId, ok: false, gate: 'registry_arguments', summary: checked.reason, recovery: '请使用当前 V2 可用能力重新提出请求。' }
+  if (!checked.ok) return { callId: request.callId, toolId: request.toolId, ok: false, gate: 'registry_arguments', summary: checked.reason, recovery: '请根据当前可用能力重新提出请求。' }
   if (input.workspace.recentToolCallIds?.includes(request.callId)) {
     return { callId: request.callId, toolId: request.toolId, ok: false, gate: 'idempotency', summary: '重复的工具调用已被拒绝。', recovery: '等待已有调用的真实结果。' }
   }
@@ -269,7 +269,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
   if (request.toolId === 'material.inspect') {
     const selected = new Set(bound.system.materialIds)
     const materials = input.context.materials.filter((material) => selected.has(material.id))
-    return { callId: request.callId, toolId: request.toolId, ok: true, summary: `已检查 ${materials.length} 个 V2 候选素材。`, output: { materials: materials.map(({ id, type, name, tags }) => ({ id, type, name, tags })) } }
+    return { callId: request.callId, toolId: request.toolId, ok: true, summary: `已检查 ${materials.length} 个候选素材。`, output: { materials: materials.map(({ id, type, name, tags }) => ({ id, type, name, tags })) } }
   }
   if (request.toolId === 'render.author') {
     const args = checked.arguments as {
@@ -278,7 +278,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       effectBrief: string
       acceptanceCriteria: string[]
     }
-    await input.onProgress?.({ phase: 'component_authoring', progress: 0.1, message: '编码 Agent 正在生成并验证 Remotion 组件。' })
+    await input.onProgress?.({ phase: 'component_authoring', progress: 0.1, message: '正在生成并验证自定义画面效果。' })
     const authored = await authorRenderComponent({
       purpose: args.purpose,
       displayName: args.displayName,
@@ -295,14 +295,14 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       sourceWorkspaceSessionId: input.traceSessionId,
     })
     if (authored.ok) {
-      await input.onProgress?.({ phase: 'component_promoted', progress: 1, message: `“${authored.displayName}”组件已通过试渲染和视觉验收。` })
+      await input.onProgress?.({ phase: 'component_promoted', progress: 1, message: `“${authored.displayName}”画面效果已经通过预览检查。` })
       return {
         callId: request.callId,
         toolId: request.toolId,
         ok: true,
         summary: authored.reused
-          ? `已复用通过验收的“${authored.displayName}”组件。`
-          : `“${authored.displayName}”组件已生成并通过验收。`,
+          ? `已复用通过检查的“${authored.displayName}”画面效果。`
+          : `“${authored.displayName}”画面效果已经生成并通过检查。`,
         output: {
           componentId: authored.componentId,
           purpose: authored.purpose,
@@ -321,8 +321,8 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       toolId: request.toolId,
       ok: false,
       gate: authored.stage,
-      summary: `组件创建失败（${authored.stage}）：${authored.reason}`,
-      recovery: '已清理失败组件和试渲染产物；可缩小或澄清效果说明后重试。',
+      summary: '自定义画面效果暂时没有生成成功。',
+      recovery: '失败的临时产物已清理；可以缩小或澄清效果说明后重试。',
       output: { repaired: authored.repaired, codingCalls: authored.codingCalls, failureStage: authored.stage },
     }
   }
@@ -355,7 +355,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       callId: request.callId,
       toolId: request.toolId,
       ok: true,
-      summary: '样例理解已完成；结果仅作为 V2 风格与节奏参考。',
+      summary: '样例分析已完成；结果只用于参考表达方式、风格和节奏。',
       sampleUnderstanding: result.understanding,
       sampleSelection: { id: sample.id, url: sample.url, name: sample.name },
       output: { traceDir: result.traceDir },
@@ -363,7 +363,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
   }
 
   if (request.toolId === 'timeline.patch' && !existing) {
-    return { callId: request.callId, toolId: request.toolId, ok: false, gate: 'dispatcher_draft', summary: '局部修订需要当前 V2 草稿。', recovery: checked.tool.recovery }
+    return { callId: request.callId, toolId: request.toolId, ok: false, gate: 'dispatcher_draft', summary: '需要先有一份可以编辑的视频方案，才能进行局部修改。', recovery: checked.tool.recovery }
   }
   const patchScope = request.toolId === 'timeline.patch'
     ? (checked.arguments.scope as V2TimelineRevisionScope)
@@ -401,7 +401,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       ok: false,
       gate: 'pending_resolution_target',
       summary: '指定的失败修改不属于当前草稿或已不再待处理。',
-      recovery: '请从当前草稿的 pendingTimelineRevisions 中选择真实 callId。',
+      recovery: '请从当前方案的待处理修改中选择要继续处理的那一项。',
     }
   }
   const existingTransitionIds = new Set((existing?.spec.transitions ?? []).map((transition) => transition.id))
@@ -478,8 +478,8 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       toolId: request.toolId,
       ok: false,
       gate: 'dispatcher_scope',
-      summary: `${patchScope} 修订需要模型根据当前草稿解析出明确的 sceneId。`,
-      recovery: '请明确描述目标镜头；模型应使用当前草稿中的真实 sceneId 重试。',
+      summary: '这项修改还没有确定唯一的目标镜头。',
+      recovery: '请明确描述要修改的镜头后重试。',
     }
   }
   if (request.toolId === 'timeline.plan' || request.toolId === 'timeline.patch') {
@@ -571,13 +571,13 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
           gate: 'revision_commit',
           summary: commit.violation?.message ?? '修订没有产生可保存的变化。',
           output: { revisionCommit: commit },
-          recovery: '保留当前 V2 草稿，请规划模型依据本轮修订范围重新生成实际差异。',
+          recovery: '当前方案已经保留，请根据这次修改的范围重新调整。',
           plannerInvoked: true,
         }
       }
     }
     const validation = validateRemotionTimelineSpec(spec)
-    if (!validation.ok) return { callId: request.callId, toolId: request.toolId, ok: false, gate: 'spec_validation', summary: 'V2 时间线未通过结构校验。', output: { validation }, recovery: checked.tool.recovery, plannerInvoked: true }
+    if (!validation.ok) return { callId: request.callId, toolId: request.toolId, ok: false, gate: 'spec_validation', summary: '视频方案没有通过结构校验。', output: { validation }, recovery: checked.tool.recovery, plannerInvoked: true }
     const pendingResolutionReview = pendingResolution
       ? await verifyV2TimelinePendingResolution({
           instruction: pendingResolution.instruction,
@@ -613,13 +613,13 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
         toolId: request.toolId,
         ok: false,
         gate: 'component_reference',
-        summary: `custom_render 组件引用无效：${error.issues.join('；')}`,
-        recovery: '仅引用已注册且对象类型匹配的组件；新 draft 必须来自本轮显式依赖的 render.author。',
+        summary: '自定义画面效果与当前方案不匹配。',
+        recovery: '请使用已经验收、且适合当前对象的画面效果；若需新效果，请先完成效果创作再继续。',
         plannerInvoked: true,
       }
     }
     const degradationSummary = settled.degradations.length > 0
-      ? `；以下可选效果未通过视觉验收，已保留对应对象的基础呈现：${settled.degradations.map((item) => `${item.displayName}（${item.targetIds.join('、')}）`).join('；')}`
+      ? `；以下可选效果未通过视觉验收，已保留对应对象的基础呈现：${settled.degradations.map((item) => `${item.displayName}（${item.targetIds.length} 处）`).join('；')}`
       : ''
     const selectedItemId = existing
       ? normalizeV2TimelineSelection({
@@ -631,7 +631,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       callId: request.callId,
       toolId: request.toolId,
       ok: true,
-      summary: `${request.toolId === 'timeline.patch' ? 'V2 时间线修订已保存为新的草稿版本。' : 'V2 时间线方案已保存为可编辑草稿。'}${degradationSummary}`,
+      summary: `${request.toolId === 'timeline.patch' ? '视频方案的修改已经保存。' : '视频方案已经保存，可以继续编辑。'}${degradationSummary}`,
       draft: { id: draft.id, revision: draft.revision, spec: draft.spec, traceDir: preview.traceDir, pendingTimelineRevisions: draft.pendingTimelineRevisions },
       output: {
         timelineFacts: buildDirectorTimelineFacts(draft.revision, draft.spec),
@@ -655,7 +655,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
     }
   }
   if (request.toolId === 'timeline.render') {
-    if (!existing) return { callId: request.callId, toolId: request.toolId, ok: false, summary: '正式渲染需要当前 V2 草稿版本。', recovery: checked.tool.recovery }
+    if (!existing) return { callId: request.callId, toolId: request.toolId, ok: false, summary: '需要先保存当前视频方案，才能生成成片。', recovery: checked.tool.recovery }
     let renderPhase = 'prepare'
     try {
       const result = await executeV2TimelineDraftRun({
@@ -677,7 +677,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       if (!result.ok) {
         throw new Error(`Render evaluation failed: ${result.evaluation.warnings.join('; ') || 'unknown evaluation failure'}`)
       }
-      return { callId: request.callId, toolId: request.toolId, ok: result.ok, summary: result.ok ? 'V2 正式渲染已完成。' : 'V2 正式渲染未完成。', output: { ...result } }
+      return { callId: request.callId, toolId: request.toolId, ok: result.ok, summary: result.ok ? '视频成片已经导出。' : '视频成片没有导出。', output: { ...result } }
     } catch (error) {
       const cause = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').trim().slice(0, 500)
       const componentIds = [...new Set(
@@ -690,7 +690,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
         toolId: request.toolId,
         ok: false,
         gate: 'render_failed',
-        summary: 'V2 正式渲染失败，当前草稿保持不变。',
+        summary: '视频成片没有导出，当前方案保持不变。',
         output: {
           phase: renderPhase,
           componentIds,
@@ -700,7 +700,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       }
     }
   }
-  return { callId: request.callId, toolId: request.toolId, ok: false, summary: '当前 V2 Tool 尚无执行器。', recovery: checked.tool.recovery }
+  return { callId: request.callId, toolId: request.toolId, ok: false, summary: '当前请求暂时无法执行。', recovery: checked.tool.recovery }
 }
 
 const IDEMPOTENT_TOOL_OPERATIONS: Partial<Record<string, string>> = {
@@ -775,8 +775,8 @@ export async function dispatchV2AgentTool(
         toolId: request.toolId,
         ok: false,
         gate: 'idempotency_running',
-        summary: '相同工具请求仍在执行，未重复调用。',
-        recovery: '等待首次调用完成后重试同一请求。',
+        summary: '相同请求仍在处理中，本次没有重复执行。',
+        recovery: '请等待当前处理完成。',
       }
     }
     if (outcome.value) return outcome.value
@@ -785,7 +785,7 @@ export async function dispatchV2AgentTool(
       toolId: request.toolId,
       ok: false,
       gate: 'idempotency_failed',
-      summary: outcome.receipt.failure?.message ?? '首次工具请求失败。',
+      summary: '这次处理没有完成，请稍后重试。',
     }
   } catch (error) {
     if (!(error instanceof V2IdempotencyConflictError)) throw error
@@ -794,8 +794,8 @@ export async function dispatchV2AgentTool(
       toolId: request.toolId,
       ok: false,
       gate: 'idempotency_conflict',
-      summary: error.message,
-      recovery: '为新的工具意图生成新的服务端 callId。',
+      summary: '相同请求的内容已经变化，为避免覆盖原结果，本次没有执行。',
+      recovery: '请重新发送这次要求。',
     }
   }
 }

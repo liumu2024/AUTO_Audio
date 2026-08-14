@@ -117,7 +117,7 @@ export function buildV2PlanSceneCards(
           review?.title_zh ??
           scene.title ??
           review?.role_zh ??
-          scene.id,
+          '未命名镜头',
         description:
           scene.creative_intent?.description ??
           review?.description_zh ??
@@ -262,7 +262,7 @@ function v2DeliveryProjection(input: {
       fallback_asset: '兜底素材',
     }[input.asset.source]
     return {
-      sourceLabel: `${kind} · ${input.asset.label ?? input.asset.id}`,
+      sourceLabel: `${kind} · ${input.asset.label?.trim() || '未命名素材'}`,
       deliveryState: input.asset.source === 'user_asset'
         ? 'user_material'
         : input.asset.source === 'generated_asset'

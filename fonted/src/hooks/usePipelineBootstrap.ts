@@ -25,7 +25,7 @@ export function usePipelineBootstrap() {
 
     async function bootstrap() {
       if (!env.useBackend) {
-        addLog('[前端] 未开启后端联调，请在创作配置上传样例并解析')
+        addLog('[创作服务] 当前未启用在线创作能力。')
         return
       }
 
@@ -34,22 +34,21 @@ export function usePipelineBootstrap() {
         if (cancelled) return
         setBackendReady(true)
         setBootstrapError(null)
-        addLog(`[联调] 后端已连接 (${env.apiBase})，主编辑器将使用 V2 Timeline 链路。`)
+        addLog('[服务] 视频创作服务已连接。')
       } catch (e) {
         if (cancelled) return
 
         if (isBackendUnreachable(e)) {
           setBootstrapError(
-            `后端 ${env.apiBase} 未连接。请先启动 backend，或直接运行 npm.cmd run desktop:dev。`,
+            '创作服务暂时无法连接，请确认本地服务已经启动后重试。',
           )
-          addLog('[联调] 后端不可达')
+          addLog('[创作服务] 暂时无法连接。')
           console.warn('[usePipelineBootstrap] backend unreachable')
           return
         }
 
-        const msg = e instanceof Error ? e.message : String(e)
-        setBootstrapError(msg)
-        addLog(`[联调] 启动失败: ${msg}`)
+        setBootstrapError('创作服务启动失败，请稍后重试。')
+        addLog('[创作服务] 启动失败，请稍后重试。')
         console.error('[usePipelineBootstrap]', e)
       }
     }

@@ -110,7 +110,7 @@ export async function* streamPreparedDirectorTurn(
       for (const event of events) yield event
       return
     }
-    yield { type: 'error', message: receipt.failure?.message ?? 'The stored Director result is unavailable.' }
+    yield { type: 'error', message: '这轮处理暂时没有完成。你的输入和当前方案都已保留，可以稍后重试。' }
     yield { type: 'done' }
     return
   }
@@ -139,7 +139,8 @@ export async function* streamPreparedDirectorTurn(
       })
       for (const event of terminalEvents) yield event
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      console.error('[director-turn] execution failed', error)
+      const message = '这轮处理暂时没有完成。你的输入和当前方案都已保留，可以稍后重试。'
       const events: DirectorAgentStreamEvent[] = [{ type: 'error', message }, { type: 'done' }]
       await prepared.repository.update({
         id: receipt.id,

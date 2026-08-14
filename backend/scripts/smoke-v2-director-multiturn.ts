@@ -250,6 +250,10 @@ globalThis.fetch = async (_url, init) => {
   if (reply instanceof Error) throw reply
   return new Response(JSON.stringify(reply), { status: 200 })
 }
+const preserveDeterministicReply = async (input: { fallbackMessage: string }) => ({
+  message: input.fallbackMessage,
+  source: 'fallback' as const,
+})
 
 async function turn(
   prompt: string,
@@ -272,6 +276,7 @@ async function turn(
     timelineRevisionDecision,
   }
   for await (const event of streamDirectorAgentChat(request, {
+    composeFinalReply: preserveDeterministicReply,
     dispatchTool: async (dispatchInput) => {
       const { stage } = dispatchInput
       dispatchCount += 1
@@ -388,7 +393,7 @@ try {
   )
   assert.match(
     String((created.find((event) => event.type === 'assistant_reply') as { message: string }).message),
-    /已记录.*字幕基于画面创作/,
+    /我已经记下.*字幕基于画面创作/,
   )
 
   const asked = await turn('这版会加入什么字幕？', {
@@ -444,7 +449,7 @@ try {
   assert.equal(dispatchCount, 1)
   assert.match(
     String((executable.find((event) => event.type === 'assistant_reply') as { message: string }).message),
-    /要求变更未通过校验.*渲染已完成/,
+    /(?:要求变更未通过校验|创作要求没有保存).*成片导出已完成/,
   )
   assert.doesNotMatch(
     String((executable.find((event) => event.type === 'assistant_reply') as { message: string }).message),
@@ -459,6 +464,7 @@ try {
     workspaceSessionId: `${sessionId}_save_failure`,
     userId: 1,
   }, {
+    composeFinalReply: preserveDeterministicReply,
     saveWorkspace: async () => { throw new Error('mock save failure') },
   })) unsaved.push(event)
   assert.equal(unsaved.some((event) => event.type === 'workspace_session'), false)
@@ -488,6 +494,7 @@ try {
     workspaceSessionId: `${sessionId}_partial_save_failure`,
     userId: 1,
   }, {
+    composeFinalReply: preserveDeterministicReply,
     dispatchTool: async (dispatchInput) => ({
       callId: dispatchInput.stage.toolRequest.callId,
       toolId: dispatchInput.stage.toolRequest.toolId,
@@ -504,7 +511,7 @@ try {
   })) partiallySaved.push(event)
   assert.equal(
     (partiallySaved.find((event) => event.type === 'assistant_reply') as { message: string }).message,
-    `草稿 v${restoredDraft.revision} 已保存，但会话状态同步失败；重新打开该草稿可恢复结果。`,
+    '方案修改已经保存，但对话状态没有同步成功；重新打开当前方案即可恢复结果。',
   )
   assert.equal(partiallySaved.some((event) => event.type === 'workspace_session'), false)
   assert.equal(partiallySaved.some((event) => event.type === 'error'), true)
@@ -524,6 +531,7 @@ try {
     workspaceSessionId: `${sessionId}_ephemeral_save_failure`,
     userId: 1,
   }, {
+    composeFinalReply: preserveDeterministicReply,
     dispatchTool: async (dispatchInput) => ({
       callId: dispatchInput.stage.toolRequest.callId,
       toolId: dispatchInput.stage.toolRequest.toolId,
@@ -535,7 +543,7 @@ try {
   })) ephemeralResult.push(event)
   assert.equal(
     (ephemeralResult.find((event) => event.type === 'assistant_reply') as { message: string }).message,
-    '工具执行已返回成功，但依赖工作区的状态未保存，请重试。',
+    '这次处理已经返回结果，但对话中的状态没有保存成功，请重试。',
   )
   assert.equal(ephemeralResult.some((event) => event.type === 'workspace_session'), false)
   assert.equal(ephemeralResult.some((event) => event.type === 'error'), true)
@@ -562,6 +570,18 @@ try {
     String((isolated.find((event) => event.type === 'assistant_reply') as { message: string }).message),
     /当前草稿已完成修订/,
     'failed or partial tool turns must discard unverified model success claims',
+  )
+  const isolatedReply = String(
+    (isolated.find((event) => event.type === 'assistant_reply') as { message: string }).message,
+  )
+  const requirementOutcomeIndex = isolatedReply.indexOf('创作要求没有保存')
+  const memoryOutcomeIndex = isolatedReply.indexOf('条偏好没有保存成功')
+  const toolOutcomeIndex = isolatedReply.indexOf('这一步没有继续')
+  assert.ok(
+    requirementOutcomeIndex >= 0
+      && memoryOutcomeIndex > requirementOutcomeIndex
+      && toolOutcomeIndex > memoryOutcomeIndex,
+    'fallback reply must preserve the authoritative requirement, memory, then tool receipt order',
   )
   const isolatedSession = isolated.find((event) => event.type === 'workspace_session') as { traceDir: string }
   const isolatedTrace = JSON.parse(await readFile(
@@ -665,7 +685,7 @@ try {
   assert.equal(dispatchCount, dispatchCountBeforeStaleConfirmation)
   assert.match(
     String((staleConfirmation.find((event) => event.type === 'error') as { message: string }).message),
-    /草稿版本已变化.*重新提出修改/,
+    /当前方案已经发生了其他修改.*重新提出修改/,
   )
   const latestRestoredDraft = await restoredDraftRepository.getDraft(restoredDraft.id, 1)
   const crossDraftProposalTurn = await turn('把当前转场改成缩放', {
@@ -696,7 +716,7 @@ try {
   assert.equal(dispatchCount, dispatchCountBeforeCrossDraftConfirmation)
   assert.match(
     String((crossDraftConfirmation.find((event) => event.type === 'error') as { message: string }).message),
-    /草稿版本已变化.*重新提出修改/,
+    /当前方案已经发生了其他修改.*重新提出修改/,
   )
   assert.equal(
     (crossDraftConfirmation.find((event) => event.type === 'workspace_session') as {
@@ -719,6 +739,28 @@ try {
       .state.context.materials.length,
     1,
   )
+
+  const staleWorkspaceEvents = [] as Array<{ type: string; [key: string]: unknown }>
+  for await (const event of streamDirectorAgentChat({
+    prompt: '保留这句话，等我基于最新方案重试',
+    context: baseContext,
+    runtime,
+    workspaceSessionId: sessionId,
+    workspaceStateRevision: 0,
+    userId: 1,
+  }, { composeFinalReply: preserveDeterministicReply })) staleWorkspaceEvents.push(event)
+  assert.equal(
+    (staleWorkspaceEvents.find((event) => event.type === 'error') as { code?: string }).code,
+    'workspace_changed',
+    'a stale workspace request must expose a stable recovery code instead of relying on message text',
+  )
+  const staleWorkspaceSnapshot = staleWorkspaceEvents.find((event) => event.type === 'workspace_session') as {
+    stateRevision: number
+    state: { context: { materials: unknown[] } }
+  } | undefined
+  assert.ok(staleWorkspaceSnapshot, 'a stale request must return the current workspace so the retry can advance')
+  assert.ok(staleWorkspaceSnapshot.stateRevision > 0)
+  assert.equal(staleWorkspaceSnapshot.state.context.materials.length, 1)
   const reloadWithoutRestoredMaterials = await turn('页面恢复后继续讨论', baseContext)
   assert.equal(
     (reloadWithoutRestoredMaterials.find((event) => event.type === 'workspace_session') as { state: { context: { materials: unknown[] } } })

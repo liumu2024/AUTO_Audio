@@ -13,12 +13,38 @@ import {
 import { cn } from '@/lib/utils'
 import { useCreationStore, type InputAttachment } from '@/stores/creationStore'
 import type { DirectorChatMessage } from '@/stores/directorChatStore'
+import type { DirectorTimelineRevisionIntent } from '@shared/types/director-stream'
 
 const TYPE_ICON = {
   video: Film,
   image: ImageIcon,
   audio: Music2,
 } as const
+
+function revisionScopeLabel(scope: DirectorTimelineRevisionIntent['scope']) {
+  return {
+    subtitle: '字幕',
+    scene: '镜头内容',
+    structure: '镜头结构',
+    visual_strategy: '画面呈现',
+    transition: '转场',
+    global: '全片方向',
+  }[scope] ?? '当前方案'
+}
+
+const REVISION_FEEDBACK_REASONS = [
+  '目标理解不对',
+  '改动范围不对',
+  '不该改的内容变了',
+  '画面效果不满意',
+  '文案或事实不对',
+  '我的方向变了',
+  '缺少必要素材',
+] as const
+
+function revisionFeedbackPrompt(reason: string, originalRequest: string) {
+  return `刚才的修改没有达到预期。问题类型：${reason}。原始要求：${originalRequest}。请先说明你理解的修改目标和必须保留的内容；如果信息不足，先问我，不要直接修改。`
+}
 
 function AttachmentChips({ items }: { items: InputAttachment[] }) {
   if (!items.length) return null
@@ -118,7 +144,7 @@ export function DirectorChatMessageBubble({
           {isThought && message.thoughts?.length ? (
             <details className="mt-2 rounded-lg border border-violet-500/15 bg-black/20 p-2">
               <summary className="cursor-pointer select-none text-[11px] font-medium text-violet-200/85">
-                技术详情
+                处理过程
               </summary>
               <div className="mt-2 space-y-1.5">
                 {message.thoughts.map((item, index) => (
@@ -147,8 +173,8 @@ export function DirectorChatMessageBubble({
           {message.revisionIntent && !message.revisionReceipt ? (
             <div className="mt-2 space-y-1.5 rounded-lg border border-violet-500/20 bg-black/20 p-2 text-[11px] text-zinc-300">
               <p><span className="text-zinc-500">原始要求：</span>{message.revisionIntent.originalRequest}</p>
-              <p><span className="text-zinc-500">范围：</span>{message.revisionIntent.scope}</p>
-              <p><span className="text-zinc-500">目标：</span>{message.revisionIntent.targetDisplay?.join('；') || message.revisionIntent.targetIds.join('、') || '全片'}</p>
+              <p><span className="text-zinc-500">范围：</span>{revisionScopeLabel(message.revisionIntent.scope)}</p>
+              <p><span className="text-zinc-500">目标：</span>{message.revisionIntent.targetDisplay?.join('；') || '当前方案'}</p>
               <p><span className="text-zinc-500">修改指令：</span>{message.revisionIntent.instruction}</p>
               <p><span className="text-zinc-500">预计影响：</span>{message.revisionIntent.expectedImpact}</p>
               <p><span className="text-zinc-500">保护边界：</span>{message.revisionIntent.protectedBoundary}</p>
@@ -182,12 +208,11 @@ export function DirectorChatMessageBubble({
           {message.revisionReceipt ? (
             <div className="mt-2 space-y-1.5 rounded-lg border border-violet-500/20 bg-black/20 p-2 text-[11px] text-zinc-300">
               <p><span className="text-zinc-500">原始要求：</span>{message.revisionReceipt.originalRequest}</p>
-              <p><span className="text-zinc-500">范围：</span>{message.revisionReceipt.scope}</p>
-              <p><span className="text-zinc-500">目标：</span>{message.revisionReceipt.targetDisplay?.join('；') || message.revisionReceipt.targetIds.join('、') || '全片'}</p>
+              <p><span className="text-zinc-500">范围：</span>{revisionScopeLabel(message.revisionReceipt.scope)}</p>
+              <p><span className="text-zinc-500">目标：</span>{message.revisionReceipt.targetDisplay?.join('；') || '当前方案'}</p>
               <p><span className="text-zinc-500">修改指令：</span>{message.revisionReceipt.instruction}</p>
               <p><span className="text-zinc-500">预计影响：</span>{message.revisionReceipt.expectedImpact}</p>
               <p><span className="text-zinc-500">保护边界：</span>{message.revisionReceipt.protectedBoundary}</p>
-              <p><span className="text-zinc-500">执行回执：</span>{message.revisionReceipt.summary}</p>
               {message.revisionReceipt.actualDiff ? (
                 <details>
                   <summary className="cursor-pointer text-violet-200">实际变化</summary>
@@ -209,6 +234,19 @@ export function DirectorChatMessageBubble({
               >
                 纠正修改理解
               </button>
+              <div className="flex flex-wrap gap-1.5 border-t border-zinc-800/80 pt-2">
+                <span className="w-full text-zinc-500">这次哪里不对？</span>
+                {REVISION_FEEDBACK_REASONS.map((reason) => (
+                  <button
+                    key={reason}
+                    type="button"
+                    className="rounded border border-zinc-600/30 px-2 py-1 text-zinc-300 hover:border-violet-400/30 hover:text-violet-200"
+                    onClick={() => setInputText(revisionFeedbackPrompt(reason, message.revisionReceipt!.originalRequest))}
+                  >
+                    {reason}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : null}
 
@@ -223,7 +261,7 @@ export function DirectorChatMessageBubble({
           {isError ? (
             <div className="mt-1.5 flex items-center gap-1 text-[11px] text-red-400/80">
               <AlertCircle className="h-3 w-3" />
-              请检查后端与 worker 状态后重试
+              请按上方提示重试；如果仍然失败，可以保留当前方案后继续调整
             </div>
           ) : null}
           {isError && message.recoverySuggestions?.length ? (

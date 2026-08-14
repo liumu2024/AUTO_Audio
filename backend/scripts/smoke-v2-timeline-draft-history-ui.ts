@@ -49,7 +49,8 @@ const runningSampleDraft = mapV2TimelineDraftHistoryCard({
   updatedAt: '2026-01-03T00:00:00.000Z',
   latestRun: { status: 'running' },
 })
-assert.equal(runningSampleDraft.title, '样例复刻方案')
+assert.equal(runningSampleDraft.title, '样例参考创作')
+assert.equal(runningSampleDraft.modeLabel, '样例参考创作')
 assert.equal(runningSampleDraft.status, 'running')
 assert.equal(runningSampleDraft.previewUrl, undefined)
 

@@ -78,6 +78,9 @@ export function AttachmentPreviewStrip({
         {items.map((item) => (
           <div
             key={`${item.kind}-${item.id}`}
+            title={item.kind === 'sample'
+              ? '样例参考：只借鉴表达方法，不会直接放入成片'
+              : '成片素材：可用于当前视频方案'}
             className={cn(
               'group relative shrink-0 overflow-hidden rounded-xl border',
               item.kind === 'sample'
@@ -104,7 +107,7 @@ export function AttachmentPreviewStrip({
                   : 'bg-zinc-900/90 text-zinc-400',
               )}
             >
-              {item.kind === 'sample' ? '样例' : item.name}
+              {item.kind === 'sample' ? '样例参考' : `成片素材 · ${item.name}`}
             </div>
           </div>
         ))}

@@ -56,7 +56,7 @@ export const GeneratedPlayer = forwardRef<HTMLVideoElement, GeneratedPlayerProps
     return (
       <div className="flex h-full min-h-0 min-w-0 flex-col gap-3">
         <h3 className="shrink-0 text-sm font-medium tracking-tight text-zinc-200">
-          {outputUrl ? 'V2 渲染成片' : 'V2 Timeline 方案'}
+          {outputUrl ? '视频成片' : '视频方案'}
         </h3>
         <div className={cn('flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50 shadow-lg shadow-black/25')}>
           <div className="relative flex min-h-0 flex-1 flex-col p-4">
@@ -258,7 +258,7 @@ function sceneTypeLabel(type: V2PlanScenePresentation['sceneType']) {
     user_video: '用户视频',
     ai_video: 'AI 视频',
     image_motion: '图片动效',
-    remotion_card: 'Remotion 程序化画面',
+    remotion_card: '程序化画面',
     caption_scene: '文字场景',
     data_viz: '数据可视化',
   }[type]

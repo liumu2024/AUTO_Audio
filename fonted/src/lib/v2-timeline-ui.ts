@@ -14,6 +14,24 @@ const TRANSITION_LABELS: Record<RemotionTimelineSpecV1['transitions'][number]['t
   blur: '模糊',
 }
 
+const SCENE_TYPE_LABELS: Record<RemotionTimelineSpecV1['scenes'][number]['type'], string> = {
+  user_video: '用户视频',
+  ai_video: 'AI 视频',
+  image_motion: '图片动态呈现',
+  remotion_card: '程序化画面',
+  caption_scene: '文字画面',
+  data_viz: '数据可视化',
+}
+
+const OVERLAY_TYPE_LABELS: Record<RemotionTimelineSpecV1['overlays'][number]['type'], string> = {
+  caption: '字幕',
+  title: '标题',
+  label: '标签',
+  shape: '图形',
+  image_badge: '图片标记',
+  light_sweep: '扫光效果',
+}
+
 const TRANSITION_DIRECTION_LABELS: Record<
   NonNullable<RemotionTimelineSpecV1['transitions'][number]['direction']>,
   string
@@ -44,7 +62,7 @@ export function v2TransitionDisplayText(
 }
 
 function sceneTitle(scene: RemotionTimelineSpecV1['scenes'][number]): string {
-  return scene.creative_intent?.title ?? scene.title ?? scene.note ?? scene.id
+  return scene.creative_intent?.title ?? scene.title ?? scene.note ?? '未命名镜头'
 }
 
 /** A view-only projection. It does not create or update any V1 workflow state. */
@@ -52,10 +70,10 @@ export function buildV2TimelineProject(spec: RemotionTimelineSpecV1): TimelinePr
   return {
     duration_sec: spec.canvas.duration_sec,
     tracks: [
-      { id: 'video', label: 'V2 画面轨', sublabel: '用户素材 / AI 视频 / Remotion 场景' },
-      { id: 'overlay', label: 'V2 覆盖层', sublabel: '字幕 / 标题 / 标签 / 光效' },
-      { id: 'effect', label: 'V2 转场轨', sublabel: REMOTION_TIMELINE_TRANSITION_TYPES.map(transitionLabel).join(' / ') },
-      { id: 'audio', label: 'V2 音频轨', sublabel: '音频素材与后续混音' },
+      { id: 'video', label: '画面轨', sublabel: '用户素材 / AI 视频 / 程序化画面' },
+      { id: 'overlay', label: '文字与效果', sublabel: '字幕 / 标题 / 标签 / 光效' },
+      { id: 'effect', label: '转场轨', sublabel: REMOTION_TIMELINE_TRANSITION_TYPES.map(transitionLabel).join(' / ') },
+      { id: 'audio', label: '音频轨', sublabel: '音频素材与后续混音' },
     ],
     clips: [
       ...spec.scenes.map((scene) => ({
@@ -63,7 +81,7 @@ export function buildV2TimelineProject(spec: RemotionTimelineSpecV1): TimelinePr
         track_id: 'video' as const,
         start_sec: scene.start_sec,
         end_sec: scene.start_sec + scene.duration_sec,
-        label: `${scene.type}: ${sceneTitle(scene)}`,
+        label: `${SCENE_TYPE_LABELS[scene.type]}：${sceneTitle(scene)}`,
         anchor_id: scene.id,
         visual_generation_prompt:
           scene.note ?? scene.creative_intent?.description ?? scene.title,
@@ -77,7 +95,7 @@ export function buildV2TimelineProject(spec: RemotionTimelineSpecV1): TimelinePr
         track_id: 'overlay' as const,
         start_sec: overlay.start_sec,
         end_sec: overlay.end_sec,
-        label: `${overlay.type}: ${overlay.text ?? overlay.asset_id ?? overlay.id}`,
+        label: `${OVERLAY_TYPE_LABELS[overlay.type]}：${overlay.text ?? '未命名内容'}`,
         anchor_id: overlay.scene_id,
         content_rewrite_instruction: overlay.text,
       })),

@@ -17,6 +17,7 @@ import { useV2TimelineStore } from '../../fonted/src/stores/v2TimelineStore.js'
 import type { RemotionTimelineSpecV1 } from '../../shared/types/remotion-timeline-spec.v1.js'
 import { useCreationStore } from '../../fonted/src/stores/creationStore.js'
 import { v2TransitionDisplayText } from '../../fonted/src/lib/v2-timeline-ui.js'
+import { buildV2TimelineProject } from '../../fonted/src/lib/v2-timeline-ui.js'
 
 const spec: RemotionTimelineSpecV1 = {
   schema_version: 'remotion_timeline_spec.v1',
@@ -148,6 +149,12 @@ assert.equal(presentation.scenes[0]?.visibleTexts[1]?.enterAnimation, 'slide_up_
 assert.equal(presentation.scenes[0]?.transitionAfter?.type, 'fade')
 assert.equal(presentation.scenes[0]?.deliveryState, 'programmatic')
 assert.equal(presentation.scenes[0]?.sourceLabel, '程序化画面')
+const timelineProject = buildV2TimelineProject(spec)
+assert.doesNotMatch(
+  timelineProject.clips.map((clip) => clip.label).join('；'),
+  /scene_\d+|caption_\d+|remotion_card|caption:/i,
+  'timeline labels must use user-facing names instead of IDs and enum values',
+)
 const pendingGenerationPresentation = buildV2PlanPresentation({
   ...spec,
   assets: [{ id: 'generated_scene_1', type: 'video', source: 'generated_asset', src: 'generated://pending' }],
@@ -199,7 +206,7 @@ assert.equal(
 )
 assert.equal(
   fulfilledGeneratedReusePresentation.scenes[0]?.sourceLabel,
-  'AI 生成素材 · generated_scene_1',
+  'AI 生成素材 · 未命名素材',
 )
 const fulfilledFallbackGenerationPresentation = buildV2PlanPresentation({
   ...spec,
@@ -219,7 +226,7 @@ assert.equal(
 )
 assert.equal(
   fulfilledFallbackGenerationPresentation.scenes[0]?.sourceLabel,
-  '兜底素材 · fallback_scene_1',
+  '兜底素材 · 未命名素材',
 )
 const stockPresentation = buildV2PlanPresentation({
   ...spec,

@@ -153,11 +153,15 @@ export function CreativePreferencesView() {
             className="h-9 rounded-md border border-zinc-800 bg-zinc-900 px-3 text-sm"
           >
             <option value="all">全部状态</option>
-            <option value="active">已生效</option>
+            <option value="active">已启用</option>
             <option value="candidate">待观察</option>
-            <option value="revoked">已撤销</option>
+            <option value="revoked">已停用</option>
           </select>
         </div>
+
+        <p className="text-xs leading-5 text-zinc-500">
+          已启用的偏好只会在相关任务中参考；待观察不会参与创作；已停用的偏好会保留来源，但不会影响新方案。
+        </p>
 
         <div className="flex flex-wrap gap-3">
           <input
@@ -182,8 +186,8 @@ export function CreativePreferencesView() {
                 <div className="min-w-0 flex-1">
                   <div className="mb-2 flex flex-wrap gap-2 text-[11px]">
                     <span className="rounded bg-zinc-800 px-2 py-1">{memory.scopeType === 'user' ? '通用' : '当前草稿'}</span>
-                    <span className="rounded bg-zinc-800 px-2 py-1">{memory.status === 'active' ? '已生效' : memory.status === 'candidate' ? '待观察' : '已撤销'}</span>
-                    <span className="rounded bg-zinc-800 px-2 py-1">{memory.origin === 'explicit' ? '用户明确' : 'Agent 推断'}</span>
+                    <span className="rounded bg-zinc-800 px-2 py-1">{memory.status === 'active' ? '已启用' : memory.status === 'candidate' ? '待观察' : '已停用'}</span>
+                    <span className="rounded bg-zinc-800 px-2 py-1">{memory.origin === 'explicit' ? '用户明确表达' : '从对话中推断'}</span>
                   </div>
                   <p className="break-words text-sm leading-6">{memory.statement}</p>
                   {matchedTerms.length > 0 && score !== undefined && (
@@ -199,7 +203,10 @@ export function CreativePreferencesView() {
                     <Button size="sm" variant="secondary" disabled={saving} onClick={() => void mutate(() => updateCreativeMemory({ id: memory.id, status: 'active' }))}>采纳</Button>
                   )}
                   {memory.status === 'active' && (
-                    <Button size="sm" variant="secondary" disabled={saving} onClick={() => void mutate(() => updateCreativeMemory({ id: memory.id, status: 'revoked' }))}>撤销</Button>
+                    <Button size="sm" variant="secondary" disabled={saving} onClick={() => void mutate(() => updateCreativeMemory({ id: memory.id, status: 'revoked' }))}>停用</Button>
+                  )}
+                  {memory.status === 'revoked' && (
+                    <Button size="sm" variant="secondary" disabled={saving} onClick={() => void mutate(() => updateCreativeMemory({ id: memory.id, status: 'active' }))}>重新启用</Button>
                   )}
                   <Button
                     size="sm"

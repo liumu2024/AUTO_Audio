@@ -114,6 +114,38 @@ const requirementAndRevision = parseDirectorModelDecision(JSON.stringify({
   missingInformation: [],
 }))
 assert.equal(requirementAndRevision.toolRequests[0]?.dependsOn[0], 'requirements')
+assert.throws(() => parseDirectorModelDecision(JSON.stringify({
+  replyDraft: '我会记录偏好并调整字幕。',
+  intent: 'revise',
+  creativeConfigDelta: {},
+  stateActions: [],
+  memoryActions: [{
+    ref: 'same_ref', operation: 'add', scopeType: 'user', statement: '偏好克制的字幕',
+    status: 'active', origin: 'explicit', sourceTurnIds: ['turn_1'], sourceExcerpt: '我偏好克制的字幕',
+  }],
+  skillRequests: [{ skillId: 'subtitle-track-authoring', purpose: '修订字幕' }],
+  toolRequests: [{
+    ref: 'same_ref', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring',
+    arguments: { scope: 'subtitle' }, requestedMode: 'preview', dependsOn: [],
+  }],
+  missingInformation: [],
+})), /globally unique action ref/)
+assert.throws(() => parseDirectorModelDecision(JSON.stringify({
+  replyDraft: '我会记录偏好，再按要求调整字幕。',
+  intent: 'revise',
+  creativeConfigDelta: {},
+  stateActions: [],
+  memoryActions: [{
+    ref: 'remember_style', operation: 'add', scopeType: 'user', statement: '偏好克制的字幕',
+    status: 'active', origin: 'explicit', sourceTurnIds: ['turn_1'], sourceExcerpt: '我偏好克制的字幕',
+  }],
+  skillRequests: [{ skillId: 'subtitle-track-authoring', purpose: '修订字幕' }],
+  toolRequests: [{
+    ref: 'patch_after_memory', toolId: 'timeline.patch', skillId: 'subtitle-track-authoring',
+    arguments: { scope: 'subtitle' }, requestedMode: 'preview', dependsOn: ['remember_style'],
+  }],
+  missingInformation: [],
+})), /memory actions cannot be execution dependencies/)
 
 const capabilityContext = compactDirectorContextForPrompt({
   prompt: '渲染当前版本',
@@ -158,6 +190,6 @@ assert.equal(fallback.result.executionEffect, 'none')
 assert.equal(fallback.result.nextAction, 'ACKNOWLEDGE')
 assert.deepEqual(fallback.stateActions, [])
 assert.match(fallback.result.assistantMessage, /字幕和转场/)
-assert.match(fallback.result.assistantMessage, /修订 4/)
+assert.match(fallback.result.assistantMessage, /当前有一份可继续编辑的视频方案/)
 
 console.info('[smoke-v2-director-routing] OK')

@@ -54,7 +54,7 @@ export function TimelinePanel() {
                 )}
                 title={
                   disabled
-                    ? '请先在对话中生成 V2 Timeline 方案'
+                    ? '请先在对话中生成视频方案'
                     : tab.hint
                 }
               >

@@ -43,12 +43,12 @@ function V2TimelinePropertyInspector() {
         <div className="mb-5 flex items-center gap-2">
           <SlidersHorizontal className="h-4 w-4 text-violet-300" />
           <div>
-            <h2 className="text-sm font-semibold text-zinc-100">V2 创作详情</h2>
+            <h2 className="text-sm font-semibold text-zinc-100">创作详情</h2>
             <p className="mt-0.5 text-[10px] text-zinc-500">查看模型计划，并记录不会自动执行的镜头备注</p>
           </div>
         </div>
         {!spec ? (
-          <p className="rounded-lg border border-zinc-800 bg-zinc-900/45 p-4 text-xs leading-relaxed text-zinc-500">尚未生成 V2 Timeline 方案。</p>
+          <p className="rounded-lg border border-zinc-800 bg-zinc-900/45 p-4 text-xs leading-relaxed text-zinc-500">尚未生成视频方案。</p>
         ) : !scene ? (
           <p className="rounded-lg border border-zinc-800 bg-zinc-900/45 p-4 text-xs leading-relaxed text-zinc-500">选择一个画面、文字或转场片段查看模型计划。</p>
         ) : (
@@ -181,7 +181,7 @@ function sceneTypeLabel(type: V2PlanScenePresentation['sceneType']) {
     user_video: '用户视频',
     ai_video: 'AI 视频',
     image_motion: '图片动效',
-    remotion_card: 'Remotion 程序化画面',
+    remotion_card: '程序化画面',
     caption_scene: '文字场景',
     data_viz: '数据可视化',
   }[type]

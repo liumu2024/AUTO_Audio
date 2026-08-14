@@ -130,4 +130,4 @@ export type DirectorAgentStreamEvent =
       responseContinuityDisabled?: boolean
     }
   | { type: 'done' }
-  | { type: 'error'; message: string }
+  | { type: 'error'; code?: 'workspace_changed'; message: string }

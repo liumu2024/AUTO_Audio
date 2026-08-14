@@ -30,5 +30,6 @@ export interface V2TimelineDraftHistoryCard {
     updatedAt: string;
     previewUrl?: string;
 }
+export declare function v2TimelineCreationModeLabel(creationMode: V2TimelineDraftHistoryCardInput['creationMode']): string;
 export declare function mapV2TimelineDraftHistoryCard(draft: V2TimelineDraftHistoryCardInput): V2TimelineDraftHistoryCard;
 //# sourceMappingURL=v2-timeline-draft-history.d.ts.map

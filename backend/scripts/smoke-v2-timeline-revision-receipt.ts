@@ -18,7 +18,7 @@ const subtitle = buildV2TimelineRevisionIntent({
     scope: 'subtitle',
     sceneId: 'scene_001',
     overlayIds: ['caption_001'],
-    instruction: '把第一条字幕改短，其他内容不变',
+    instruction: '把 overlay_001.end_sec 改短，保留 scene_001',
   },
   baseSpec: spec,
 })
@@ -28,8 +28,8 @@ assert.deepEqual(subtitle, {
   instruction: '把第一条字幕改短，其他内容不变',
   scope: 'subtitle',
   targetIds: ['caption_001'],
-  targetDisplay: ['caption_001 · “Scene 1: user or generated video” · 0.3s–1.8s'],
-  expectedImpact: '将调整 caption_001 · “Scene 1: user or generated video” · 0.3s–1.8s 的文字、时间或呈现方式',
+  targetDisplay: ['“Scene 1: user or generated video” · 0.3s–1.8s'],
+  expectedImpact: '将调整 “Scene 1: user or generated video” · 0.3s–1.8s 的文字、时间或呈现方式',
   protectedBoundary: '未选中的字幕及作用域外对象保持不变',
 })
 
@@ -40,6 +40,7 @@ const global = buildV2TimelineRevisionIntent({
 })
 assert.equal(global?.globalMode, 'full_replan')
 assert.equal(global?.targetIds.length, 0)
+assert.doesNotMatch(subtitle?.instruction ?? '', /scene_|overlay_|end_sec/i)
 
 assert.equal(buildV2TimelineRevisionIntent({
   callId: 'not_patch',

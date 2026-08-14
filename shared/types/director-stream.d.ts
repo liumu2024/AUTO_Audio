@@ -127,6 +127,7 @@ export type DirectorAgentStreamEvent = {
     type: 'done';
 } | {
     type: 'error';
+    code?: 'workspace_changed';
     message: string;
 };
 //# sourceMappingURL=director-stream.d.ts.map

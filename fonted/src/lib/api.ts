@@ -295,8 +295,9 @@ async function request<T>(
   const res = await requestResponse(path, init)
 
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string }
-    throw new Error(body.error ?? `HTTP ${res.status} ${path}`)
+    throw new Error(res.status === 409
+      ? '当前内容已经发生变化，请刷新后重试。'
+      : '请求暂时没有完成，请稍后重试。')
   }
 
   return res.json() as Promise<T>
@@ -349,11 +350,12 @@ async function idempotentJsonRequest<T>(input: {
     response = await send()
   }
   if (response.status === 202) {
-    throw new Error(`The idempotent request is still running: ${input.path}`)
+    throw new Error('这项处理仍在继续，请稍后再查看结果。')
   }
   if (!response.ok) {
-    const body = await response.json().catch(() => ({})) as { error?: string }
-    throw new Error(body.error ?? `HTTP ${response.status} ${input.path}`)
+    throw new Error(response.status === 409
+      ? '当前内容已经发生变化，请刷新后重试。'
+      : '这项处理暂时没有完成，请稍后重试。')
   }
   return response.json() as Promise<T>
 }
@@ -543,17 +545,18 @@ export async function runV2TimelineDraft(input: {
         signal: idempotentRequestSignal(),
       })
       if (run.status === 'running') continue
-      if (run.status === 'failed') throw new Error('The original V2 render request failed.')
+      if (run.status === 'failed') throw new Error('这次成片导出没有完成。')
       response = await post()
       break
     }
     if (response.status === 202) {
-      throw new Error(`The idempotent render request is still running: ${pending.renderRunId}`)
+      throw new Error('成片仍在生成中，请稍后查看结果。')
     }
   }
   if (!response.ok) {
-    const body = await response.json().catch(() => ({})) as { error?: string }
-    throw new Error(body.error ?? `HTTP ${response.status} ${path}`)
+    throw new Error(response.status === 409
+      ? '当前方案已经发生变化，请刷新后重试。'
+      : '成片导出暂时没有完成，请稍后重试。')
   }
   return response.json() as Promise<V2TimelineDraftRunResult>
 }
@@ -584,17 +587,12 @@ export async function uploadFile(
       },
       body: form,
     })
-  } catch (error) {
-    throw new Error(
-      `无法连接后端上传接口 ${env.apiBase}/api/uploads，请确认后端或桌面端服务正在运行。原始错误：${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    )
+  } catch {
+    throw new Error('上传服务暂时无法连接，请确认创作服务正在运行后重试。')
   }
 
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string }
-    throw new Error(body.error ?? `HTTP ${res.status} /api/uploads`)
+    throw new Error('文件上传失败，请重新选择后再试。')
   }
 
   return res.json() as Promise<UploadResult>
@@ -628,8 +626,7 @@ export async function streamDirectorChat(
       continue
     }
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string }
-      throw new Error(body.error ?? `HTTP ${res.status} /api/director/chat`)
+      throw new Error('对话服务暂时不可用，请稍后重试。')
     }
 
     let turnReceiptRunning = false
@@ -664,7 +661,7 @@ export async function streamDirectorChat(
     if (signal?.aborted) throw signal.reason
     await new Promise((resolve) => setTimeout(resolve, 1_000))
   }
-  throw new Error('Director request is still running; retry the same turn after it finishes.')
+  throw new Error('这轮处理仍在继续，请稍后再查看结果。')
 }
 
 export async function getDirectorWorkspaceSession(workspaceSessionId: string) {
@@ -674,8 +671,7 @@ export async function getDirectorWorkspaceSession(workspaceSessionId: string) {
   )
   if (res.status === 404) return null
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string }
-    throw new Error(body.error ?? `HTTP ${res.status} director workspace`)
+    throw new Error('当前对话状态暂时无法读取，请稍后重试。')
   }
   return res.json() as Promise<DirectorWorkspaceSessionResponse>
 }

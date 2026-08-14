@@ -15,7 +15,7 @@ function seconds(value: number): string {
 }
 
 function sceneName(scene: RemotionTimelineSpecV1['scenes'][number]): string {
-  return scene.creative_intent?.title?.trim() || scene.title?.trim() || scene.note?.trim() || scene.id
+  return scene.creative_intent?.title?.trim() || scene.title?.trim() || scene.note?.trim() || '未命名镜头'
 }
 
 function targetDisplay(
@@ -24,7 +24,7 @@ function targetDisplay(
   spec?: RemotionTimelineSpecV1,
 ): string[] {
   if (scope === 'global') return ['全片']
-  if (!spec) return targetIds
+  if (!spec) return targetIds.length ? ['当前选中内容'] : []
   const scenes = new Map(spec.scenes.map((scene) => [scene.id, scene]))
   const overlays = new Map(spec.overlays.map((overlay) => [overlay.id, overlay]))
   const transitions = new Map(spec.transitions.map((transition) => [transition.id, transition]))
@@ -32,20 +32,20 @@ function targetDisplay(
     const overlay = overlays.get(id)
     if (overlay) {
       const text = overlay.text?.trim() ? `“${overlay.text.trim()}”` : overlay.type
-      return `${id} · ${text} · ${seconds(overlay.start_sec)}–${seconds(overlay.end_sec)}`
+      return `${text} · ${seconds(overlay.start_sec)}–${seconds(overlay.end_sec)}`
     }
     const transition = transitions.get(id)
     if (transition) {
       const from = scenes.get(transition.from_scene_id)
       const to = scenes.get(transition.to_scene_id)
       const fromEnd = from ? from.start_sec + from.duration_sec : 0
-      return `${id} · ${from ? sceneName(from) : transition.from_scene_id} → ${to ? sceneName(to) : transition.to_scene_id} · ${seconds(Math.max(0, fromEnd - transition.duration_sec))}–${seconds(fromEnd)}`
+      return `${from ? sceneName(from) : '前一镜头'} → ${to ? sceneName(to) : '后一镜头'} · ${seconds(Math.max(0, fromEnd - transition.duration_sec))}–${seconds(fromEnd)}`
     }
     const scene = scenes.get(id)
     if (scene) {
-      return `${id} · ${sceneName(scene)} · ${seconds(scene.start_sec)}–${seconds(scene.start_sec + scene.duration_sec)}`
+      return `${sceneName(scene)} · ${seconds(scene.start_sec)}–${seconds(scene.start_sec + scene.duration_sec)}`
     }
-    return id
+    return '当前选中内容'
   })
 }
 
@@ -87,9 +87,7 @@ export function buildV2TimelineRevisionIntent(input: {
   return {
     callId: input.callId,
     originalRequest: input.userRequest,
-    instruction: typeof input.arguments.instruction === 'string'
-      ? input.arguments.instruction
-      : input.userRequest,
+    instruction: input.userRequest,
     scope: typedScope,
     targetIds,
     targetDisplay: display,

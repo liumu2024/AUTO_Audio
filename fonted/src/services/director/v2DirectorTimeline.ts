@@ -83,15 +83,11 @@ async function uploadBrowserUrl(input: {
   let response: Response
   try {
     response = await fetch(input.url)
-  } catch (error) {
-    throw new Error(
-      `无法读取本地上传素材，请重新选择该文件后再试。原始错误：${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    )
+  } catch {
+    throw new Error('无法读取本地上传素材，请重新选择该文件后再试。')
   }
   if (!response.ok) {
-    throw new Error(`无法读取本地上传素材，请重新选择该文件后再试。HTTP ${response.status}`)
+    throw new Error('无法读取本地上传素材，请重新选择该文件后再试。')
   }
   const blob = await response.blob()
   const file = new File([blob], input.filename, {
@@ -199,7 +195,7 @@ async function buildPayload(
 
   return {
     taskId,
-    prompt: input.prompt.trim() || '按当前素材生成一版 V2 Timeline 方案。',
+    prompt: input.prompt.trim() || '按当前素材生成一版视频方案。',
     ...requestShape,
     sampleUnderstanding: sample
       ? useV2TimelineStore.getState().sampleSession?.understanding ?? undefined
@@ -249,8 +245,8 @@ export async function analyzeV2DirectorSample(
   useEditorStore.getState().enterV2Workspace()
   const taskId = outputTaskId('sample', input.taskId)
   const taskStore = useTaskStore.getState()
-  taskStore.startTask(input.prompt || 'V2 Sample Understanding', taskId)
-  taskStore.updateProgress(12, '准备样例视频', '[V2] 正在解析本地样例地址。')
+  taskStore.startTask(input.prompt || '理解样例视频', taskId)
+  taskStore.updateProgress(12, '准备样例视频', '正在读取样例视频。')
   if (!input.sampleVideoUrl?.trim()) {
     throw new Error('请先上传 1 个样例视频。')
   }
@@ -259,7 +255,7 @@ export async function analyzeV2DirectorSample(
     url: input.sampleVideoUrl,
     filename: input.sampleVideoName ?? 'sample-video.mp4',
   })
-  taskStore.updateProgress(36, '理解样例视频', '[V2] 正在拆解样例内容、节奏和镜头结构。')
+  taskStore.updateProgress(36, '理解样例视频', '正在分析样例的内容、节奏和镜头表达。')
   const result = await api.analyzeV2Sample({
     taskId,
     prompt: input.prompt.trim() || '解析样例视频，提取结构、节奏、镜头、转场和可复用风格。',
@@ -276,7 +272,7 @@ export async function analyzeV2DirectorSample(
   taskStore.updateProgress(
     100,
     '样例理解完成',
-    `[V2] 样例理解 trace 已写入 ${result.traceDir}`,
+    '样例理解已完成。',
   )
   taskStore.setBackendReady(true)
   taskStore.setComplete(true)
@@ -289,14 +285,14 @@ export async function previewV2DirectorTimeline(
   useEditorStore.getState().enterV2Workspace()
   const taskId = outputTaskId('preview', input.taskId)
   const taskStore = useTaskStore.getState()
-  taskStore.startTask(input.prompt || 'V2 Timeline preview', taskId)
-  taskStore.updateProgress(12, '准备 V2 素材', '[V2] 正在解析本地素材地址。')
+  taskStore.startTask(input.prompt || '生成视频方案', taskId)
+  taskStore.updateProgress(12, '准备创作素材', '正在读取本轮使用的素材。')
   if (useV2TimelineStore.getState().hasLocalEdits) {
     await saveV2DirectorTimelineDraft()
   }
   const payload = await buildPayload(input, taskId)
   const { preparedMaterials, ...requestPayload } = payload
-  taskStore.updateProgress(36, '生成 V2 Timeline', '[V2] 调用 timeline preview。')
+  taskStore.updateProgress(36, '生成视频方案', '正在整理镜头、字幕和转场方案。')
   const current = useV2TimelineStore.getState()
   const planningContext = payload.planningContext ?? {
     kind: current.draftId ? 'revision' as const : 'initial' as const,
@@ -315,8 +311,8 @@ export async function previewV2DirectorTimeline(
   syncV2TimelineWorkspace({ spec: preview.spec })
   taskStore.updateProgress(
     100,
-    'V2 方案已生成',
-    `[V2] trace 已写入 ${preview.traceDir}`,
+    '视频方案已生成',
+    '视频方案已同步到编辑区。',
   )
   taskStore.setBackendReady(true)
   taskStore.setComplete(true)
@@ -326,7 +322,7 @@ export async function previewV2DirectorTimeline(
 export async function saveV2DirectorTimelineDraft(): Promise<api.V2TimelineDraftDto> {
   const current = useV2TimelineStore.getState()
   if (!current.draftId || !current.draftRevision || !current.spec) {
-    throw new Error('当前没有可保存的 V2 Timeline 草稿。')
+    throw new Error('当前没有可保存的视频方案。')
   }
   if (!current.hasLocalEdits) {
     return {
@@ -360,33 +356,32 @@ export async function renderV2DirectorTimeline(
       confirmedState.draftId !== confirmedDraft.draftId
       || confirmedState.draftRevision !== confirmedDraft.revision
       || confirmedState.hasLocalEdits
-    ) throw new Error('当前草稿已在确认后发生变化，请重新执行导出预飞检查。')
+    ) throw new Error('当前方案在确认后发生了变化，请重新进行导出检查。')
   } else if (useV2TimelineStore.getState().hasLocalEdits) {
     await saveV2DirectorTimelineDraft()
   }
   const current = useV2TimelineStore.getState()
   if (!current.draftId || !current.draftRevision || !current.spec) {
-    throw new Error('请先生成并保存 V2 Timeline 草稿。')
+    throw new Error('请先生成并保存视频方案。')
   }
   if (confirmedDraft && (
     current.draftId !== confirmedDraft.draftId
     || current.draftRevision !== confirmedDraft.revision
   )) throw new Error('当前草稿版本与已确认版本不一致。')
   const taskStore = useTaskStore.getState()
-  taskStore.startTask(input.prompt || 'V2 Timeline render', current.draftId)
-  taskStore.updateProgress(10, '准备 V2 渲染', '[V2] 正在准备素材和 timeline spec。')
-  taskStore.updateProgress(30, '生成与校验素材', '[V2] 调用素材补全、标准化和 Remotion 渲染。')
+  taskStore.startTask(input.prompt || '导出视频成片', current.draftId)
+  taskStore.updateProgress(10, '准备导出', '正在准备当前方案和素材。')
+  taskStore.updateProgress(30, '准备画面素材', '正在复用已有镜头，并补充确实需要重新生成的内容。')
   const result = await api.runV2TimelineDraft({
     draftId: current.draftId,
     revision: current.draftRevision,
   })
-  const generatedUrl = absoluteResultUrl(result.outputUrl)
   useV2TimelineStore.getState().setResult(result, input.prompt)
   syncV2TimelineWorkspace({ spec: current.spec })
   taskStore.updateProgress(
     100,
-    'V2 渲染完成',
-    `[V2] 输出 ${generatedUrl || result.outputPath}；trace ${result.traceDir}`,
+    '视频成片已导出',
+    '成片已经更新到预览区。',
   )
   taskStore.setBackendReady(true)
   taskStore.setComplete(true)

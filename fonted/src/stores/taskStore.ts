@@ -146,7 +146,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       logs: [...state.logs, appendLog('[Task] 用户已中止任务。')],
     })),
 
-  setFailed: (message = '任务失败，请检查 worker 日志。') =>
+  setFailed: (message = '任务没有完成，请根据提示重试。') =>
     set((state) => ({
       isTaskRunning: false,
       isCancelling: false,

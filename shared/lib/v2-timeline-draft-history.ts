@@ -33,16 +33,22 @@ export interface V2TimelineDraftHistoryCard {
 }
 
 const CREATION_MODE_LABEL: Record<V2TimelineDraftHistoryCardInput['creationMode'], string> = {
-  sample_replicate: '样例复刻方案',
+  sample_replicate: '样例参考创作',
   material_brief: '素材成片方案',
   text_to_video: '文生视频方案',
+}
+
+export function v2TimelineCreationModeLabel(
+  creationMode: V2TimelineDraftHistoryCardInput['creationMode'],
+) {
+  return CREATION_MODE_LABEL[creationMode]
 }
 
 export function mapV2TimelineDraftHistoryCard(
   draft: V2TimelineDraftHistoryCardInput,
 ): V2TimelineDraftHistoryCard {
   const runStatus = draft.latestRun?.status
-  const modeLabel = CREATION_MODE_LABEL[draft.creationMode]
+  const modeLabel = v2TimelineCreationModeLabel(draft.creationMode)
   return {
     id: draft.draftId,
     title: draft.title?.trim() || modeLabel,

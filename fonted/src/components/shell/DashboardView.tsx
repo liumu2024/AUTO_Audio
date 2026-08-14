@@ -20,7 +20,10 @@ import {
   startNewV2DraftWorkspace,
 } from '@/services/director/v2DirectorDraftWorkspace'
 import { replaceActiveDirectorWorkspaceSession } from '@/services/director/workspaceSessionLifecycle'
-import { mapV2TimelineDraftHistoryCard } from '@shared/lib/v2-timeline-draft-history'
+import {
+  mapV2TimelineDraftHistoryCard,
+  v2TimelineCreationModeLabel,
+} from '@shared/lib/v2-timeline-draft-history'
 import type { V2TimelineDraftHistoryDto } from '@/lib/api'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -64,7 +67,7 @@ export function DashboardView() {
 
   const loadDrafts = useCallback(async () => {
     if (!env.useBackend) {
-      setError('请开启 VITE_USE_BACKEND=true')
+      setError('创作服务当前未启用。')
       setLoading(false)
       return
     }
@@ -74,7 +77,8 @@ export function DashboardView() {
       const { drafts: list } = await api.listV2TimelineDrafts()
       setDrafts(list)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      console.error('[DashboardView] failed to load drafts', e)
+      setError('历史方案暂时无法加载，请稍后重试。')
       setDrafts([])
     } finally {
       setLoading(false)
@@ -98,10 +102,11 @@ export function DashboardView() {
       activateV2DraftWorkspace(persisted)
       useEditorStore.getState().enterV2Workspace()
       useEditorStore.getState().setProjectName(card.title)
-      addLog(`[V2 工作台] 已打开草稿 ${persisted.draftId}，revision ${persisted.revision}。`)
+      addLog('[方案中心] 已打开所选方案。')
       setActiveView('editor')
     } catch (error) {
-      addLog(`[V2 工作台] 打开草稿失败: ${error instanceof Error ? error.message : String(error)}`)
+      console.error('[DashboardView] failed to open draft', error)
+      addLog('[方案中心] 打开方案失败，请稍后重试。')
     } finally {
       setOpeningId(null)
     }
@@ -115,9 +120,10 @@ export function DashboardView() {
     setDrafts((items) => items.filter((draft) => draft.draftId !== id))
     try {
       await api.deleteV2TimelineDraft(id)
-      addLog(`[V2 工作台] 已删除草稿 ${id}`)
+      addLog('[方案中心] 已删除所选方案。')
     } catch (e) {
-      addLog(`[V2 工作台] 删除失败: ${e instanceof Error ? e.message : String(e)}`)
+      console.error('[DashboardView] failed to delete draft', e)
+      addLog('[方案中心] 删除失败，请稍后重试。')
       void loadDrafts()
     }
   }
@@ -128,7 +134,7 @@ export function DashboardView() {
         <div>
           <h1 className="text-xl font-semibold text-zinc-100">历史工作台</h1>
           <p className="mt-1 text-sm text-zinc-500">
-            查看历史 V2 时间线草稿，可打开继续编辑或删除。
+            查看历史视频方案，可打开继续编辑或删除。
           </p>
         </div>
         <Button type="button" variant="secondary" size="sm" onClick={() => void loadDrafts()}>
@@ -138,7 +144,7 @@ export function DashboardView() {
       </header>
 
       <div className="flex-1 px-8 py-6">
-        {loading && <p className="text-sm text-zinc-500">加载 V2 草稿...</p>}
+        {loading && <p className="text-sm text-zinc-500">正在加载历史方案...</p>}
         {error && (
           <div className="rounded-lg border border-red-900/50 bg-red-950/30 px-4 py-3 text-sm text-red-300">
             {error}
@@ -149,9 +155,9 @@ export function DashboardView() {
         )}
         {!loading && !error && drafts.length === 0 && (
           <div className="rounded-xl border border-dashed border-zinc-700 bg-zinc-900/30 px-6 py-16 text-center">
-            <p className="text-sm text-zinc-400">暂无历史 V2 草稿</p>
+            <p className="text-sm text-zinc-400">暂无历史方案</p>
             <p className="mt-2 text-xs text-zinc-600">
-              去“创作”生成 V2 时间线方案后，草稿会出现在这里。旧项目已下线，不能在此打开。
+              去“创作”生成视频方案后，保存的方案会出现在这里。
             </p>
           </div>
         )}
@@ -213,9 +219,6 @@ export function DashboardView() {
                     {card.sceneCount != null ? <span className="rounded bg-zinc-800 px-1.5 py-0.5">{card.sceneCount} 镜头</span> : null}
                     {card.visibleTextCount != null ? <span className="rounded bg-zinc-800 px-1.5 py-0.5">{card.visibleTextCount} 段文字</span> : null}
                   </div>
-                  <p className="mt-1 truncate font-mono text-[10px] text-zinc-600">
-                    {card.id}
-                  </p>
                   <p className="mt-1 text-[10px] text-zinc-600">
                     {formatDate(card.updatedAt)}
                   </p>
@@ -312,20 +315,14 @@ export function DashboardView() {
                   </div>
                 ) : null}
                 <div className="col-span-2">
-                  <dt className="text-zinc-600">V2 草稿 ID</dt>
-                  <dd className="break-all font-mono">{viewing.draftId}</dd>
-                </div>
-                <div className="col-span-2">
-                  <dt className="text-zinc-600">创建路径 / 当前 revision</dt>
-                  <dd className="break-all font-mono">
-                    {viewing.creationMode} / {viewing.revision}
-                  </dd>
+                  <dt className="text-zinc-600">创作方式</dt>
+                  <dd>{v2TimelineCreationModeLabel(viewing.creationMode)}</dd>
                 </div>
                 {viewing.latestRun && (
                   <div className="col-span-2">
                     <dt className="text-zinc-600">最近运行</dt>
                     <dd className="break-all font-mono">
-                      {viewing.latestRun.status} / revision {viewing.latestRun.sourceRevision}
+                      {STATUS_LABEL[viewing.latestRun.status] ?? '状态未知'}
                     </dd>
                   </div>
                 )}
@@ -348,7 +345,7 @@ export function DashboardView() {
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-          <DialogTitle>删除 V2 草稿</DialogTitle>
+          <DialogTitle>删除视频方案</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-zinc-400">
             确定删除「{deleteTarget ? mapV2TimelineDraftHistoryCard(deleteTarget).title : ''}」？此操作不可撤销。

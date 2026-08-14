@@ -470,7 +470,7 @@ export async function runV2RemotionTimeline(
     await options.onProgress?.(progressEvent)
   }
   await trace.writeJson('01-input', 'timeline-planner-input.json', traceablePlannerInput(input))
-  await reportProgress({ phase: 'prepare', progress: 5, message: '正在读取并校验当前 V2 草稿。' })
+  await reportProgress({ phase: 'prepare', progress: 5, message: '正在读取并校验当前方案。' })
   const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
   await trace.writeJson('01-input', 'timeline-hard-requirements.json', hardRequirements)
   const outputRoot = outputRootFor(input.taskId, options.outputBaseDir)
@@ -536,7 +536,7 @@ export async function runV2RemotionTimeline(
     progress: 10,
     message: resolved.plannerSource === 'override'
       ? '已读取当前草稿；本次渲染不会重新规划方案。'
-      : 'V2 时间线规划与校验已完成。',
+      : '视频方案规划与检查已经完成。',
   })
 
   const materialResolution = await resolveRemotionTimelineMaterialJobs({
@@ -553,8 +553,8 @@ export async function runV2RemotionTimeline(
         phase: 'material_generation',
         progress: Math.round(10 + fraction * 70),
         message: event.status === 'started'
-          ? `正在生成镜头素材：${event.sceneId}`
-          : `镜头素材 ${event.sceneId}：${event.status}`,
+          ? '正在生成一个镜头的画面素材。'
+          : '一个镜头的画面素材已经处理完毕。',
         jobId: event.jobId,
         sceneId: event.sceneId,
       })
@@ -592,7 +592,7 @@ export async function runV2RemotionTimeline(
     throw new Error(`Renderable timeline validation failed: ${JSON.stringify(renderValidation.issues, null, 2)}`)
   }
 
-  await reportProgress({ phase: 'remotion_render', progress: 92, message: '素材已齐备，正在由 Remotion 编排并渲染。' })
+  await reportProgress({ phase: 'remotion_render', progress: 92, message: '素材已齐备，正在合成成片。' })
   const render = await renderV2RemotionTimeline({
     spec: standardized.spec,
     outputDir: outputRoot,
@@ -620,7 +620,7 @@ export async function runV2RemotionTimeline(
     warnings,
   }
   await trace.writeJson('07-evaluation', 'timeline-evaluation.json', evaluation)
-  await reportProgress({ phase: 'complete', progress: 100, message: 'V2 视频渲染已完成。' })
+  await reportProgress({ phase: 'complete', progress: 100, message: '视频成片已经生成。' })
   await trace.appendSessionEvent({
     type: 'render_completed',
     ok: evaluation.ok,

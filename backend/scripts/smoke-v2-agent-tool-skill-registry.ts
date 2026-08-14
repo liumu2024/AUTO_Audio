@@ -285,12 +285,13 @@ const pendingRevisionReadiness = evaluateV2AgentToolReadiness({
   runtime: { backendEnabled: true, sampleUrl: '', isSampleParsed: false, hasVisualMaterial: false, materialCount: 0 },
   workspace: {
     draftId: 'draft_pending_revision', baseRevision: 1,
-    pendingTimelineRevisions: [{ instruction: 'apply a requested timeline edit', callId: 'patch_pending', baseRevision: 1 }],
+    pendingTimelineRevisions: [{ instruction: 'change scene_002.asset_id with render.author', callId: 'patch_pending', baseRevision: 1 }],
   },
   authorizationGranted: true,
 })
 assert.equal(pendingRevisionReadiness.status, 'blocked')
 assert.ok(pendingRevisionReadiness.missing.some((item) => item.code === 'timeline_revision_pending'))
+assert.doesNotMatch(pendingRevisionReadiness.missing.map((item) => item.description).join(';'), /scene_|asset_id|render\.author/i)
 const uniqueSampleCandidateReadiness = evaluateV2AgentToolReadiness({
   toolId: 'sample.analyze',
   context: {
@@ -394,12 +395,18 @@ const directDeliveryReadiness = evaluateV2TimelineDeliveryReadiness({
 assert.equal(directDeliveryReadiness.status, 'blocked')
 assert.equal(directDeliveryReadiness.generationJobCount, 1)
 assert.ok(directDeliveryReadiness.missing.some((item) => item.code === 'generation_input_unreachable'))
+assert.doesNotMatch(
+  directDeliveryReadiness.missing.map((item) => item.description).join('；'),
+  /local_input|input_asset_id|TOS_ACCESS_KEY_ID|scene_\d+/i,
+  'delivery readiness shown to users must not expose asset IDs, scene IDs, or configuration names',
+)
 const pendingDeliveryReadiness = evaluateV2TimelineDeliveryReadiness({
   timelineSpec: base,
-  pendingTimelineRevisions: [{ callId: 'patch_pending', instruction: '修改第二镜头', baseRevision: 1 }],
+  pendingTimelineRevisions: [{ callId: 'patch_pending', instruction: '修改 scene_002.asset_id', baseRevision: 1 }],
 })
 assert.equal(pendingDeliveryReadiness.status, 'blocked')
 assert.ok(pendingDeliveryReadiness.missing.some((item) => item.code === 'timeline_revision_pending'))
+assert.doesNotMatch(pendingDeliveryReadiness.missing.map((item) => item.description).join(';'), /scene_|asset_id/i)
 const localImageFallbackSpec: RemotionTimelineSpecV1 = {
   ...localImageGenerationSpec,
   assets: [
