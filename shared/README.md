@@ -1,8 +1,8 @@
 # Shared
 
 `shared/` contains protocol types and deterministic logic used by backend,
-frontend, Remotion-adjacent tooling, and smoke scripts. The active creation
-contract is `RemotionTimelineSpecV1`.
+frontend, and Remotion-adjacent tooling. The active creation contract is
+`RemotionTimelineSpecV1`.
 
 ## Layout
 
@@ -10,10 +10,8 @@ contract is `RemotionTimelineSpecV1`.
 | --- | --- |
 | `types/` | Cross-runtime contracts for V2 timelines, director coordination, sample understanding, and material facts. |
 | `lib/remotion-timeline-validator.ts` | Active V2 timeline structural validation. |
-| `lib/remotion-timeline-fixtures.ts` | V2 timeline fixtures used by smoke tests. |
 | `lib/material-analysis-heuristic.ts` | Local, deterministic material facts for V2 material selection. |
 | `lib/director-action-engine.ts` | Convert director intent into executable action plans. |
-| `mocks/` | Development fixtures and smoke-test data only. |
 
 ## V2 Tool Boundaries
 
@@ -38,11 +36,3 @@ regenerate them before running backend or desktop mode.
 
 Frontend builds use `fonted/vite.config.ts` to prefer the `.ts` source files
 when bundling shared imports.
-
-## Fixture Rules
-
-- `mocks/` is for local development and tests.
-- Sample video data is structure/style evidence only.
-- Final renderable media must come from user materials, system assets, or
-  existing sample-reference audio when explicitly configured.
-- Do not store real API keys, signed private URLs, or private generated media.

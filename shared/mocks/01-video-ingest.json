@@ -1,9 +1,0 @@
-{
-  "video_id": "demo_001",
-  "sample_video_url": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-  "duration_sec": 15,
-  "format": "mp4",
-  "width": 1920,
-  "height": 1080,
-  "thumbnail_url": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/BigBuckBunny.jpg"
-}

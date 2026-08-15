@@ -50,7 +50,6 @@ backend/uploads/
 backend/renders/
 backend/v2-renders/
 backend/data/
-backend/evaluation/reports/
 tmp/
 output/
 
@@ -72,6 +71,23 @@ __pycache__/
 # Test / coverage
 coverage/
 .nyc_output/
+backend/evaluation/
+backend/src/evaluation-v2/
+backend/scripts/smoke-*.ts
+backend/scripts/experiment-*.ts
+backend/scripts/live-v2-*.ts
+backend/scripts/verify-v2-*.ts
+backend/scripts/check-v2-*.ts
+backend/scripts/v2-director-reply-quality-gate.ts
+backend/scripts/v2-material-resolution-contract.ts
+script/fronted-test/
+example_videos/
+shared/lib/remotion-timeline-fixtures.*
+shared/mocks/
+**/__tests__/
+**/tests/
+**/*.test.*
+**/*.spec.*
 
 # Experiment / render artifacts
 experiments/pipeline-lab/runs/

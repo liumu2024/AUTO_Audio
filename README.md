@@ -1,6 +1,6 @@
 # 多模态智能视频创作平台
 
-一个面向多轮 AI 视频创作的可编辑 Agent 平台。系统把自然语言、图片素材和样例视频转换为版本化时间线，支持持续修改、AI 镜头生成、程序化合成、失败恢复与可追踪评测。
+一个面向多轮 AI 视频创作的可编辑 Agent 平台。系统把自然语言、图片素材和样例视频转换为版本化时间线，支持持续修改、AI 镜头生成、程序化合成与失败恢复。
 
 当前主链以 `RemotionTimelineSpecV1` 为唯一交付协议：Seedance 等视觉模型负责生成真实动态镜头，Remotion 负责字幕、转场、覆盖层和确定性时间线合成，FFmpeg 负责媒体标准化与最终封装。
 
@@ -13,7 +13,6 @@
 - **长期创作上下文**：区分用户个人偏好与普适创作知识，支持候选、启用、撤销、来源追踪及按任务检索。
 - **低成本二次创作**：生成请求使用幂等记录；未变化的 AI 镜头按请求指纹、文件哈希和媒体可读性校验后复用，只重新生成受影响镜头。
 - **混合渲染交付**：用户素材、AI 视频、程序化画面、字幕和转场在同一时间线中合成，避免让单一生成模型承担全部工作。
-- **可量化评测**：评测包覆盖对话决策、方案生成、局部修改、图片理解、样例理解、偏好检索、幂等、渲染和 UI 边界。
 
 ## 创作链路
 
@@ -43,7 +42,6 @@
 | 生成与渲染 | Seedance 适配、AI 镜头复用、FFmpeg 标准化、Remotion 完整合成 |
 | 执行安全 | readiness 预检、幂等请求、版本冲突保护、真实取消状态、失败修订门禁 |
 | 记忆与知识 | 用户/草稿偏好、普适创作知识、状态管理、BM25 检索、来源与采用记录 |
-| 评测 | 冻结数据集、确定性/在线/稳定性/少量付费成片 profile、离线人工评分 |
 
 ## 技术栈
 
@@ -58,7 +56,7 @@
 
 | 路径 | 职责 |
 | --- | --- |
-| `backend/` | Director、Planner、素材分析、时间线服务、生成/渲染、记忆、知识和评测 |
+| `backend/` | Director、Planner、素材分析、时间线服务、生成/渲染、记忆和知识 |
 | `fonted/` | React 编辑器、对话工作区、时间线编辑、素材与历史运行状态 |
 | `shared/` | 前后端共享协议、时间线类型、校验器和确定性工具 |
 | `remotion/` | 最终时间线 Composition 与程序化画面组件 |
@@ -138,41 +136,6 @@ V2_VIDEO_GENERATION_MODEL=doubao-seedance-1-5-pro-251215
 
 素材发布和其他运行配置示例见 `backend/.env.example`。
 
-## 验证与评测
-
-V2 基础构建与时间线 smoke：
-
-```powershell
-npm.cmd run v2:check
-```
-
-构建并运行冻结评测集：
-
-```powershell
-npm.cmd --prefix backend run eval:v2:build
-npm.cmd --prefix backend run eval:v2:run -- --profile deterministic
-```
-
-其他评测 profile：
-
-- `live`：运行真实 Director、Planner、图片和样例理解，但禁止视频生成 Provider。
-- `stability`：对关键场景重复运行，检查结果稳定性。
-- `canary --allow-provider`：少量真实视频生成；有 RenderRun 数量、Provider 提交次数和目标生成秒数上限，会产生实际费用。
-
-付费 canary 完成后可离线追加人工评分，不会再次调用模型或重新生成视频：
-
-```powershell
-New-Item -ItemType Directory -Force backend/evaluation/reports | Out-Null
-Copy-Item backend/evaluation/datasets/source/manual-ratings.example.json `
-  backend/evaluation/reports/manual-ratings.local.json
-# 查看成片和 Trace 后填写 reports/manual-ratings.local.json，再执行：
-npm.cmd --prefix backend run eval:v2:score -- `
-  --report evaluation/reports/<canary>/report.json `
-  --ratings evaluation/reports/manual-ratings.local.json
-```
-
-评测说明见 [backend/evaluation/README.md](backend/evaluation/README.md)。
-
 ## Trace 与运行产物
 
 默认 Trace 位于：
@@ -204,4 +167,3 @@ npm.cmd --prefix backend run build:shared
 - 局部修订当前仍由完整候选方案、服务端作用域合并和完整 revision 保存完成；`revision fragment` 尚未实施。
 - Provider 已进入提交中或状态未知时，系统会让当前 Run 失败并停止交付，但不能虚假承诺第三方任务已经停止。
 - 后台 Worker、跨进程租约恢复和严格远程取消仍是后续能力。
-- 样例理解评测当前样本量有限，因此只报告结果，不作为正式质量发布门槛。
