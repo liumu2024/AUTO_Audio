@@ -10,7 +10,10 @@ import { analyzeV2Sample } from '../sample-understanding-service.js'
 import { previewV2RemotionTimeline } from '../remotion-timeline-service.js'
 import { buildV2TimelinePlanningReview } from '../remotion-timeline-review.js'
 import { executeV2TimelineDraftRun } from '../timeline-draft-runner.js'
-import { buildV2TimelineRevisionContext } from '../timeline-revision-context.js'
+import {
+  buildV2TimelineRevisionContext,
+  buildV2TimelineRevisionGroupContext,
+} from '../timeline-revision-context.js'
 import { normalizeV2TimelineSelection } from '../timeline-selection.js'
 import {
   buildDirectorTimelineFacts,
@@ -18,7 +21,7 @@ import {
   evaluateV2TimelineRevisionCommit,
   verifyV2TimelinePendingResolution,
 } from '../timeline-revision-outcome-review.js'
-import type { V2TimelineRevisionScope } from '../timeline-revision-scope.js'
+import type { V2TimelineRevisionGroup, V2TimelineRevisionScope } from '../timeline-revision-scope.js'
 import {
   listPromotedComponents,
   readRenderComponent,
@@ -113,6 +116,8 @@ export interface V2AgentToolDispatchInput {
   /** The tool request's own instruction, used as the revision review boundary
    * for scoped edits. Falls back to the full conversation prompt when absent. */
   requestInstruction?: string
+  /** Internal same-scene bundle derived from validated timeline.patch requests. */
+  revisionGroup?: V2TimelineRevisionGroup
   userId: number
   context: DirectorContext
   runtime: DirectorConversationRuntime
@@ -389,7 +394,8 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
     ? checked.arguments.durationMode as 'preserve_range' | 'resize_timeline'
     : undefined
   const requestedPendingCallId = request.toolId === 'timeline.patch'
-    ? checked.arguments.resolvesPendingCallId as string | undefined
+    ? input.revisionGroup?.resolvesPendingCallId
+      ?? checked.arguments.resolvesPendingCallId as string | undefined
     : undefined
   const pendingResolution = requestedPendingCallId
     ? (await drafts.getDraft(input.workspace.draftId!, input.userId))?.pendingTimelineRevisions
@@ -500,7 +506,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
     const availableComponents = [...promotedComponents, ...authorizedDraftComponents]
     let plan = plannerInput({
       taskId: `v2_tool_${Date.now()}_${randomUUID().slice(0, 8)}`,
-      prompt: input.requestInstruction ?? input.prompt,
+      prompt: input.revisionGroup ? input.prompt : input.requestInstruction ?? input.prompt,
       context: input.context,
       workspace: input.workspace,
       authorization: input.authorization,
@@ -530,14 +536,32 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
           authorizationEvidence: input.authorization?.evidence,
         },
         revisionBaseSpec: existing.spec,
-        revisionScope: patchScope,
+        revisionScope: input.revisionGroup ? undefined : patchScope,
+        revisionGroup: input.revisionGroup,
         revisionGlobalMode: requestedGlobalMode,
         revisionDurationMode: requestedDurationMode,
         revisionSceneId: resolvedSceneId,
         revisionOverlayIds: requestedOverlayIds,
         revisionSceneIds: requestedStructureSceneIds,
         revisionTransitionIds: requestedTransitionIds,
-        revisionContext: buildV2TimelineRevisionContext({ draftId: input.workspace.draftId, baseRevision: input.workspace.baseRevision, spec: existing.spec }),
+        revisionContext: input.revisionGroup
+          ? buildV2TimelineRevisionGroupContext({
+              draftId: input.workspace.draftId,
+              baseRevision: input.workspace.baseRevision,
+              spec: existing.spec,
+              group: input.revisionGroup,
+            })
+          : buildV2TimelineRevisionContext({
+              draftId: input.workspace.draftId,
+              baseRevision: input.workspace.baseRevision,
+              spec: existing.spec,
+              scope: patchScope,
+              sceneId: resolvedSceneId,
+              sceneIds: requestedStructureSceneIds,
+              overlayIds: requestedOverlayIds,
+              transitionIds: requestedTransitionIds,
+              globalMode: requestedGlobalMode,
+            }),
       }
     }
     const preview = await previewV2RemotionTimeline(
@@ -554,24 +578,33 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
     const settled = await settleTimelineRenderComponentVisualEvidence(preview.spec)
     const spec = settled.spec
     if (request.toolId === 'timeline.patch' && existing) {
-      const scope = patchScope as V2TimelineRevisionScope
-      const commit = evaluateV2TimelineRevisionCommit({
-        baseSpec: existing.spec,
-        candidateSpec: spec,
-        scope,
-        sceneId: resolvedSceneId,
-        sceneIds: requestedStructureSceneIds,
-        transitionIds: requestedTransitionIds,
-        overlayIds: requestedOverlayIds,
-      })
-      if (!commit.ok) {
+      const commits = input.revisionGroup
+        ? input.revisionGroup.items.map((item) => evaluateV2TimelineRevisionCommit({
+            baseSpec: existing.spec,
+            candidateSpec: spec,
+            scope: item.scope,
+            sceneId: item.sceneId,
+            transitionIds: item.transitionIds,
+            overlayIds: item.overlayIds,
+          }))
+        : [evaluateV2TimelineRevisionCommit({
+            baseSpec: existing.spec,
+            candidateSpec: spec,
+            scope: patchScope as V2TimelineRevisionScope,
+            sceneId: resolvedSceneId,
+            sceneIds: requestedStructureSceneIds,
+            transitionIds: requestedTransitionIds,
+            overlayIds: requestedOverlayIds,
+          })]
+      const failedCommit = commits.find((commit) => !commit.ok)
+      if (failedCommit) {
         return {
           callId: request.callId,
           toolId: request.toolId,
           ok: false,
           gate: 'revision_commit',
-          summary: commit.violation?.message ?? '修订没有产生可保存的变化。',
-          output: { revisionCommit: commit },
+          summary: failedCommit.violation?.message ?? '修订没有产生可保存的变化。',
+          output: { revisionCommit: failedCommit },
           recovery: '当前方案已经保留，请根据这次修改的范围重新调整。',
           plannerInvoked: true,
         }
@@ -730,6 +763,7 @@ export async function dispatchV2AgentTool(
           request,
           prompt: input.prompt,
           requestInstruction: input.requestInstruction,
+          revisionGroup: input.revisionGroup,
           context: input.context,
           runtime: input.runtime,
           workspace: {

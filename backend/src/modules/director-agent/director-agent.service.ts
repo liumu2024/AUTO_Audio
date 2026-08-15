@@ -7,6 +7,10 @@ import type { V2SampleUnderstandingResult } from '../../../../shared/types/v2-sa
 import { randomUUID } from 'node:crypto'
 import { createV2TraceWriter } from '../../pipeline-v2/trace.js'
 import { buildDirectorTimelineFacts } from '../../pipeline-v2/timeline-revision-outcome-review.js'
+import {
+  partitionV2TimelineRevisionGroups,
+  type V2TimelineRevisionGroup,
+} from '../../pipeline-v2/timeline-revision-scope.js'
 import { createV2TimelineDraftRepository } from '../../pipeline-v2/timeline-draft-repository.js'
 import {
   dispatchV2AgentTool,
@@ -1021,13 +1025,111 @@ export async function* streamDirectorAgentChat(
         selectedItemId: executionContext.selectedItemId,
       }
     : workspaceState
+  const revisionGroupRequests = requestedTools.filter((request) => request.toolId === 'timeline.patch')
+  const eligibleRevisionGroupRequests = revisionGroupRequests.filter((request) =>
+    !executionPlan.rejectedTools.some((item) => item.callId === request.callId)
+    && executionPlan.stages.some((item) => item.toolRequest.callId === request.callId))
+  const revisionGroupPartition = confirmedRevisionProposal && persistedTimelineRevision
+    ? partitionV2TimelineRevisionGroups({
+        baseSpec: persistedTimelineRevision.spec,
+        items: eligibleRevisionGroupRequests.map((request) => ({
+          ref: request.ref,
+          callId: request.callId,
+          scope: request.arguments.scope,
+          instruction: request.arguments.instruction,
+          sceneId: request.arguments.sceneId,
+          overlayIds: request.arguments.overlayIds,
+          transitionIds: request.arguments.transitionIds,
+          resolvesPendingCallId: request.arguments.resolvesPendingCallId,
+        })),
+      })
+    : { groups: [], invalid: [] }
+  const revisionGroupByCallId = new Map<string, V2TimelineRevisionGroup>()
+  for (const group of revisionGroupPartition.groups) {
+    for (const item of group.items) revisionGroupByCallId.set(item.callId, group)
+  }
+  const invalidRevisionGroupByCallId = new Map<string, { callIds: string[]; message: string }>()
+  for (const invalid of revisionGroupPartition.invalid) {
+    for (const callId of invalid.callIds) invalidRevisionGroupByCallId.set(callId, invalid)
+  }
+  let executionRequests = requestedTools
+  if (revisionGroupPartition.groups.length > 0) {
+    const unitKeyByCallId = new Map(requestedTools.map((request) => [
+      request.callId,
+      revisionGroupByCallId.get(request.callId)?.items[0]?.callId ?? request.callId,
+    ]))
+    const requestByRef = new Map(requestedTools.map((request) => [request.ref, request]))
+    const units = new Map<string, {
+      requests: typeof requestedTools
+      dependencies: Set<string>
+      firstIndex: number
+    }>()
+    requestedTools.forEach((request, index) => {
+      const key = unitKeyByCallId.get(request.callId)!
+      const unit = units.get(key) ?? { requests: [], dependencies: new Set<string>(), firstIndex: index }
+      unit.requests.push(request)
+      units.set(key, unit)
+    })
+    for (const [key, unit] of units) {
+      for (const request of unit.requests) {
+        for (const ref of request.dependsOn) {
+          const dependencyRequest = requestByRef.get(ref)
+          const dependencyKey = dependencyRequest ? unitKeyByCallId.get(dependencyRequest.callId) : undefined
+          if (dependencyKey && dependencyKey !== key) unit.dependencies.add(dependencyKey)
+        }
+      }
+    }
+    const completedUnits = new Set<string>()
+    const orderedUnits: Array<{
+      requests: typeof requestedTools
+      dependencies: Set<string>
+      firstIndex: number
+    }> = []
+    while (orderedUnits.length < units.size) {
+      const next = [...units.entries()]
+        .filter(([key, unit]) => !completedUnits.has(key)
+          && [...unit.dependencies].every((dependency) => completedUnits.has(dependency)))
+        .sort((left, right) => left[1].firstIndex - right[1].firstIndex)[0]
+      if (!next) break
+      completedUnits.add(next[0])
+      orderedUnits.push(next[1])
+    }
+    if (orderedUnits.length === units.size) {
+      executionRequests = orderedUnits.flatMap((unit) => unit.requests)
+    } else {
+      for (const group of revisionGroupPartition.groups) {
+        const invalid = {
+          callIds: group.items.map((item) => item.callId),
+          message: 'The joint revision has cyclic external dependencies.',
+        }
+        for (const callId of invalid.callIds) {
+          revisionGroupByCallId.delete(callId)
+          invalidRevisionGroupByCallId.set(callId, invalid)
+        }
+      }
+    }
+  }
+  const revisionGroupResults = new Map<string, V2AgentToolResult>()
+  const preResolvedDependencyRefs = new Set(confirmedProposal?.resolvedStateActionRefs ?? [])
   if (shouldExecute) {
-    for (const request of requestedTools) {
+    for (const request of executionRequests) {
       const rejected = executionPlan.rejectedTools.find((item) => item.callId === request.callId)
       const stage = executionPlan.stages.find((item) => item.toolRequest.callId === request.callId)
-      const failedDependency = request.dependsOn
-        .map((ref) => actionReceipts.find((receipt) => receipt.ref === ref))
-        .find((receipt) => receipt?.status !== 'succeeded')
+      const revisionGroup = revisionGroupByCallId.get(request.callId)
+      const revisionGroupItem = revisionGroup?.items.find((item) => item.callId === request.callId)
+      const revisionGroupPrimary = revisionGroup?.items[0]?.callId === request.callId
+      const invalidRevisionGroup = invalidRevisionGroupByCallId.get(request.callId)
+      const invalidRevisionGroupPrimary = invalidRevisionGroup?.callIds[0] === request.callId
+      const groupRefs = new Set(revisionGroup?.items.map((item) => item.ref) ?? [])
+      const dependencyRefs = revisionGroup
+        ? [...new Set(revisionGroup.items.flatMap((item) => {
+            const member = requestedTools.find((candidate) => candidate.callId === item.callId)
+            return member?.dependsOn.filter((ref) => !groupRefs.has(ref)) ?? []
+          }))]
+        : request.dependsOn
+      const failedDependencyRef = dependencyRefs.find((ref) =>
+        !preResolvedDependencyRefs.has(ref)
+        && actionReceipts.find((receipt) => receipt.ref === ref)?.status !== 'succeeded')
       const revisionIntent = revisionIntents.find((item) => item.callId === request.callId)
       yield {
         type: 'tool_proposed',
@@ -1060,7 +1162,16 @@ export async function* streamDirectorAgentChat(
           summary: '修改提案中有未通过校验的动作；为避免只改一部分，本轮没有开始执行。',
           recovery: '请基于当前草稿重新提出一组完整、可确认的修改。',
         }
-      } else if (failedDependency) {
+      } else if (invalidRevisionGroup) {
+        result = {
+          callId: request.callId,
+          toolId: request.toolId,
+          ok: false,
+          gate: 'revision_group',
+          summary: '这组同镜头修改没有形成完整、可靠的联合修改，因此没有开始执行。',
+          recovery: '请基于当前方案重新确认这组修改的目标对象。',
+        }
+      } else if (failedDependencyRef) {
         result = {
           callId: request.callId,
           toolId: request.toolId,
@@ -1077,6 +1188,17 @@ export async function* streamDirectorAgentChat(
           summary: rejected ? '本轮步骤存在重复、无效依赖或不受支持的执行方式，因此没有继续。' : '本轮没有找到可靠的执行方式。',
           recovery: '请重新理解本轮要求，并选择当前可用的处理方式。',
         }
+      } else if (revisionGroupItem && !revisionGroupPrimary && revisionGroup) {
+        const primaryResult = revisionGroupResults.get(revisionGroup.items[0]!.callId)
+        result = primaryResult
+          ? { ...primaryResult, callId: request.callId }
+          : {
+              callId: request.callId,
+              toolId: request.toolId,
+              ok: false,
+              gate: 'revision_group',
+              summary: '这组修改的前一步没有形成可靠结果，因此没有继续执行。',
+            }
       } else {
         didDispatch = true
         dispatchedToolCount += 1
@@ -1090,14 +1212,20 @@ export async function* streamDirectorAgentChat(
           void (dependencies.dispatchTool ?? dispatchV2AgentTool)({
             stage,
             prompt: executionPrompt,
-            requestInstruction:
-              typeof request.arguments?.instruction === 'string'
+            requestInstruction: revisionGroupPrimary
+              ? undefined
+              : typeof request.arguments?.instruction === 'string'
                 ? request.arguments.instruction
                 : undefined,
+            revisionGroup: revisionGroupPrimary ? revisionGroup : undefined,
             userId,
             context: executionContext?.context ?? workspaceState.context,
             runtime: executionContext?.runtime ?? effectiveRuntime,
-            workspace: dispatchWorkspace,
+            workspace: {
+              ...dispatchWorkspace,
+              draftId: workspaceState.draftId,
+              baseRevision: workspaceState.baseRevision,
+            },
             authorization: request.toolId === 'timeline.pending.dismiss'
               ? pendingDismissalAuthorization
               : deliveryAuthorization,
@@ -1106,7 +1234,7 @@ export async function* streamDirectorAgentChat(
               ?? creativeMemoryRetrieval.active.map((item) => item.memory.statement),
             recalledCreativeKnowledge: executionContext?.recalledCreativeKnowledge
               ?? creativeKnowledgeRetrieval.items.map((item) => item.knowledge.statement),
-            authorizedDraftComponentIds: request.dependsOn.flatMap((ref) => {
+            authorizedDraftComponentIds: dependencyRefs.flatMap((ref) => {
               const dependencyRequest = requestedTools.find((item) => item.ref === ref)
               const dependencyResult = dependencyRequest
                 ? toolResults.find((item) => item.callId === dependencyRequest.callId && item.ok)
@@ -1161,10 +1289,13 @@ export async function* streamDirectorAgentChat(
           }
         }
       }
+      if (revisionGroupPrimary) revisionGroupResults.set(request.callId, result)
       toolResults.push(result)
       if (
         request.toolId === 'timeline.patch'
         && !result.ok
+        && (!revisionGroupItem || revisionGroupPrimary)
+        && (!invalidRevisionGroup || invalidRevisionGroupPrimary)
         && workspaceState.draftId
         && workspaceState.baseRevision
       ) {
@@ -1173,10 +1304,13 @@ export async function* streamDirectorAgentChat(
           userId,
           baseRevision: workspaceState.baseRevision,
           callId: request.callId,
-          replacesCallId: typeof request.arguments.resolvesPendingCallId === 'string'
-            ? request.arguments.resolvesPendingCallId
-            : undefined,
-          instruction: typeof request.arguments.instruction === 'string'
+          replacesCallId: revisionGroup?.resolvesPendingCallId
+            ?? (typeof request.arguments.resolvesPendingCallId === 'string'
+              ? request.arguments.resolvesPendingCallId
+              : undefined),
+          instruction: revisionGroupPrimary
+            ? executionPrompt
+            : typeof request.arguments.instruction === 'string'
             ? request.arguments.instruction
             : input.prompt,
         })
@@ -1184,7 +1318,7 @@ export async function* streamDirectorAgentChat(
           pendingTimelineRevisions: marked.pendingTimelineRevisions,
         })
       }
-      const receiptStatus: 'skipped' | 'succeeded' | 'failed' = failedDependency
+      const receiptStatus: 'skipped' | 'succeeded' | 'failed' = failedDependencyRef
         ? 'skipped'
         : result.ok
           ? 'succeeded'

@@ -6,6 +6,64 @@ import { retainV2TimelineResourceClosure } from './timeline-resource-closure.js'
 
 export type V2TimelineRevisionScope = 'subtitle' | 'scene' | 'structure' | 'visual_strategy' | 'transition' | 'global'
 
+export const V2_TIMELINE_REVISION_FRAGMENT_SCHEMA_VERSION = 'v2_timeline_revision_fragment.v1'
+export const V2_TIMELINE_REVISION_GROUP_FRAGMENT_SCHEMA_VERSION = 'v2_timeline_revision_group_fragment.v1'
+
+export type V2TimelineRevisionGroupScope = Extract<
+  V2TimelineRevisionScope,
+  'scene' | 'visual_strategy' | 'subtitle' | 'transition'
+>
+
+export interface V2TimelineRevisionGroupItem {
+  ref: string
+  callId: string
+  scope: V2TimelineRevisionGroupScope
+  instruction: string
+  sceneId: string
+  overlayIds?: string[]
+  transitionIds?: string[]
+}
+
+/** Server-authorized same-scene revision bundle. It is never accepted from a
+ * public Tool argument; the server derives it from already validated scopes. */
+export interface V2TimelineRevisionGroup {
+  sceneId: string
+  items: V2TimelineRevisionGroupItem[]
+  resolvesPendingCallId?: string
+}
+
+export interface V2TimelineRevisionGroupPartition {
+  groups: V2TimelineRevisionGroup[]
+  invalid: Array<{ callIds: string[]; message: string }>
+}
+
+export interface V2TimelineRevisionGroupFragment {
+  schema_version: typeof V2_TIMELINE_REVISION_GROUP_FRAGMENT_SCHEMA_VERSION
+  image_references?: NonNullable<RemotionTimelineSpecV1['creative_brief']>['image_references']
+  scenes?: RemotionTimelineSpecV1['scenes']
+  transitions?: RemotionTimelineSpecV1['transitions']
+  caption_tracks?: NonNullable<RemotionTimelineSpecV1['caption_tracks']>
+  overlays?: RemotionTimelineSpecV1['overlays']
+  material_jobs?: RemotionTimelineSpecV1['material_jobs']
+}
+
+/**
+ * Model-facing revision payload. Arrays contain the complete objects inside
+ * the authorized scope, never a second full timeline or model-owned assets.
+ * The server merges this fragment back into the persisted base revision.
+ */
+export interface V2TimelineRevisionFragment {
+  schema_version: typeof V2_TIMELINE_REVISION_FRAGMENT_SCHEMA_VERSION
+  scope: V2TimelineRevisionScope
+  creative_brief?: RemotionTimelineSpecV1['creative_brief']
+  image_references?: NonNullable<RemotionTimelineSpecV1['creative_brief']>['image_references']
+  scenes?: RemotionTimelineSpecV1['scenes']
+  transitions?: RemotionTimelineSpecV1['transitions']
+  caption_tracks?: NonNullable<RemotionTimelineSpecV1['caption_tracks']>
+  overlays?: RemotionTimelineSpecV1['overlays']
+  material_jobs?: RemotionTimelineSpecV1['material_jobs']
+}
+
 /** Scene fields the visual_strategy scope may override. */
 export const VISUAL_STRATEGY_SCENE_FIELDS = ['type', 'fit', 'motion', 'background', 'asset_id'] as const
 
@@ -39,6 +97,28 @@ function mergeScopedArray<T>(input: {
     if (!baseInScopeKeys.has(key(item))) merged.push(item)
   }
   return merged
+}
+
+function mergeImageReferencesForJobs(input: {
+  baseSpec: RemotionTimelineSpecV1
+  candidateSpec: RemotionTimelineSpecV1
+  jobs: RemotionTimelineSpecV1['material_jobs']
+}): RemotionTimelineSpecV1['creative_brief'] {
+  const conditionedAssetIds = new Set(input.jobs.flatMap((job) =>
+    job.input_asset_id ? [job.input_asset_id] : []))
+  if (conditionedAssetIds.size === 0) return input.baseSpec.creative_brief
+  const candidateReferences = (input.candidateSpec.creative_brief?.image_references ?? [])
+    .filter((reference) => conditionedAssetIds.has(reference.asset_id))
+  const candidateReferenceIds = new Set(candidateReferences.map((reference) => reference.asset_id))
+  const baseBrief = input.baseSpec.creative_brief
+  if (!baseBrief) return input.candidateSpec.creative_brief
+  return {
+    ...baseBrief,
+    image_references: [
+      ...baseBrief.image_references.filter((reference) => !candidateReferenceIds.has(reference.asset_id)),
+      ...candidateReferences,
+    ],
+  }
 }
 
 /**
@@ -216,6 +296,11 @@ function applyStructureScope(input: {
     canvas: input.durationMode === 'resize_timeline'
       ? { ...input.baseSpec.canvas, duration_sec: input.baseSpec.canvas.duration_sec + durationDelta }
       : input.baseSpec.canvas,
+    creative_brief: mergeImageReferencesForJobs({
+      baseSpec: input.baseSpec,
+      candidateSpec: input.candidateSpec,
+      jobs: candidateReplacementJobs,
+    }),
     assets: [
       ...input.baseSpec.assets,
       ...input.candidateSpec.assets.filter((asset) =>
@@ -223,12 +308,15 @@ function applyStructureScope(input: {
     ],
     scenes,
     transitions,
-    overlays: [
-      ...input.baseSpec.overlays
-        .filter((overlay) => !overlay.scene_id || !targetIds.has(overlay.scene_id))
-        .map(shiftProtectedOverlay),
-      ...candidateReplacementOverlays,
-    ],
+    overlays: mergeScopedArray({
+      base: input.baseSpec.overlays.map(shiftProtectedOverlay),
+      candidate: candidateReplacementOverlays,
+      isInScope: (overlay) => Boolean(
+        overlay.scene_id
+        && (targetIds.has(overlay.scene_id) || replacementIds.has(overlay.scene_id)),
+      ),
+      key: (overlay) => overlay.id,
+    }),
     caption_tracks: [
       ...(input.baseSpec.caption_tracks ?? []).filter((track) =>
         !baseTrackIds.has(track.id) || protectedTrackIds.has(track.id)),
@@ -261,16 +349,16 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
   durationMode?: 'preserve_range' | 'resize_timeline'
 }): RemotionTimelineSpecV1 {
   if (input.scope === 'subtitle') {
-    if (input.sceneId) {
-      const requestedOverlayIds = new Set(input.overlayIds ?? [])
-      if (requestedOverlayIds.size > 0) {
-        const invalid = [...requestedOverlayIds].filter((id) => !input.baseSpec.overlays.some((overlay) =>
-          overlay.id === id && overlay.type === 'caption' && overlay.scene_id === input.sceneId))
-        if (invalid.length > 0) throw new Error(`Subtitle revision contains invalid overlayIds: ${invalid.join(', ')}`)
-      }
+    const requestedOverlayIds = new Set(input.overlayIds ?? [])
+    if (input.sceneId || requestedOverlayIds.size > 0) {
+      const invalid = [...requestedOverlayIds].filter((id) => !input.baseSpec.overlays.some((overlay) =>
+        overlay.id === id
+        && overlay.type === 'caption'
+        && (!input.sceneId || overlay.scene_id === input.sceneId)))
+      if (invalid.length > 0) throw new Error(`Subtitle revision contains invalid overlayIds: ${invalid.join(', ')}`)
       const inTarget = (overlay: RemotionTimelineSpecV1['overlays'][number]) =>
         overlay.type === 'caption'
-        && overlay.scene_id === input.sceneId
+        && (!input.sceneId || overlay.scene_id === input.sceneId)
         && (requestedOverlayIds.size === 0 || requestedOverlayIds.has(overlay.id))
       const targetTrackIds = new Set([
         ...input.baseSpec.overlays,
@@ -322,8 +410,13 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
       subtitle: candidateScene.subtitle,
       body: candidateScene.body,
     })
-    const candidateJobById = new Map(input.candidateSpec.material_jobs.map((job) => [job.id, job]))
-    const targetCandidateJobs = input.candidateSpec.material_jobs.filter((job) => job.scene_id === sceneId)
+    const baseTargetJobIds = new Set(input.baseSpec.material_jobs
+      .filter((job) => job.scene_id === sceneId)
+      .map((job) => job.id))
+    const candidateJobById = new Map(input.candidateSpec.material_jobs
+      .filter((job) => baseTargetJobIds.has(job.id) && job.scene_id === sceneId)
+      .map((job) => [job.id, job]))
+    const targetCandidateJobs = [...candidateJobById.values()]
     const conditionedAssetIds = new Set(targetCandidateJobs.flatMap((job) =>
       job.input_asset_id ? [job.input_asset_id] : []))
     const candidateImageReferences = input.candidateSpec.creative_brief?.image_references.filter((reference) =>
@@ -358,12 +451,7 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
               image_references: candidateImageReferences,
             }
           : undefined,
-      material_jobs: mergeScopedArray({
-        base: input.baseSpec.material_jobs,
-        candidate: input.candidateSpec.material_jobs,
-        isInScope: (job) => job.scene_id === sceneId,
-        key: (job) => job.id,
-      }).map((job) => {
+      material_jobs: input.baseSpec.material_jobs.map((job) => {
         if (job.scene_id !== sceneId || job.type !== 'generate_video' || !sceneNarrativeChanged || !candidateScene) {
           return job
         }
@@ -384,14 +472,39 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
     if (!sceneId) throw new Error('Visual strategy revision scope requires a sceneId.')
     const candidateScene = input.candidateSpec.scenes.find((scene) => scene.id === sceneId)
     const baseScene = input.baseSpec.scenes.find((scene) => scene.id === sceneId)
-    const strategyChanged = Boolean(baseScene && candidateScene && visualStrategyChanged(baseScene, candidateScene))
+    const assetIds = new Set(input.candidateSpec.assets.map((asset) => asset.id))
+    const assetBackedTypes = new Set(['user_video', 'ai_video', 'image_motion'])
+    const effectiveCandidateScene = baseScene && candidateScene
+      && assetBackedTypes.has(candidateScene.type)
+      && (!candidateScene.asset_id || !assetIds.has(candidateScene.asset_id))
+      ? { ...candidateScene, type: baseScene.type, asset_id: baseScene.asset_id }
+      : candidateScene
+    const strategyChanged = Boolean(
+      baseScene && effectiveCandidateScene && visualStrategyChanged(baseScene, effectiveCandidateScene),
+    )
+    const baseTargetJobIds = new Set(input.baseSpec.material_jobs
+      .filter((job) => job.scene_id === sceneId)
+      .map((job) => job.id))
+    const targetCandidateJobs = input.candidateSpec.material_jobs.filter((job) =>
+      job.scene_id === sceneId
+      && (
+        baseTargetJobIds.has(job.id)
+        || Boolean(job.output_asset_id && assetIds.has(job.output_asset_id))
+      ))
     return {
       ...input.baseSpec,
       scenes: input.baseSpec.scenes.map((scene) =>
-        scene.id === sceneId && candidateScene ? applyVisualStrategyScene(scene, candidateScene) : scene),
+        scene.id === sceneId && effectiveCandidateScene
+          ? applyVisualStrategyScene(scene, effectiveCandidateScene)
+          : scene),
+      creative_brief: mergeImageReferencesForJobs({
+        baseSpec: input.baseSpec,
+        candidateSpec: input.candidateSpec,
+        jobs: targetCandidateJobs,
+      }),
       material_jobs: mergeScopedArray({
         base: input.baseSpec.material_jobs,
-        candidate: input.candidateSpec.material_jobs,
+        candidate: targetCandidateJobs,
         isInScope: (job) => job.scene_id === sceneId,
         key: (job) => job.id,
       }).map((job) => {
@@ -404,9 +517,9 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
         return {
           ...job,
           status: 'planned',
-          prompt: promptChanged || !candidateScene
+          prompt: promptChanged || !effectiveCandidateScene
             ? candidatePrompt
-            : [baseJob.prompt?.trim(), visualStrategyPrompt(candidateScene)].filter(Boolean).join('\n'),
+            : [baseJob.prompt?.trim(), visualStrategyPrompt(effectiveCandidateScene)].filter(Boolean).join('\n'),
         }
       }),
     }
@@ -448,7 +561,7 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
   throw new Error(`Unsupported revision scope: ${String(input.scope)}`)
 }
 
-export function applyV2TimelineRevisionScope(input: {
+export function enforceV2TimelineRevisionScope(input: {
   baseSpec: RemotionTimelineSpecV1
   candidateSpec: RemotionTimelineSpecV1
   scope: V2TimelineRevisionScope
@@ -464,4 +577,499 @@ export function applyV2TimelineRevisionScope(input: {
     candidateSpec: input.candidateSpec,
     mergedSpec: applyV2TimelineRevisionScopeUnchecked(input),
   })
+}
+
+function candidateAssets(
+  baseSpec: RemotionTimelineSpecV1,
+  availableAssets: RemotionTimelineSpecV1['assets'] = [],
+) {
+  return [...new Map(
+    [...baseSpec.assets, ...availableAssets].map((asset) => [asset.id, asset]),
+  ).values()]
+}
+
+function candidateBriefWithReferences(
+  baseSpec: RemotionTimelineSpecV1,
+  imageReferences: V2TimelineRevisionFragment['image_references'],
+) {
+  if (!imageReferences) return baseSpec.creative_brief
+  if (!baseSpec.creative_brief) {
+    if (imageReferences.length === 0) return undefined
+    throw new Error('Image-conditioned revision requires an existing creative brief.')
+  }
+  const replacementIds = new Set(imageReferences.map((reference) => reference.asset_id))
+  return {
+    ...baseSpec.creative_brief,
+    image_references: [
+      ...baseSpec.creative_brief.image_references.filter((reference) => !replacementIds.has(reference.asset_id)),
+      ...imageReferences,
+    ],
+  }
+}
+
+function assertFragmentFields(input: {
+  fragment: V2TimelineRevisionFragment
+  scope: V2TimelineRevisionScope
+  globalMode?: 'brief_update' | 'full_replan'
+}) {
+  const scopeFields: Record<Exclude<V2TimelineRevisionScope, 'global'>, string[]> = {
+    subtitle: ['overlays', 'caption_tracks'],
+    scene: ['scenes', 'material_jobs', 'image_references'],
+    visual_strategy: ['scenes', 'material_jobs', 'image_references'],
+    transition: ['transitions'],
+    structure: ['scenes', 'transitions', 'overlays', 'caption_tracks', 'material_jobs', 'image_references'],
+  }
+  if (input.scope === 'global' && input.globalMode !== 'brief_update') {
+    throw new Error('A full replan must return a complete timeline, not a revision fragment.')
+  }
+  const allowed = new Set([
+    'schema_version',
+    'scope',
+    ...(input.scope === 'global' ? ['creative_brief'] : scopeFields[input.scope]),
+  ])
+  const unexpected = Object.keys(input.fragment).filter((key) => !allowed.has(key))
+  if (unexpected.length) {
+    throw new Error(`Revision fragment contains fields outside its authorized scope: ${unexpected.join(', ')}`)
+  }
+  if (input.fragment.creative_brief?.planning_gaps?.length) {
+    throw new Error('planning_gaps are server-maintained and cannot be returned by the planner model.')
+  }
+}
+
+function fragmentCandidateSpec(input: {
+  baseSpec: RemotionTimelineSpecV1
+  fragment: V2TimelineRevisionFragment
+  scope: V2TimelineRevisionScope
+  sceneId?: string
+  sceneIds?: string[]
+  globalMode?: 'brief_update' | 'full_replan'
+  availableAssets?: RemotionTimelineSpecV1['assets']
+}): RemotionTimelineSpecV1 {
+  if (input.fragment.schema_version !== V2_TIMELINE_REVISION_FRAGMENT_SCHEMA_VERSION) {
+    throw new Error('Revision fragment schema_version is invalid.')
+  }
+  if (input.fragment.scope !== input.scope) {
+    throw new Error('Revision fragment scope does not match the server-authorized scope.')
+  }
+  assertFragmentFields(input)
+  const assets = candidateAssets(input.baseSpec, input.availableAssets)
+  if (input.scope === 'subtitle') {
+    if (!Array.isArray(input.fragment.overlays) || !Array.isArray(input.fragment.caption_tracks)) {
+      throw new Error('Subtitle revision fragment requires overlays and caption_tracks.')
+    }
+    return {
+      ...input.baseSpec,
+      assets,
+      overlays: input.fragment.overlays,
+      caption_tracks: input.fragment.caption_tracks,
+    }
+  }
+  if (input.scope === 'scene' || input.scope === 'visual_strategy') {
+    if (!input.sceneId || !Array.isArray(input.fragment.scenes) || input.fragment.scenes.length !== 1) {
+      throw new Error(`${input.scope} revision fragment requires exactly one target scene.`)
+    }
+    if (input.fragment.scenes[0]?.id !== input.sceneId) {
+      throw new Error(`${input.scope} revision fragment returned the wrong target scene.`)
+    }
+    if (!Array.isArray(input.fragment.material_jobs) || !Array.isArray(input.fragment.image_references)) {
+      throw new Error(`${input.scope} revision fragment requires material_jobs and image_references.`)
+    }
+    return {
+      ...input.baseSpec,
+      assets,
+      creative_brief: candidateBriefWithReferences(input.baseSpec, input.fragment.image_references),
+      scenes: input.fragment.scenes,
+      material_jobs: input.fragment.material_jobs,
+    }
+  }
+  if (input.scope === 'transition') {
+    if (!Array.isArray(input.fragment.transitions)) {
+      throw new Error('Transition revision fragment requires transitions.')
+    }
+    return { ...input.baseSpec, assets, transitions: input.fragment.transitions }
+  }
+  if (input.scope === 'structure') {
+    if (
+      !Array.isArray(input.fragment.scenes)
+      || !Array.isArray(input.fragment.transitions)
+      || !Array.isArray(input.fragment.overlays)
+      || !Array.isArray(input.fragment.caption_tracks)
+      || !Array.isArray(input.fragment.material_jobs)
+      || !Array.isArray(input.fragment.image_references)
+    ) throw new Error('Structure revision fragment is incomplete.')
+    const requested = [...new Set(input.sceneIds ?? [])]
+    const indices = requested.map((id) => input.baseSpec.scenes.findIndex((scene) => scene.id === id))
+    if (requested.length === 0 || indices.some((index) => index < 0)) {
+      throw new Error('Structure revision fragment requires known sceneIds.')
+    }
+    const sorted = [...indices].sort((a, b) => a - b)
+    if (sorted.some((index, offset) => index !== sorted[0]! + offset)) {
+      throw new Error('Structure revision sceneIds must form one contiguous range.')
+    }
+    return {
+      ...input.baseSpec,
+      assets,
+      creative_brief: candidateBriefWithReferences(input.baseSpec, input.fragment.image_references),
+      scenes: [
+        ...input.baseSpec.scenes.slice(0, sorted[0]),
+        ...input.fragment.scenes,
+        ...input.baseSpec.scenes.slice(sorted.at(-1)! + 1),
+      ],
+      transitions: input.fragment.transitions,
+      overlays: input.fragment.overlays,
+      caption_tracks: input.fragment.caption_tracks,
+      material_jobs: input.fragment.material_jobs,
+    }
+  }
+  if (input.scope === 'global' && input.globalMode === 'brief_update') {
+    if (!input.fragment.creative_brief) {
+      throw new Error('Global brief revision fragment requires creative_brief.')
+    }
+    return { ...input.baseSpec, assets, creative_brief: input.fragment.creative_brief }
+  }
+  throw new Error('A full replan must return a complete timeline, not a revision fragment.')
+}
+
+export function applyV2TimelineRevisionFragment(input: {
+  baseSpec: RemotionTimelineSpecV1
+  fragment: V2TimelineRevisionFragment
+  scope: V2TimelineRevisionScope
+  sceneId?: string
+  sceneIds?: string[]
+  overlayIds?: string[]
+  transitionIds?: string[]
+  globalMode?: 'brief_update' | 'full_replan'
+  durationMode?: 'preserve_range' | 'resize_timeline'
+  availableAssets?: RemotionTimelineSpecV1['assets']
+}): RemotionTimelineSpecV1 {
+  return enforceV2TimelineRevisionScope({
+    ...input,
+    candidateSpec: fragmentCandidateSpec(input),
+  })
+}
+
+function mergeExistingById<T extends { id: string }>(base: T[], candidate: T[]): T[] {
+  const candidateById = new Map(candidate.map((item) => [item.id, item]))
+  return base.map((item) => candidateById.get(item.id) ?? item)
+}
+
+const CAPTION_TRACK_OVERRIDE_FIELDS = [
+  'x_pct',
+  'y_pct',
+  'width_pct',
+  'max_lines',
+  'z_index',
+  'enter_animation',
+  'exit_animation',
+] as const
+
+function removeRedundantCaptionTrackOverrides(input: {
+  baseOverlays: RemotionTimelineSpecV1['overlays']
+  candidateOverlays: RemotionTimelineSpecV1['overlays']
+  captionTracks: NonNullable<RemotionTimelineSpecV1['caption_tracks']>
+}) {
+  const baseById = new Map(input.baseOverlays.map((overlay) => [overlay.id, overlay]))
+  const trackById = new Map(input.captionTracks.map((track) => [track.id, track]))
+  return input.candidateOverlays.map((overlay) => {
+    const base = baseById.get(overlay.id)
+    const track = overlay.type === 'caption' && overlay.track_id
+      ? trackById.get(overlay.track_id)
+      : undefined
+    if (!base || !track) return overlay
+    const result = { ...overlay }
+    for (const field of CAPTION_TRACK_OVERRIDE_FIELDS) {
+      if (base[field] === undefined && track[field] !== undefined && result[field] === track[field]) {
+        delete result[field]
+      }
+    }
+    return result
+  })
+}
+
+function groupScopeOrder(scope: V2TimelineRevisionGroupScope) {
+  return ['scene', 'visual_strategy', 'subtitle', 'transition'].indexOf(scope)
+}
+
+export function enforceV2TimelineRevisionGroup(input: {
+  baseSpec: RemotionTimelineSpecV1
+  candidateSpec: RemotionTimelineSpecV1
+  group: V2TimelineRevisionGroup
+}): RemotionTimelineSpecV1 {
+  return [...input.group.items]
+    .sort((left, right) => groupScopeOrder(left.scope) - groupScopeOrder(right.scope))
+    .reduce((spec, item) => enforceV2TimelineRevisionScope({
+      baseSpec: spec,
+      candidateSpec: input.candidateSpec,
+      scope: item.scope,
+      sceneId: item.sceneId,
+      overlayIds: item.overlayIds,
+      transitionIds: item.transitionIds,
+    }), input.baseSpec)
+}
+
+export function applyV2TimelineRevisionGroupFragment(input: {
+  baseSpec: RemotionTimelineSpecV1
+  fragment: V2TimelineRevisionGroupFragment
+  group: V2TimelineRevisionGroup
+  availableAssets?: RemotionTimelineSpecV1['assets']
+}): RemotionTimelineSpecV1 {
+  if (input.fragment.schema_version !== V2_TIMELINE_REVISION_GROUP_FRAGMENT_SCHEMA_VERSION) {
+    throw new Error('Revision group fragment schema_version is invalid.')
+  }
+  const allowed = new Set(['schema_version'])
+  const scopes = new Set(input.group.items.map((item) => item.scope))
+  if (scopes.has('scene') || scopes.has('visual_strategy')) {
+    for (const field of ['scenes', 'material_jobs', 'image_references']) allowed.add(field)
+  }
+  if (scopes.has('subtitle')) {
+    allowed.add('overlays')
+    allowed.add('caption_tracks')
+  }
+  if (scopes.has('transition')) allowed.add('transitions')
+  const unexpected = Object.keys(input.fragment).filter((field) => !allowed.has(field))
+  if (unexpected.length) {
+    throw new Error(`Revision group fragment contains unauthorized fields: ${unexpected.join(', ')}`)
+  }
+  if ((scopes.has('scene') || scopes.has('visual_strategy')) && (
+    input.fragment.scenes?.length !== 1
+    || input.fragment.scenes[0]?.id !== input.group.sceneId
+    || !Array.isArray(input.fragment.material_jobs)
+    || !Array.isArray(input.fragment.image_references)
+  )) throw new Error('Revision group fragment requires one target scene, material_jobs, and image_references.')
+  if (scopes.has('subtitle') && (
+    !Array.isArray(input.fragment.overlays) || !Array.isArray(input.fragment.caption_tracks)
+  )) throw new Error('Revision group fragment requires overlays and caption_tracks.')
+  if (scopes.has('transition') && !Array.isArray(input.fragment.transitions)) {
+    throw new Error('Revision group fragment requires transitions.')
+  }
+
+  const targetOverlayIds = new Set(input.group.items.flatMap((item) => item.overlayIds ?? []))
+  const targetTransitionIds = new Set(input.group.items.flatMap((item) => item.transitionIds ?? []))
+  const targetJobIds = new Set(input.baseSpec.material_jobs
+    .filter((job) => job.scene_id === input.group.sceneId)
+    .map((job) => job.id))
+  const assets = candidateAssets(input.baseSpec, input.availableAssets)
+  const assetIds = new Set(assets.map((asset) => asset.id))
+  const targetCandidateJobs = input.fragment.material_jobs?.filter((job) =>
+    job.scene_id === input.group.sceneId
+    && (
+      targetJobIds.has(job.id)
+      || Boolean(scopes.has('visual_strategy') && job.output_asset_id && assetIds.has(job.output_asset_id))
+    )) ?? []
+  const targetCandidateOverlays = input.fragment.overlays?.filter((item) => targetOverlayIds.has(item.id)) ?? []
+  const targetTrackIds = new Set([
+    ...input.baseSpec.overlays.filter((overlay) => targetOverlayIds.has(overlay.id)),
+    ...targetCandidateOverlays,
+  ].flatMap((overlay) => overlay.track_id ? [overlay.track_id] : []))
+  const protectedTrackIds = new Set(input.baseSpec.overlays
+    .filter((overlay) => overlay.type === 'caption' && !targetOverlayIds.has(overlay.id) && overlay.track_id)
+    .map((overlay) => overlay.track_id as string))
+  const captionTracks = input.fragment.caption_tracks
+    ? mergeScopedArray({
+        base: input.baseSpec.caption_tracks ?? [],
+        candidate: input.fragment.caption_tracks,
+        isInScope: (track) => targetTrackIds.has(track.id) && !protectedTrackIds.has(track.id),
+        key: (track) => track.id,
+      })
+    : input.baseSpec.caption_tracks ?? []
+  const overlays = input.fragment.overlays
+    ? removeRedundantCaptionTrackOverrides({
+        baseOverlays: input.baseSpec.overlays,
+        candidateOverlays: mergeExistingById(
+          input.baseSpec.overlays,
+          targetCandidateOverlays,
+        ),
+        captionTracks,
+      })
+    : input.baseSpec.overlays
+  const candidate: RemotionTimelineSpecV1 = {
+    ...input.baseSpec,
+    assets,
+    creative_brief: candidateBriefWithReferences(input.baseSpec, input.fragment.image_references),
+    scenes: input.fragment.scenes
+      ? mergeExistingById(input.baseSpec.scenes, input.fragment.scenes)
+      : input.baseSpec.scenes,
+    transitions: input.fragment.transitions
+      ? mergeExistingById(
+          input.baseSpec.transitions,
+          input.fragment.transitions.filter((item) => targetTransitionIds.has(item.id)),
+        )
+      : input.baseSpec.transitions,
+    caption_tracks: captionTracks,
+    overlays,
+    material_jobs: input.fragment.material_jobs
+      ? scopes.has('visual_strategy')
+        ? mergeScopedArray({
+            base: input.baseSpec.material_jobs,
+            candidate: targetCandidateJobs,
+            isInScope: (job) => job.scene_id === input.group.sceneId,
+            key: (job) => job.id,
+          })
+        : mergeExistingById(input.baseSpec.material_jobs, targetCandidateJobs)
+      : input.baseSpec.material_jobs,
+  }
+  return enforceV2TimelineRevisionGroup({
+    baseSpec: input.baseSpec,
+    candidateSpec: candidate,
+    group: input.group,
+  })
+}
+
+export function resolveV2TimelineRevisionGroup(input: {
+  baseSpec: RemotionTimelineSpecV1
+  items: Array<{
+    ref: string
+    callId: string
+    scope: unknown
+    instruction?: unknown
+    sceneId?: unknown
+    overlayIds?: unknown
+    transitionIds?: unknown
+    resolvesPendingCallId?: unknown
+  }>
+}): V2TimelineRevisionGroup | undefined {
+  if (input.items.length < 2) return undefined
+  const pendingCallIds = new Set(input.items.flatMap((item) =>
+    typeof item.resolvesPendingCallId === 'string' && item.resolvesPendingCallId
+      ? [item.resolvesPendingCallId]
+      : []))
+  if (pendingCallIds.size > 1) return undefined
+  const allowed = new Set<V2TimelineRevisionGroupScope>(['scene', 'visual_strategy', 'subtitle', 'transition'])
+  if (input.items.some((item) => typeof item.scope !== 'string' || !allowed.has(item.scope as V2TimelineRevisionGroupScope))) {
+    return undefined
+  }
+  const explicitSceneIds = input.items.flatMap((item) =>
+    typeof item.sceneId === 'string' && item.sceneId ? [item.sceneId] : [])
+  const overlayIds = input.items.flatMap((item) => Array.isArray(item.overlayIds)
+    ? item.overlayIds.filter((id): id is string => typeof id === 'string')
+    : [])
+  const overlaySceneIds = overlayIds.flatMap((id) => {
+    const overlay = input.baseSpec.overlays.find((item) => item.id === id && item.type === 'caption')
+    return overlay?.scene_id ? [overlay.scene_id] : []
+  })
+  if (overlaySceneIds.length !== overlayIds.length) {
+    if (new Set(explicitSceneIds).size === 1) {
+      throw new Error('Same-scene revision group references an invalid caption overlay.')
+    }
+    return undefined
+  }
+  const sceneIds = new Set([...explicitSceneIds, ...overlaySceneIds])
+  if (sceneIds.size !== 1) return undefined
+  const sceneId = [...sceneIds][0]!
+  if (!input.baseSpec.scenes.some((scene) => scene.id === sceneId)) {
+    throw new Error('Same-scene revision group references an invalid scene.')
+  }
+
+  const items: V2TimelineRevisionGroupItem[] = []
+  for (const item of input.items) {
+    const scope = item.scope as V2TimelineRevisionGroupScope
+    const memberOverlayIds = Array.isArray(item.overlayIds)
+      ? item.overlayIds.filter((id): id is string => typeof id === 'string')
+      : undefined
+    const memberTransitionIds = Array.isArray(item.transitionIds)
+      ? item.transitionIds.filter((id): id is string => typeof id === 'string')
+      : undefined
+    if (scope === 'subtitle' && (!memberOverlayIds?.length || memberOverlayIds.some((id) =>
+      !input.baseSpec.overlays.some((overlay) => overlay.id === id && overlay.scene_id === sceneId)))) {
+      throw new Error('Same-scene revision group caption target is invalid.')
+    }
+    if (scope === 'transition' && (!memberTransitionIds?.length || memberTransitionIds.some((id) =>
+      !input.baseSpec.transitions.some((transition) => transition.id === id
+        && (transition.from_scene_id === sceneId || transition.to_scene_id === sceneId))))) {
+      throw new Error('Same-scene revision group transition target is invalid.')
+    }
+    items.push({
+      ref: item.ref,
+      callId: item.callId,
+      scope,
+      instruction: typeof item.instruction === 'string' ? item.instruction : '',
+      sceneId,
+      ...(memberOverlayIds?.length ? { overlayIds: memberOverlayIds } : {}),
+      ...(memberTransitionIds?.length ? { transitionIds: memberTransitionIds } : {}),
+    })
+  }
+  return {
+    sceneId,
+    items,
+    ...([...pendingCallIds][0] ? { resolvesPendingCallId: [...pendingCallIds][0] } : {}),
+  }
+}
+
+/**
+ * Partitions already validated patch requests into independent same-scene
+ * groups. Requests that do not form a group remain on the ordinary single
+ * revision path; an invalid candidate only rejects its own scene group.
+ */
+export function partitionV2TimelineRevisionGroups(input: {
+  baseSpec: RemotionTimelineSpecV1
+  items: Array<{
+    ref: string
+    callId: string
+    scope: unknown
+    instruction?: unknown
+    sceneId?: unknown
+    overlayIds?: unknown
+    transitionIds?: unknown
+    resolvesPendingCallId?: unknown
+  }>
+}): V2TimelineRevisionGroupPartition {
+  const allowed = new Set<V2TimelineRevisionGroupScope>(['scene', 'visual_strategy', 'subtitle', 'transition'])
+  const buckets = new Map<string, typeof input.items>()
+  const transitionItems: typeof input.items = []
+  const add = (sceneId: string, item: typeof input.items[number]) => {
+    const existing = buckets.get(sceneId) ?? []
+    existing.push(item)
+    buckets.set(sceneId, existing)
+  }
+
+  for (const item of input.items) {
+    if (typeof item.scope !== 'string'
+      || !allowed.has(item.scope as V2TimelineRevisionGroupScope)) continue
+    const explicitSceneId = typeof item.sceneId === 'string' && item.sceneId ? item.sceneId : undefined
+    if (item.scope === 'transition' && !explicitSceneId) {
+      transitionItems.push(item)
+      continue
+    }
+    if (explicitSceneId) {
+      add(explicitSceneId, item)
+      continue
+    }
+    if (item.scope !== 'subtitle' || !Array.isArray(item.overlayIds) || item.overlayIds.length === 0) continue
+    const sceneIds = new Set(item.overlayIds.flatMap((id) => {
+      if (typeof id !== 'string') return []
+      const overlay = input.baseSpec.overlays.find((candidate) => candidate.id === id && candidate.type === 'caption')
+      return overlay?.scene_id ? [overlay.scene_id] : []
+    }))
+    if (sceneIds.size === 1 && item.overlayIds.every((id) => typeof id === 'string'
+      && input.baseSpec.overlays.some((overlay) => overlay.id === id && overlay.type === 'caption'))) {
+      add([...sceneIds][0]!, item)
+    }
+  }
+
+  for (const item of transitionItems) {
+    if (!Array.isArray(item.transitionIds) || item.transitionIds.length === 0) continue
+    const targetTransitions = item.transitionIds.flatMap((id) => typeof id === 'string'
+      ? input.baseSpec.transitions.filter((transition) => transition.id === id)
+      : [])
+    if (targetTransitions.length !== item.transitionIds.length) continue
+    const matchingSceneIds = [...buckets.keys()].filter((sceneId) => targetTransitions.every((transition) =>
+      transition.from_scene_id === sceneId || transition.to_scene_id === sceneId))
+    if (matchingSceneIds.length === 1) add(matchingSceneIds[0]!, item)
+  }
+
+  const groups: V2TimelineRevisionGroup[] = []
+  const invalid: V2TimelineRevisionGroupPartition['invalid'] = []
+  for (const items of buckets.values()) {
+    if (items.length < 2) continue
+    try {
+      const group = resolveV2TimelineRevisionGroup({ baseSpec: input.baseSpec, items })
+      if (group) groups.push(group)
+    } catch (error) {
+      invalid.push({
+        callIds: items.map((item) => item.callId),
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+  return { groups, invalid }
 }

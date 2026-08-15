@@ -2,7 +2,11 @@ import { env } from '../config/env.js'
 import { extractTextCandidate } from '../modules/agent-tools/structured-json-tool.js'
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import type { DirectorTimelineFacts } from '../../../shared/types/director-context.js'
-import { VISUAL_STRATEGY_SCENE_FIELDS, type V2TimelineRevisionScope } from './timeline-revision-scope.js'
+import {
+  VISUAL_STRATEGY_SCENE_FIELDS,
+  type V2TimelineRevisionGroup,
+  type V2TimelineRevisionScope,
+} from './timeline-revision-scope.js'
 import type { V2PlannerInput } from './v2-input.js'
 
 type V2TimelineAvailableComponents = NonNullable<V2PlannerInput['availableComponents']>
@@ -252,6 +256,132 @@ export function buildV2TimelineFactDigest(spec: RemotionTimelineSpecV1): V2Timel
   }
 }
 
+function projectV2TimelineRevisionDigest(
+  digest: V2TimelineFactDigest,
+  input: {
+    revisionScope?: V2TimelineRevisionScope
+    revisionSceneId?: string
+    revisionSceneIds?: string[]
+    revisionOverlayIds?: string[]
+    revisionTransitionIds?: string[]
+    revisionGlobalMode?: 'brief_update' | 'full_replan'
+    revisionProjectionSceneIds?: string[]
+  },
+): V2TimelineFactDigest {
+  if (
+    !input.revisionScope
+    || (input.revisionScope === 'global' && input.revisionGlobalMode === 'full_replan')
+  ) return digest
+
+  if (input.revisionScope === 'global') {
+    return { ...emptyTimelineFactDigest(), creative_brief: digest.creative_brief }
+  }
+
+  const sceneIds = new Set<string>()
+  const transitionIds = new Set(input.revisionTransitionIds ?? [])
+  if (input.revisionScope === 'structure') {
+    const projectedSceneIds = new Set(input.revisionProjectionSceneIds ?? [])
+    return {
+      ...emptyTimelineFactDigest(),
+      scenes: digest.scenes.filter((scene) => projectedSceneIds.has(scene.id)),
+      visible_text: digest.visible_text.filter((item) =>
+        item.scene_id != null && projectedSceneIds.has(item.scene_id)),
+      transitions: digest.transitions.filter((transition) =>
+        projectedSceneIds.has(transition.from_scene_id)
+        && projectedSceneIds.has(transition.to_scene_id)),
+    }
+  }
+  if (input.revisionSceneId) sceneIds.add(input.revisionSceneId)
+  for (const id of input.revisionSceneIds ?? []) sceneIds.add(id)
+  if (input.revisionScope === 'transition') {
+    for (const transition of digest.transitions) {
+      if (!transitionIds.has(transition.id)) continue
+      sceneIds.add(transition.from_scene_id)
+      sceneIds.add(transition.to_scene_id)
+    }
+  }
+  const overlayIds = new Set(input.revisionOverlayIds ?? [])
+  const visibleText = digest.visible_text.filter((item) =>
+    input.revisionScope === 'subtitle'
+      ? (!input.revisionSceneId || item.scene_id === input.revisionSceneId)
+        && (overlayIds.size === 0 || overlayIds.has(item.id))
+      : item.scene_id != null && sceneIds.has(item.scene_id))
+  return {
+    creative_brief:
+      input.revisionScope === 'scene' || input.revisionScope === 'visual_strategy'
+        ? digest.creative_brief
+        : undefined,
+    scenes: digest.scenes.filter((scene) => sceneIds.has(scene.id)).map((scene) =>
+      input.revisionScope === 'transition' ? { ...scene, material_jobs: [] } : scene),
+    visible_text: visibleText,
+    transitions: input.revisionScope === 'transition'
+      ? digest.transitions.filter((transition) => transitionIds.has(transition.id))
+      : [],
+    audio: [],
+    notes: [],
+  }
+}
+
+function projectV2TimelineRevisionGroupDigest(
+  digest: V2TimelineFactDigest,
+  group: V2TimelineRevisionGroup,
+): V2TimelineFactDigest {
+  const scopes = new Set(group.items.map((item) => item.scope))
+  const overlayIds = new Set(group.items.flatMap((item) => item.overlayIds ?? []))
+  const transitionIds = new Set(group.items.flatMap((item) => item.transitionIds ?? []))
+  const sceneIds = new Set([group.sceneId])
+  for (const transition of digest.transitions) {
+    if (!transitionIds.has(transition.id)) continue
+    sceneIds.add(transition.from_scene_id)
+    sceneIds.add(transition.to_scene_id)
+  }
+  return {
+    creative_brief: scopes.has('scene') || scopes.has('visual_strategy')
+      ? digest.creative_brief
+      : undefined,
+    scenes: digest.scenes.filter((scene) => sceneIds.has(scene.id)).map((scene) =>
+      scene.id === group.sceneId ? scene : { ...scene, material_jobs: [] }),
+    visible_text: digest.visible_text.filter((item) => overlayIds.has(item.id)),
+    transitions: digest.transitions.filter((transition) => transitionIds.has(transition.id)),
+    audio: [],
+    notes: [],
+  }
+}
+
+function structureRevisionProjectionSceneIds(input: {
+  baseSpec?: RemotionTimelineSpecV1
+  candidateSpec: RemotionTimelineSpecV1
+  revisionSceneIds?: string[]
+}) {
+  if (!input.baseSpec || !input.revisionSceneIds?.length) return undefined
+  const targetIndices = input.revisionSceneIds.map((id) =>
+    input.baseSpec!.scenes.findIndex((scene) => scene.id === id))
+  if (targetIndices.some((index) => index < 0)) {
+    throw new Error('Structure revision review requires known target scenes.')
+  }
+  const first = Math.min(...targetIndices)
+  const last = Math.max(...targetIndices)
+  const leftAnchor = input.baseSpec.scenes[first - 1]?.id
+  const rightAnchor = input.baseSpec.scenes[last + 1]?.id
+  const candidateStart = leftAnchor
+    ? input.candidateSpec.scenes.findIndex((scene) => scene.id === leftAnchor)
+    : 0
+  const candidateEnd = rightAnchor
+    ? input.candidateSpec.scenes.findIndex((scene) => scene.id === rightAnchor)
+    : input.candidateSpec.scenes.length - 1
+  if (candidateStart < 0 || candidateEnd < candidateStart) {
+    throw new Error('Structure revision review could not resolve its boundary anchors.')
+  }
+  return {
+    base: input.baseSpec.scenes
+      .slice(Math.max(0, first - 1), Math.min(input.baseSpec.scenes.length, last + 2))
+      .map((scene) => scene.id),
+    candidate: input.candidateSpec.scenes
+      .slice(candidateStart, candidateEnd + 1)
+      .map((scene) => scene.id),
+  }
+}
+
 export function buildDirectorTimelineFacts(
   revision: number,
   spec: RemotionTimelineSpecV1,
@@ -483,6 +613,7 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
   revisionTransitionIds?: string[]
   revisionGlobalMode?: 'brief_update' | 'full_replan'
   revisionDurationMode?: 'preserve_range' | 'resize_timeline'
+  revisionGroup?: V2TimelineRevisionGroup
 }) {
   const componentsById = new Map((input.availableComponents ?? []).map((item) => [item.id, item]))
   const effectiveTransitions = input.candidateDigest.transitions.map((transition) => {
@@ -539,6 +670,15 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
       : []),
     ...(input.revisionScope
       ? [`Tool-authorized revision boundary: scope=${input.revisionScope}${input.revisionGlobalMode ? `, global_mode=${input.revisionGlobalMode}` : ''}${input.revisionDurationMode ? `, duration_mode=${input.revisionDurationMode}` : ''}${input.revisionSceneId ? `, scene_id=${input.revisionSceneId}` : ''}${input.revisionSceneIds?.length ? `, scene_ids=${input.revisionSceneIds.join(',')}` : ''}${input.revisionOverlayIds?.length ? `, overlay_ids=${input.revisionOverlayIds.join(',')}` : ''}${input.revisionTransitionIds?.length ? `, transition_ids=${input.revisionTransitionIds.join(',')}` : ''}. Any change outside this boundary is an unrelated change.`]
+      : []),
+    ...(input.revisionGroup
+      ? [`Server-authorized same-scene revision group: ${JSON.stringify(input.revisionGroup.items.map((item) => ({
+          scope: item.scope,
+          instruction: item.instruction,
+          scene_id: item.sceneId,
+          overlay_ids: item.overlayIds ?? [],
+          transition_ids: item.transitionIds ?? [],
+        })))}. Judge every instruction together; changes outside their union are unrelated.`]
       : []),
   ].join('\n')
 }
@@ -612,14 +752,38 @@ export async function reviewV2TimelineRevisionOutcome(input: {
   revisionTransitionIds?: string[]
   revisionGlobalMode?: 'brief_update' | 'full_replan'
   revisionDurationMode?: 'preserve_range' | 'resize_timeline'
+  revisionGroup?: V2TimelineRevisionGroup
   assess?: (input: {
     prompt: string
     baseDigest: V2TimelineFactDigest
     candidateDigest: V2TimelineFactDigest
   }) => Promise<V2TimelineRevisionReviewVerdict>
 }): Promise<V2TimelineRevisionOutcomeReview> {
-  const baseDigest = input.baseSpec ? buildV2TimelineFactDigest(input.baseSpec) : emptyTimelineFactDigest()
-  const candidateDigest = buildV2TimelineFactDigest(input.candidateSpec)
+  const structureProjection = input.revisionScope === 'structure'
+    ? structureRevisionProjectionSceneIds(input)
+    : undefined
+  const digestProjection = {
+    revisionScope: input.revisionScope,
+    revisionSceneId: input.revisionSceneId,
+    revisionSceneIds: input.revisionSceneIds,
+    revisionOverlayIds: input.revisionOverlayIds,
+    revisionTransitionIds: input.revisionTransitionIds,
+    revisionGlobalMode: input.revisionGlobalMode,
+  }
+  const rawBaseDigest = input.baseSpec ? buildV2TimelineFactDigest(input.baseSpec) : emptyTimelineFactDigest()
+  const rawCandidateDigest = buildV2TimelineFactDigest(input.candidateSpec)
+  const baseDigest = input.revisionGroup
+    ? projectV2TimelineRevisionGroupDigest(rawBaseDigest, input.revisionGroup)
+    : projectV2TimelineRevisionDigest(
+        rawBaseDigest,
+        { ...digestProjection, revisionProjectionSceneIds: structureProjection?.base },
+      )
+  const candidateDigest = input.revisionGroup
+    ? projectV2TimelineRevisionGroupDigest(rawCandidateDigest, input.revisionGroup)
+    : projectV2TimelineRevisionDigest(
+        rawCandidateDigest,
+        { ...digestProjection, revisionProjectionSceneIds: structureProjection?.candidate },
+      )
   const specDiff = input.baseSpec
     ? describeV2TimelineSpecDiff(input.baseSpec, input.candidateSpec)
     : undefined
@@ -658,6 +822,7 @@ export async function reviewV2TimelineRevisionOutcome(input: {
     revisionTransitionIds: input.revisionTransitionIds,
     revisionGlobalMode: input.revisionGlobalMode,
     revisionDurationMode: input.revisionDurationMode,
+    revisionGroup: input.revisionGroup,
   })
   const requested = env.directorAgentStructuredOutputMode === 'auto'
   let raw: unknown

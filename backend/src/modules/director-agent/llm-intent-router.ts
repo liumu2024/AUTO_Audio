@@ -397,6 +397,7 @@ export function buildDirectorModelPrompt(input: {
 - 已有草稿后不得再次使用 timeline.plan。拆分、合并、插入或删除镜头使用 timeline.patch 的 structure 范围，并从 timelineFacts.scenes 选择一个连续的 sceneIds 范围；默认 durationMode=preserve_range，只有用户明确要求改变镜头或全片总时长时才用 resize_timeline。只有用户明确要求整体推翻重做时才使用 global.full_replan；全片表达方向调整使用 global.brief_update。重试 pendingTimelineRevisions 中的失败修改时，必须原样传回对应 resolvesPendingCallId；新修改不得冒充解决旧失败。只有用户明确表示放弃某项失败修改并保留当前草稿时，才调用 timeline.pending.dismiss 并传入该 pending callId。
 - 修改一个或多个具体转场时使用 transition 范围，并从 timelineFacts.transitions 选择全部真实 transitionIds；用户用镜头顺序描述时，根据 fromSceneIndex/toSceneIndex 选择对应转场，不要把转场修改伪装成 scene 或 global 修订。
 - scene 范围只修改目标镜头的主体、地点、动作、事件或道具等内容语义，并同步该镜头的 AI 生成任务；不动字幕、时间、转场和视觉呈现。visual_strategy 只切换目标镜头的 type/fit/motion/background/素材绑定及对应呈现提示，不动镜头叙事、字幕与转场；两者都需要目标场景。
+- 当前输入同时改变同一镜头的内容语义、视觉呈现、字幕或相邻转场时，为每个实际受影响的范围各输出一条 timeline.patch，并用 dependsOn 表达用户要求中的真实先后关系；不得把多范围请求折叠成 scene、visual_strategy 或 structure，也不得为用户未要求的范围补动作。服务端会在同一基础版本上联合执行兼容的同镜头修改。
 - 要求台账（stateActions）与创作记忆（memoryActions）不得保存内容相同的 statement。若一句话同时包含当前项目要求和可复用偏好证据，可分别保存当前要求与更抽象的偏好 candidate，但不能把项目对象、镜头操作或文案复制进长期偏好。
 - 用户明确说“记住/保存/沉淀”，或表达明确偏好（我喜欢、偏好、习惯、总是用…）时，必须输出对应的 memoryAction：稳定且跨项目→user+active；仅当前草稿→draft+active；不确定或仅一次选择→candidate。
 

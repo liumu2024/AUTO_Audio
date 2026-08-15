@@ -2,7 +2,7 @@ import type { V2SampleUnderstandingResult } from '../../../shared/types/v2-sampl
 import type { RemotionTimelineSpecV1 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import type { RenderComponentSummary } from '../modules/render-components/component-registry.js'
 import type { V2TimelineRevisionContext } from './timeline-revision-context.js'
-import type { V2TimelineRevisionScope } from './timeline-revision-scope.js'
+import type { V2TimelineRevisionGroup, V2TimelineRevisionScope } from './timeline-revision-scope.js'
 
 export interface V2PlannerMaterialInput {
   id: string
@@ -62,6 +62,8 @@ export interface V2PlannerInput {
   revisionBaseSpec?: RemotionTimelineSpecV1
   /** Tool-authorized field scope applied before review and persistence. */
   revisionScope?: V2TimelineRevisionScope
+  /** Server-derived union of compatible same-scene scopes; never accepted from Tool arguments. */
+  revisionGroup?: V2TimelineRevisionGroup
   /** Structure edits preserve their range unless the Tool explicitly authorizes timeline resizing. */
   revisionDurationMode?: 'preserve_range' | 'resize_timeline'
   /** Distinguishes a creative-direction update from an explicit whole-plan replacement. */
