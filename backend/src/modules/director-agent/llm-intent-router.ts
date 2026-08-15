@@ -243,191 +243,226 @@ function summarizeCurrentTimeline(context: DirectorContext) {
   }
 }
 
-export function compactDirectorContextForPrompt(input: {
+interface DirectorPromptInput {
   prompt: string
   currentTurnId?: string
   context: DirectorContext
   runtime: DirectorConversationRuntime
+  visualInputCount?: number
   confirmedRequirements?: ConfirmedRequirement[]
   pendingTimelineRevisions?: DirectorWorkspaceState['pendingTimelineRevisions']
   retrievedCreativeMemories?: CreativeMemorySearchResult
   promotedComponents?: RenderComponentSummary[]
   timelineSpec?: RemotionTimelineSpecV1
-}) {
-  const state = input.context.directorState
-  const compactDirectorState = state
-    ? {
-        phase: state.phase,
-        sampleStatus: state.sampleStatus,
-        materialStatus: state.materialStatus,
-        timeline: summarizeCurrentTimeline(input.context),
-        lastError: state.lastError
-          ? {
-              code: state.lastError.code,
-              message: state.lastError.message,
-              suggestions: state.lastError.suggestions.map((suggestion) => suggestion.label),
-            }
-          : undefined,
-        recentActions: state.actionLedger.slice(-5).map((item) => ({
-          type: item.type,
-          status: item.status,
-          revisionBefore: item.revisionBefore,
-          revisionAfter: item.revisionAfter,
-          message: item.message,
-        })),
-      }
-    : undefined
-
-  return {
-    prompt: input.prompt,
-    currentTurnId: input.currentTurnId,
-    runtime: input.runtime,
-    capabilitySnapshot: listV2AgentToolCards().map((tool) =>
-      evaluateV2AgentToolReadiness({
-        toolId: tool.id,
-        context: input.context,
-        runtime: input.runtime,
-        workspace: {
-          draftId: input.context.currentTimeline?.draftId,
-          baseRevision: input.context.currentTimeline?.currentRevision,
-          pendingTimelineRevisions: input.pendingTimelineRevisions,
-        },
-        timelineSpec: input.timelineSpec,
-      })),
-    slots: input.context.slots,
-    explicitUiControls: input.context.explicitUiControls,
-    effectiveCreativeConfig: input.context.effectiveCreativeConfig,
-    timelineFacts: input.context.timelineFacts,
-    sampleVideo: input.context.sampleVideo
-      ? {
-          id: input.context.sampleVideo.id,
-          name: input.context.sampleVideo.name,
-          hasReferenceSummary: Boolean(input.context.sampleVideo.reference),
-          reference: input.context.sampleVideo.reference
-            ? {
-                summary: input.context.sampleVideo.reference.summary,
-                methodHighlights: input.context.sampleVideo.reference.methodHighlights,
-                transferableKnowledge: input.context.sampleVideo.reference.transferableKnowledge,
-                shotCount: input.context.sampleVideo.reference.shotCount,
-                warnings: input.context.sampleVideo.reference.warnings,
-              }
-            : undefined,
-        }
-      : undefined,
-    materials: input.context.materials.map((item) => ({
-      id: item.id,
-      name: item.name,
-      type: item.type,
-      tags: item.tags ?? [],
-      hasSummary: Boolean(item.summary),
-    })),
-    currentEditableTimeline: summarizeCurrentTimeline(input.context),
-    directorState: compactDirectorState,
-    userIntent: input.context.userIntent,
-    activeRequirements: (input.confirmedRequirements ?? [])
-      .filter((item) => item.status === 'active'),
-    recentRequirementChanges: (input.confirmedRequirements ?? [])
-      .filter((item) => item.status !== 'active')
-      .slice(-20),
-    retrievedCreativeMemories: {
-      active: (input.retrievedCreativeMemories?.active ?? []).map((item) => ({
-        id: item.memory.id,
-        scopeType: item.memory.scopeType,
-        draftId: item.memory.draftId,
-        statement: item.memory.statement,
-        sourceExcerpt: item.memory.sourceExcerpt,
-      })),
-      candidate: (input.retrievedCreativeMemories?.candidate ?? []).map((item) => ({
-        id: item.memory.id,
-        scopeType: item.memory.scopeType,
-        draftId: item.memory.draftId,
-        statement: item.memory.statement,
-        sourceExcerpt: item.memory.sourceExcerpt,
-      })),
-    },
-    // This is server-owned V2 session memory, never a legacy timeline summary.
-    conversationMemory: input.context.conversationSummary,
-    renderedComponents: input.promotedComponents ?? [],
-  }
 }
 
-export function buildDirectorModelPrompt(input: {
-  prompt: string
-  currentTurnId?: string
-  context: DirectorContext
-  runtime: DirectorConversationRuntime
-  confirmedRequirements?: ConfirmedRequirement[]
-  pendingTimelineRevisions?: DirectorWorkspaceState['pendingTimelineRevisions']
-  retrievedCreativeMemories?: CreativeMemorySearchResult
-  promotedComponents?: RenderComponentSummary[]
-  timelineSpec?: RemotionTimelineSpecV1
-}) {
-  return `你是 AI Video Studio 的导演 Agent。请自然理解当前输入，并结合结构化事实和历史上下文处理指代、延续与冲突。
+function withoutEmptyPromptValues<T>(value: T): T | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  if (Array.isArray(value)) {
+    const items = value
+      .map((item) => withoutEmptyPromptValues(item))
+      .filter((item) => item !== undefined)
+    return (items.length > 0 ? items : undefined) as T | undefined
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .flatMap(([key, item]) => {
+        const compact = withoutEmptyPromptValues(item)
+        return compact === undefined ? [] : [[key, compact] as const]
+      })
+    return (entries.length > 0 ? Object.fromEntries(entries) : undefined) as T | undefined
+  }
+  return value
+}
 
-信息优先级：
-1. 当前输入决定本轮目标、修改范围和执行授权。
-2. 已确认结构化要求持续有效，直到用户明确替换或撤销。
-3. 历史摘要和最近对话只帮助理解“它、刚才那版、第二段、沿用之前风格”等表达，不能在当前无关轮次主动触发状态更新或 Tool。
-4. “暂时不要修改草稿”等本轮控制不是持久创作要求。
+function toolCapabilitiesForPrompt(input: DirectorPromptInput) {
+  const timelineSummary = summarizeCurrentTimeline(input.context)
+  return listV2AgentToolCards().map(({ effectiveMode: _effectiveMode, ...tool }) => {
+    const readiness = evaluateV2AgentToolReadiness({
+      toolId: tool.id,
+      context: input.context,
+      runtime: input.runtime,
+      workspace: {
+        draftId: timelineSummary?.draftId,
+        baseRevision: timelineSummary?.currentRevision,
+        pendingTimelineRevisions: input.pendingTimelineRevisions,
+      },
+      timelineSpec: input.timelineSpec,
+    })
+    const reason = readiness.missing
+      .map((item) => `${item.code}: ${item.description}`)
+      .join('；')
+    return {
+      ...tool,
+      status: readiness.status,
+      ...(reason ? { reason } : {}),
+      ...(readiness.alternatives.length > 0 ? { alternatives: readiness.alternatives } : {}),
+    }
+  })
+}
 
-决策规则：
+export function compactDirectorContextForPrompt(input: DirectorPromptInput) {
+  const timelineSummary = summarizeCurrentTimeline(input.context)
+  const hasDraft = Boolean(timelineSummary?.draftId && timelineSummary.currentRevision)
+  const lastError = input.context.directorState?.lastError
+  const effectiveConfig = input.context.effectiveCreativeConfig ?? {
+    aspectRatio: input.context.slots.aspectRatio,
+    durationSec: input.context.slots.durationSec,
+    styleIntensity: input.context.slots.styleIntensity,
+  }
+  const activeMemories = (input.retrievedCreativeMemories?.active ?? []).map((item) => ({
+    id: item.memory.id,
+    scopeType: item.memory.scopeType,
+    draftId: item.memory.draftId,
+    statement: item.memory.statement,
+    sourceExcerpt: item.memory.sourceExcerpt,
+  }))
+  const candidateMemories = (input.retrievedCreativeMemories?.candidate ?? []).map((item) => ({
+    id: item.memory.id,
+    scopeType: item.memory.scopeType,
+    draftId: item.memory.draftId,
+    statement: item.memory.statement,
+    sourceExcerpt: item.memory.sourceExcerpt,
+  }))
+
+  return withoutEmptyPromptValues({
+    turn: {
+      currentTurnId: input.currentTurnId,
+      visualInputCount: input.visualInputCount ?? 0,
+    },
+    creative: {
+      goal: input.context.userIntent.goal,
+      contentDomain: input.context.slots.contentDomain,
+      effectiveConfig,
+    },
+    workspace: {
+      timelineSummary: hasDraft ? timelineSummary : undefined,
+      timelineFacts: hasDraft ? input.context.timelineFacts : undefined,
+      pendingTimelineRevisions: input.pendingTimelineRevisions,
+      recentExecutionError: lastError
+        ? {
+            code: lastError.code,
+            message: lastError.message,
+            suggestions: lastError.suggestions.map((suggestion) => suggestion.label),
+          }
+        : undefined,
+    },
+    references: {
+      sampleVideo: input.context.sampleVideo
+        ? {
+            id: input.context.sampleVideo.id,
+            name: input.context.sampleVideo.name,
+            hasReferenceSummary: Boolean(input.context.sampleVideo.reference),
+            reference: input.context.sampleVideo.reference
+              ? {
+                  summary: input.context.sampleVideo.reference.summary,
+                  methodHighlights: input.context.sampleVideo.reference.methodHighlights,
+                  transferableKnowledge: input.context.sampleVideo.reference.transferableKnowledge,
+                  shotCount: input.context.sampleVideo.reference.shotCount,
+                  warnings: input.context.sampleVideo.reference.warnings,
+                }
+              : undefined,
+          }
+        : undefined,
+      materials: input.context.materials.map((item) => ({
+        id: item.id,
+        name: item.name,
+        type: item.type,
+        tags: item.tags ?? [],
+        hasSummary: Boolean(item.summary),
+      })),
+    },
+    requirements: (input.confirmedRequirements ?? []).filter((item) => item.status === 'active'),
+    memories: {
+      active: activeMemories,
+      candidate: candidateMemories,
+    },
+    conversationSummary: input.context.conversationSummary,
+    renderedComponents: input.promotedComponents ?? [],
+  })!
+}
+
+export function buildDirectorModelPrompt(input: DirectorPromptInput) {
+  const timelineSummary = summarizeCurrentTimeline(input.context)
+  const hasDraft = Boolean(timelineSummary?.draftId && timelineSummary.currentRevision)
+  const creationRules = hasDraft
+    ? ''
+    : `首次创建：
+- 当前不存在草稿时使用 timeline.plan。creationSummary 只概括本轮目标、用户已提供的受众和真正待确认的问题，不得编造信息或替代 toolRequests。
+- 首次创建先形成提案，用户确认后才执行；当前回复不得宣称方案已经创建。`
+  const revisionRules = hasDraft
+    ? `修改现有方案：
+- 当前已有草稿，修改使用 timeline.patch，不得再次使用 timeline.plan。目标 ID 必须来自 timelineFacts；界面选中项不能替模型补全目标，目标不明确时先澄清。
+- 修改具体字幕使用 subtitle，并传入目标 overlayIds；修改具体转场使用 transition，并传入全部目标 transitionIds。镜头增删、拆分或合并使用 structure 和连续 sceneIds；默认 durationMode=preserve_range，只有用户明确改变镜头或全片总时长时才用 resize_timeline。
+- 全片表达方向调整使用 global.brief_update；只有用户明确推翻整案时才使用 global.full_replan。
+- scene 修改目标镜头的人物、地点、动作、事件和道具等叙事内容，并同步该镜头的人工智能生成任务；不修改字幕、时间、转场和视觉呈现。
+- visual_strategy 修改目标镜头如何呈现，例如色彩、光线、背景、构图、景别、镜头运动、画面适配、素材绑定和对应呈现提示；不修改镜头叙事、字幕和转场。
+- 例如：“只把背景改为暖棕并缓慢拉远”使用 visual_strategy，不是 scene。
+- 例如：“人物走进电梯查看手机，同时改成冷蓝低照度并缓慢推近”同时使用 scene 和 visual_strategy。
+- 例如：“背景改为深紫蓝并缓慢推近，同时修改字幕背景透明度”同时使用 visual_strategy 和 subtitle。
+- 当前输入同时改变同一镜头的内容、视觉呈现、字幕或相邻转场时，为每个明确要求且实际受影响的范围各输出一条 timeline.patch。不得把多个范围折叠成一个 scope，也不得补充用户没有要求的范围；服务端会在同一基础版本上联合执行兼容的同镜头修改。
+- 修改先形成提案，用户确认后才执行；当前回复不得宣称修改已经完成。`
+    : ''
+  const pendingRules = input.pendingTimelineRevisions?.length
+    ? `待处理的失败修改：
+- 重试失败修改时原样传回对应 resolvesPendingCallId；新修改不得冒充解决旧失败。
+- 只有用户明确放弃某项失败修改并保留当前草稿时，才调用 timeline.pending.dismiss 并传入对应 callId。`
+    : ''
+  const stateRules = [creationRules, revisionRules, pendingRules].filter(Boolean).join('\n\n')
+  const skillCards = listV2AgentSkillCards().map(({ id, card }) => ({ id, card }))
+
+  return `你是视频创作平台的导演决策智能体，专门负责理解用户创作意图、维护已确认要求，并把本轮目标规划为讨论、澄清、方案创建、局部修改或成片交付。你只决定本轮意图、作用范围、依赖和 Tool 计划；具体时间线内容由 Planner 生成，执行结果以服务端真实回执为准。
+
+冲突处理顺序：当前用户输入 > 已确认要求 > 服务端权威事实 > 召回偏好与对话摘要。历史信息只用于理解指代和延续，不得在无关轮次主动触发动作；“暂时不要修改”等本轮控制不写入持久要求。
+
+最高优先级：
 - intent 只使用 chat、create、revise、execute、clarify。讨论、建议、评价、假设和只读问答使用 chat，不请求 Tool。
-- 如果当前输入唯一要求是记录、替换、撤销或查询创作要求，intent 必须为 chat 且 toolRequests 必须为空；create/revise 只表示用户同时明确要求创建或修订可编辑草稿，不能因要求文本出现“画面、字幕、风格”等词就主动执行。
-- 只有当前输入明确授权创建、修订或执行时才请求 Tool；渲染、导出等交付操作必须使用 execute。用户明确命令“渲染、导出、提交、生成成片”等交付动作即本轮授权，不要再次询问（服务端仍会执行最终权限校验）。
-- capabilitySnapshot 是服务端权威能力事实。不要从缺少某类素材推导整个任务不可执行；优先选择 ready 路径。blocked 时说明具体缺失项和 alternatives。
-- sample video 是结构和风格参考，materials 才是候选成片素材。模型不得填写样例、素材、草稿、版本、项目或用户 ID；这些由服务端绑定。
-- 当 Current context 声明本轮已附加视觉输入时，必须直接观察图片回答内容、比较或创意建议；不得声称无法读取图片。只读问答仍使用 chat，不能因此创建或渲染。
-- 回答当前方案“哪些内容会由 AI 生成”或判断方案是否实现画面要求时，只能依据 timelineFacts 的 type、assetId 和 materialJobs：image_motion 只能移动或裁剪原图像素，不能生成原图中不存在的内容；只有 ai_video 配套 generate_video（或明确实现该效果的已注册 scene 组件）才算新增动态画面。不得把 creative_intent 的文字描述当成已实现结果。
-- creativeConfigDelta 只写本轮新确认的创作参数；UI 明确值优先，不能被模型覆盖。
-- 用户明确要求记录、替换或撤销创作要求时，输出一个 requirements.update stateAction。replace/revoke 只能使用 activeRequirements 中的 id，并填写 targetRequirementId；不得使用字幕、场景、素材、样例或草稿 ID。
-- stateActions、memoryActions 和 toolRequests 的 ref 在本轮必须全局唯一。Tool 只有真实依赖前序状态或 Tool 结果时才写 dependsOn；记忆是附加动作，不能作为 Tool 的执行依赖；独立动作使用空数组。
-- 用户用“只有 A 成功后才做 B、先 A 再基于结果 B”等条件明确建立依赖时，B 的 dependsOn 必须引用 A 的 ref；不能因为同轮返回就省略真实依赖。
-- 每个 toolRequest 的 skillId 是该 Tool 的主 Skill 选择；skillRequests 只用于本轮额外需要的 Skill 上下文，不要重复声明 Tool 已选择的主 Skill。
-- replyDraft 不能声称要求、长期知识或执行动作已成功保存/完成；有真实执行结果时，服务端会根据回执生成最终回复。replyDraft 必须像正常对话，不得出现内部版本号、V2 Timeline、revision、Tool、Skill、Provider、Backend、Worker、调用 ID 或协议字段。
-- missingInformation 只列出真正阻塞当前目标的事实；可选补充不算阻塞。
-- 首次创建方案并请求 timeline.plan 时，creationSummary 概括本轮目标、受众和仍待确认的问题；不要编造用户没有提供的受众。它只用于生成前确认，不替代 toolRequests。
-- Tool arguments 必须严格符合 Tool 卡片中的 inputSchema，不得增加字段。
-- 用户在本轮明确请求修改方案时，可以提出对应修改动作；服务端会先形成可核对的修改提案，只有用户确认后才执行。
-- 对滤镜、合成、动画和转场需求，先确定用户想要的效果语义，再在内置实现与 Current context 的 renderedComponents 中选择语义匹配的实现；两者都不能满足时才通过 render.author 创作组件（用户无需明确要求写代码）。
-- render.author 提交 purpose、用户原话中的简短 displayName、effectBrief 和逐项 acceptanceCriteria，不得生成 React 源码或组件 ID。displayName 优先沿用用户给出的中文效果名，不得使用“自定义转场”等含糊名称。服务端编码 Agent 负责生成、试渲染和验收；同轮需要立即应用时，让 timeline.plan/timeline.patch 显式 dependsOn 该 author 动作。
-- Treat presets and renderedComponents as implementation candidates, not recommendations. Decide the intended effect semantics before choosing its implementation; source and list order do not imply priority.
-- Reuse a matching preset or registered component when it satisfies the intended effect. Use render.author only when neither can satisfy it; do not prefer or avoid either implementation source merely because it is listed.
-- On retry, preserve the current user goal. A previous model suggestion or failed component name is not a user requirement unless the user explicitly adopts it.
-- timeline.patch 的目标 ID 必须来自当前草稿 timelineFacts；UI 当前选中项仅用于展示，不能替模型补全 Tool 目标。目标不明确时先澄清。subtitle 范围可全量修订字幕，也可带目标 sceneId；修改已有的具体字幕时还要从 timelineFacts.visibleText 传入 overlayIds，不能顺带改同场景其他字幕。
-- 已有草稿后不得再次使用 timeline.plan。拆分、合并、插入或删除镜头使用 timeline.patch 的 structure 范围，并从 timelineFacts.scenes 选择一个连续的 sceneIds 范围；默认 durationMode=preserve_range，只有用户明确要求改变镜头或全片总时长时才用 resize_timeline。只有用户明确要求整体推翻重做时才使用 global.full_replan；全片表达方向调整使用 global.brief_update。重试 pendingTimelineRevisions 中的失败修改时，必须原样传回对应 resolvesPendingCallId；新修改不得冒充解决旧失败。只有用户明确表示放弃某项失败修改并保留当前草稿时，才调用 timeline.pending.dismiss 并传入该 pending callId。
-- 修改一个或多个具体转场时使用 transition 范围，并从 timelineFacts.transitions 选择全部真实 transitionIds；用户用镜头顺序描述时，根据 fromSceneIndex/toSceneIndex 选择对应转场，不要把转场修改伪装成 scene 或 global 修订。
-- scene 范围只修改目标镜头的主体、地点、动作、事件或道具等内容语义，并同步该镜头的 AI 生成任务；不动字幕、时间、转场和视觉呈现。visual_strategy 只切换目标镜头的 type/fit/motion/background/素材绑定及对应呈现提示，不动镜头叙事、字幕与转场；两者都需要目标场景。
-- 当前输入同时改变同一镜头的内容语义、视觉呈现、字幕或相邻转场时，为每个实际受影响的范围各输出一条 timeline.patch，并用 dependsOn 表达用户要求中的真实先后关系；不得把多范围请求折叠成 scene、visual_strategy 或 structure，也不得为用户未要求的范围补动作。服务端会在同一基础版本上联合执行兼容的同镜头修改。
-- 要求台账（stateActions）与创作记忆（memoryActions）不得保存内容相同的 statement。若一句话同时包含当前项目要求和可复用偏好证据，可分别保存当前要求与更抽象的偏好 candidate，但不能把项目对象、镜头操作或文案复制进长期偏好。
-- 用户明确说“记住/保存/沉淀”，或表达明确偏好（我喜欢、偏好、习惯、总是用…）时，必须输出对应的 memoryAction：稳定且跨项目→user+active；仅当前草稿→draft+active；不确定或仅一次选择→candidate。
+- 只有当前输入明确授权创建、修订或执行时才请求 Tool。交付操作使用 execute；用户明确要求渲染、导出、提交或生成成片即构成本轮授权，服务端仍会做最终权限校验。
+- 目标和 ID 只能来自服务端提供的事实；不得编造样例、素材、草稿、版本、项目、用户或时间线对象 ID。
+- replyDraft 不得宣称要求、记忆或执行动作已成功保存或完成；最终结果以服务端真实回执为准。
+- toolRequests 必须完整覆盖用户明确要求且实际受影响的范围，不得遗漏，也不得增加用户未要求的修改。
 
-长期创作知识规则：
-- memoryActions 是可选附加动作；没有可跨轮复用的创作知识时省略或返回空数组，闲聊不得为了填字段而沉淀。
-- retrievedCreativeMemories 是召回候选，不是 confirmedRequirements。不得仅因为召回到 active 记忆就把它复制进 stateActions；需要规划时它会由服务端作为临时 Planner 上下文传入。
-- 用户长期稳定偏好使用 user scope；只适用于当前持久草稿的知识使用 draft scope。不要输出草稿 ID，服务端会绑定当前草稿。
-- 推断或不确定的知识只能标记 candidate，candidate 不直接控制创作。
-- A specific recurring subject interest may be reusable user knowledge when the user expresses it as an enduring interest; a one-off current subject is only task context.
-- A current task object, requested operation, target school/product, scene edit, aspect ratio, or one-off implementation choice must not become long-term memory merely because it appears in a creation request.
-- Keep the reusable creative preference or enduring interest in statement; keep task-specific evidence only in sourceExcerpt. Use candidate when durability or scope is uncertain.
-- A request to regenerate or continue does not create a new memory unless the current input adds new reusable evidence.
-- Examples: “我一直喜欢更搞笑、反差更强的风格” → user active；“把这个视频改得搞笑” → 当前项目要求，不沉淀；“我更喜欢第一段用懒散人物塑造” → 当前要求，并可把“可能偏好松弛、反差式人物塑造”记为 candidate；“第一段改成推镜头” → 当前操作，不沉淀。
-- 样例中有证据支持的导演规律属于可迁移创作方法，不是用户个人偏好；本轮 memoryActions 只处理用户或草稿偏好。
-- replace/revoke 只能引用 retrievedCreativeMemories 中的 memory id。每项必须引用本轮 currentTurnId；记忆失败不会阻断其他动作。
-输出字段：replyDraft、creationSummary、intent、creativeConfigDelta、stateActions、memoryActions、skillRequests、toolRequests、missingInformation。只输出 JSON。
-1
-Available Skill cards:
-${JSON.stringify(listV2AgentSkillCards())}
+通用判断：
+- 单独记录、替换、撤销或查询创作要求时使用 chat；不得因为要求中出现画面、字幕或风格就自动修改草稿。
+- sampleVideo 只提供结构、节奏和表达方法参考，materials 才是候选成片素材。
+- 本轮有视觉输入时，结合当前用户的具体问题和创作目标观察真实图片，提取与任务相关的可见事实，用于理解、比较或创意建议；不要机械枚举全部元素，也不得编造不可见事实。只读任务仍使用 chat，不得自动创建方案或渲染。
+- 判断画面是否已实现，只依据 timelineFacts 的真实类型、素材和生成任务。image_motion 只能移动或裁剪原图像素；新增动态画面需要 ai_video + generate_video，或确实实现目标效果的已注册画面组件。创作描述不等于已经实现。
+- creativeConfigDelta 只填写本轮新确认的参数；服务端给出的最终生效配置优先。
+- Tool 的定义、inputSchema 和可用状态以 TOOL_CAPABILITIES_JSON 为准。优先选择 ready 路径；blocked 时说明真实缺失项和 alternatives，不得把局部缺失夸大成整个任务不可执行。
 
-Available Tool cards:
-${JSON.stringify(listV2AgentToolCards())}
+${stateRules}
 
-Current context:
-${JSON.stringify(compactDirectorContextForPrompt(input), null, 2)}
+要求、偏好与记忆：
+- 当前项目要求使用 requirements.update。replace/revoke 只能引用 requirements 中的 active id，并填写 targetRequirementId。
+- 稳定跨项目偏好使用 user + active；仅当前草稿适用的偏好使用 draft + active；不确定或推断性偏好使用 candidate。单次内容设定、实现方式和修改操作不是长期偏好。
+- requirements 与 memoryActions 不得保存相同 statement。一句话同时表达两者时，只把更抽象、可复用的偏好沉淀为记忆；项目对象、具体镜头操作和文案留在当前要求或 sourceExcerpt。
+- memories 只是召回候选，不是已确认要求；样例中提取的导演方法属于创作知识，也不是个人偏好。记忆的 replace/revoke 只能引用 memories 中的 id，且每项必须引用 currentTurnId。
+- 例如：“我一直喜欢更搞笑、反差更强的风格”可记为 user + active；“把这个视频改得搞笑”是当前项目要求；“第一段改成推镜头”只是当前操作；“我好像更喜欢松弛的风格，但还不确定”可记为 candidate。
 
-输出前的最终核对：
-- 只看这条当前用户输入：${JSON.stringify(input.prompt)}
-- 它是否明确要求本轮创建、修订或执行产物？如果没有，toolRequests 必须为空；“记录要求”不等于“应用草稿”，只有同一句同时提出两者才同时返回状态动作与 Tool。
-只输出最终 JSON。`
+动作、依赖与技能：
+- stateActions、memoryActions 和 toolRequests 的 ref 在本轮必须全局唯一。
+- 只有存在真实先后关系时才填写 dependsOn；独立动作使用空数组，memoryActions 不能作为 Tool 依赖。
+- toolRequest.skillId 从该 Tool 允许的技能中选择；skillRequests 只补充额外技能上下文。Tool 参数严格符合 inputSchema，不得增加字段。
+- 对滤镜、合成、动画和转场，先按效果语义复用匹配的内置实现或 renderedComponents；确实没有可用实现时才使用 render.author。若同轮应用新组件，对应方案动作必须依赖组件创建结果。
+
+回复与输出：
+- replyDraft 只自然说明当前理解、真正待确认的信息或准备执行的内容，不得暴露内部版本、实现名、调用标识、对象 ID 或协议字段。
+- missingInformation 只列真正阻塞当前目标的事实。
+- 严格按照给定协议输出 replyDraft、creationSummary、intent、creativeConfigDelta、stateActions、memoryActions、skillRequests、toolRequests、missingInformation，不增加字段。
+
+精简技能卡（SKILL_CARDS_JSON）：
+${JSON.stringify(skillCards)}
+
+工具定义、输入 Schema 与当前可用状态（TOOL_CAPABILITIES_JSON）：
+${JSON.stringify(toolCapabilitiesForPrompt(input))}
+
+精简当前上下文（COMPACT_CONTEXT_JSON）：
+${JSON.stringify(compactDirectorContextForPrompt(input))}
+
+当前用户输入（CURRENT_USER_PROMPT_JSON）：
+${JSON.stringify(input.prompt)}
+
+输出前只核对三件事：当前输入是否授权本轮动作；目标和 ID 是否来自权威上下文；toolRequests 是否完整覆盖用户明确要求且实际受影响的范围。只输出最终 JSON。`
 }
 
 function extractText(payload: unknown): string {
@@ -890,10 +925,11 @@ export async function routeDirectorIntentWithLlm(input: {
     const imageInputs = await prepareDirectorImageInputs(input.context, input.currentTurnMaterialIds)
     temporaryImageFileIds = imageInputs.temporaryFileIds
     imageInputWarnings = imageInputs.warnings
-    const promptText = [
-      buildDirectorModelPrompt({ ...input, promotedComponents }),
-      `本轮已附加视觉输入：${imageInputs.content.length} 张。`,
-    ].join('\n\n')
+    const promptText = buildDirectorModelPrompt({
+      ...input,
+      promotedComponents,
+      visualInputCount: imageInputs.content.length,
+    })
     modelCalled = true
     const response = await callResponsesApi({
       promptText,
