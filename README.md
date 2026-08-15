@@ -1,112 +1,73 @@
-# ByteDance DPL304 AI Video Studio
+# 多模态智能视频创作平台
 
-## V2 Direction
+一个面向多轮 AI 视频创作的可编辑 Agent 平台。系统把自然语言、图片素材和样例视频转换为版本化时间线，支持持续修改、AI 镜头生成、程序化合成、失败恢复与可追踪评测。
 
-The project is being refactored toward a V2 timeline-first hybrid
-video-production pipeline:
+当前主链以 `RemotionTimelineSpecV1` 为唯一交付协议：Seedance 等视觉模型负责生成真实动态镜头，Remotion 负责字幕、转场、覆盖层和确定性时间线合成，FFmpeg 负责媒体标准化与最终封装。
 
-```text
-Agent planner -> RemotionTimelineSpec v1 -> material jobs -> standardized assets -> Remotion full timeline renderer
-```
+## 核心差异
 
-In V2, external video models own realistic visual content that is not practical
-to produce with code. Remotion owns deterministic programmatic video work:
-multi-scene timeline composition, transitions, captions, image motion, text
-cards, product callouts, and other editable graphics. FFmpeg owns media
-standardization and final packaging.
+- **先规划、再确认、后执行**：首次创作和方案修订都先生成可审查提案；高成本生成与渲染只有在用户明确确认后才执行。
+- **版本化可编辑方案**：镜头、字幕、转场、素材和创作总纲保存在统一时间线中；局部修改经过作用域合并和结果审查，非目标内容保持不变。
+- **真实工具回执**：用户回复以服务端实际执行结果为事实来源；模型只负责自然组织表达，不能把失败改写成成功。
+- **素材知识迁移**：图片既参与语义理解，也作为条件生成的真实输入；样例视频提取内容、表现方法、时机依据和可迁移知识，而不是机械复刻分段。
+- **长期创作上下文**：区分用户个人偏好与普适创作知识，支持候选、启用、撤销、来源追踪及按任务检索。
+- **低成本二次创作**：生成请求使用幂等记录；未变化的 AI 镜头按请求指纹、文件哈希和媒体可读性校验后复用，只重新生成受影响镜头。
+- **混合渲染交付**：用户素材、AI 视频、程序化画面、字幕和转场在同一时间线中合成，避免让单一生成模型承担全部工作。
+- **可量化评测**：评测包覆盖对话决策、方案生成、局部修改、图片理解、样例理解、偏好检索、幂等、渲染和 UI 边界。
 
-Run the V2 timeline smoke:
-
-```powershell
-npm.cmd run v2:smoke
-```
-
-Run the default V2 timeline contract check:
-
-```powershell
-npm.cmd run v2:check
-```
-
-In desktop dev mode, open the left navigation item `Timeline` to run the new
-timeline-first path against a local video path such as
-`../example_videos/9.mp4`. The page first produces a Chinese planning review
-and editable `RemotionTimelineSpecV1`; only after review does it run material
-resolution, media standardization, Remotion rendering, and trace output.
-
-The old overlay-first V2 path has been removed from the active V2 code. Real
-Seedance calls are triggered only when a reviewed timeline contains
-`generate_video` material jobs and a saved revision is executed through
-`/api/v2/timeline-drafts/:draftId/runs`.
-
-Read the V2 architecture notes:
-
-- [V2 Architecture](docs/V2_ARCHITECTURE.md)
-
-AI Video Studio is now a V2 timeline-first hybrid video-production prototype.
-It uses a director agent to turn user intent, sample references, and creative
-materials into a strict `RemotionTimelineSpecV1`. External video models can
-produce realistic missing shots, Remotion renders deterministic timeline
-graphics and transitions, and FFmpeg normalizes media before the final package.
-
-The previous `RenderPlanV1` workflow is no longer an active creation path. Some
-types and read APIs remain only for historical data and older editor surfaces.
-
-## Current Architecture
+## 创作链路
 
 ```text
-User intent + sample video + user materials
-  -> Director agent routing
-  -> V2 Timeline preview
-  -> RemotionTimelineSpecV1 validation and Chinese planning review
-  -> User review / revision
-  -> Material job resolution
-  -> AI video generation when planned and available
-  -> FFmpeg standardization
-  -> Remotion full timeline render
-  -> V2 evaluation trace
-  -> completed MP4 or explicit fallback/failure
+自然语言 + 图片素材 + 样例视频
+  -> Director Agent 理解意图与选择工具
+  -> 首次创作摘要 / 修改提案
+  -> 用户确认
+  -> Planner 生成或修订 RemotionTimelineSpecV1
+  -> 结构校验 + 作用域合并 + 结果审查
+  -> 素材解析与 AI 镜头生成/复用
+  -> FFmpeg 标准化
+  -> Remotion 完整时间线合成
+  -> MP4 + Trace + 版本化执行记录
 ```
 
-The system is not an open-ended video generator. Remotion is the only final
-render path, and it can only render from available assets, generated props, and
-implemented effects. Missing media is never silently invented.
+文本、图片和样例不是互斥分支。用户可以从纯文本开始，之后继续添加图片或样例；所有新方案都通过创作总纲统一方向、图片观察事实、样例方法和实际采用的偏好。
 
-## Package Ownership
+## 当前能力
 
-| Path | Owner / Role |
+| 领域 | 已实现 |
 | --- | --- |
-| `desktop/` | Electron shell and one-command local launcher. It starts backend and frontend, but owns no video logic. |
-| `fonted/` | React + Vite editor, director chat, material library, V2 timeline preview, and render state. |
-| `backend/` | Express APIs, uploads/public asset publishing, V2 timeline preview/run services, Remotion calls, FFmpeg checks, and trace output. |
-| `shared/` | Cross-runtime protocols and deterministic tools: V2 timeline spec, validator, fixtures, material adapters, and legacy compatibility types. |
-| `remotion/` | Remotion compositions. Legacy consumes `RenderPlanV1`; V2 Timeline consumes `RemotionTimelineSpecV1`. |
-| `docs/` | Architecture and runtime boundary notes. |
-| `script/docker/` | PostgreSQL helper scripts for server-style development. |
+| Director Agent | 多轮意图理解、工具选择、执行前确认、自然终态回复、工作区冲突恢复 |
+| 可编辑时间线 | 镜头、字幕、转场、素材、音频、全局创作方向及版本历史 |
+| 局部修改 | 字幕、镜头内容、视觉策略、结构、转场和全局总纲修订；非目标对象受保护 |
+| 多模态素材 | 图片像素理解、条件视频生成、样例视频方法提取、素材身份与依赖闭包 |
+| 生成与渲染 | Seedance 适配、AI 镜头复用、FFmpeg 标准化、Remotion 完整合成 |
+| 执行安全 | readiness 预检、幂等请求、版本冲突保护、真实取消状态、失败修订门禁 |
+| 记忆与知识 | 用户/草稿偏好、普适创作知识、状态管理、BM25 检索、来源与采用记录 |
+| 评测 | 冻结数据集、确定性/在线/稳定性/少量付费成片 profile、离线人工评分 |
 
-## Core Contracts
+## 技术栈
 
-| Contract | Responsibility |
+- TypeScript、React、Vite、Zustand
+- Express、Prisma、PostgreSQL（服务器模式）
+- OpenAI Responses API 兼容的结构化模型调用
+- Ark / Seedance 视频理解与生成
+- Remotion、FFmpeg
+- Electron 桌面壳
+
+## 目录
+
+| 路径 | 职责 |
 | --- | --- |
-| `RemotionTimelineSpecV1` | Active V2 render contract: canvas, assets, scenes, overlays, transitions, audio, and material jobs. |
-| `V2TimelinePlanningReview` | Human-readable Chinese review of the generated timeline before expensive generation/rendering. |
-| `PipelineBundle` | Compatibility hydration payload for existing frontend panels. V2 adapts timeline specs into this shape. |
-| `DirectorSessionState` | Agent-side execution state, action ledger, render revision status, and recoverable error context. |
-| `RenderPlanV1` | Legacy render contract retained for historical task reading and older UI pieces only. |
+| `backend/` | Director、Planner、素材分析、时间线服务、生成/渲染、记忆、知识和评测 |
+| `fonted/` | React 编辑器、对话工作区、时间线编辑、素材与历史运行状态 |
+| `shared/` | 前后端共享协议、时间线类型、校验器和确定性工具 |
+| `remotion/` | 最终时间线 Composition 与程序化画面组件 |
+| `desktop/` | Electron 本地启动器，不承载视频业务逻辑 |
+| `docs/` | 架构、模块集成、运行边界和需求执行状态 |
 
-## Agentic Optimizations
+## 快速开始
 
-| Area | Current behavior |
-| --- | --- |
-| Intent routing | Director agent routes user messages into natural chat, V2 preview, revision, material analysis, or render actions. |
-| Timeline validation | V2 validator checks scene timing, asset references, overlay ranges, transitions, audio ranges, and material job boundaries. |
-| Soft review gate | Planner output is converted into a Chinese planning review so the user can revise before costly generation. |
-| Material fallback | Planned AI-video jobs can fall back to static image motion or Remotion card scenes when generation is unavailable. |
-| Media normalization | FFmpeg preflight and standardization protect Remotion/FFmpeg composition from provider format drift. |
-| Output trace | Every V2 run writes a compact trace under `backend/tmp/v2-traces/tasks/<taskId>/` (director sessions use `sessions/<workspace>/operations/<operation>/`). |
-
-## Local Desktop Run
-
-Install dependencies once:
+### 1. 安装依赖
 
 ```powershell
 npm.cmd install
@@ -116,171 +77,140 @@ npm.cmd --prefix remotion install
 npm.cmd --prefix backend run build:shared
 ```
 
-Start the local desktop app:
+本地真实渲染还需要可用的 FFmpeg，以及 Remotion 可使用的 Chrome/Chromium。
+
+### 2. 配置环境变量
+
+参考：
+
+- `backend/.env.example`
+- `fonted/.env.example`
+
+真实模型调用至少需要在 `backend/.env` 配置 Ark/Seedance 密钥。需要让外部生成服务读取本地上传图片时，还应配置公网可达素材地址或 TOS 发布器。不要提交真实密钥。
+
+### 3. 启动桌面开发模式
 
 ```powershell
 npm.cmd run desktop:dev
 ```
 
-Desktop mode does not require PostgreSQL, Redis, Prisma setup, or separate
-worker terminals. Electron starts the backend API and Vite frontend; the active
-creation path is the V2 Timeline preview/run API.
+桌面模式默认启动：
 
-Use this smoke check when you only want to verify startup:
+- Backend：`http://127.0.0.1:3001`
+- Frontend：`http://127.0.0.1:5173`
+
+该模式使用本地持久化实现，不要求先启动 PostgreSQL、Redis 或独立 Worker。
+
+仅检查启动：
 
 ```powershell
-$env:DPL304_DESKTOP_SMOKE_MS='8000'; npm.cmd run desktop:dev
+$env:DPL304_DESKTOP_SMOKE_MS='8000'
+npm.cmd run desktop:dev
 ```
 
-## Server-Style Development
+### 4. 服务器式开发
 
-Use this mode when you specifically want PostgreSQL-backed task storage:
+需要 PostgreSQL 持久化时：
 
 ```powershell
 .\script\docker\db-up.ps1
-
 npm.cmd --prefix backend run db:generate
 npm.cmd --prefix backend run db:push
 npm.cmd --prefix backend run dev
 npm.cmd --prefix fonted run dev
 ```
 
-## Environment Notes
-
-Backend keys live in `backend/.env`:
+## 关键环境配置
 
 ```env
+# Director / 图片和样例理解
 ARK_API_KEY=...
-ARK_API_KEY_NAME=api-key-...
-# or VIDEO_UNDERSTANDING_API_KEY=...
-VIDEO_UNDERSTANDING_MODEL=doubao-seed-2-0-mini-260428
-VIDEO_UNDERSTANDING_FILES_URL=https://ark.cn-beijing.volces.com/api/v3/files
-VIDEO_UNDERSTANDING_RESPONSES_URL=https://ark.cn-beijing.volces.com/api/v3/responses
-```
+VIDEO_UNDERSTANDING_MODEL=doubao-seed-2-0-lite-260428
 
-Remotion settings:
-
-```env
-REMOTION_ROOT=../remotion
-REMOTION_COMPOSITION_ID=Dpl304Video
-RENDER_OUTPUT_DIR=renders
-FFMPEG_BIN=C:\Users\Administrator\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe
-# REMOTION_BROWSER_EXECUTABLE=C:\Program Files\Google\Chrome\Application\chrome.exe
-```
-
-Legacy RenderPlan review is off by default and is not part of the V2 main path:
-
-```env
-ENABLE_RENDER_PLAN_LLM_REVIEW=false
-```
-
-Set it to `true` only when explicitly inspecting the legacy RenderPlan path.
-
-V2 generated main-video model configuration:
-
-```env
+# AI 视频生成
 V2_VIDEO_GENERATION_PROVIDER=ark-seedance
 V2_VIDEO_GENERATION_API_KEY=...
 V2_VIDEO_GENERATION_MODEL=doubao-seedance-1-5-pro-251215
-V2_VIDEO_GENERATION_SUBMIT_URL=https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks
-V2_VIDEO_GENERATION_STATUS_URL_TEMPLATE=https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks/{id}
-# V2_VIDEO_GENERATION_DOWNLOAD_URL_TEMPLATE=
-# V2_VIDEO_GENERATION_DEFAULT_IMAGE_URL=
-V2_VIDEO_GENERATION_TIMEOUT_MS=180000
-V2_VIDEO_GENERATION_POLL_INTERVAL_MS=3000
-V2_GENERATED_VIDEO_WIDTH=1080
-V2_GENERATED_VIDEO_HEIGHT=1920
-V2_GENERATED_VIDEO_FPS=30
+
+# Remotion / FFmpeg
+# FFMPEG_BIN=C:\path\to\ffmpeg.exe
+# REMOTION_BROWSER_EXECUTABLE=C:\path\to\chrome.exe
 ```
 
-`V2_VIDEO_GENERATION_API_KEY` can be left empty when `ARK_API_KEY` is already
-configured. Ark Seedance image-to-video jobs need either `input_image_url` in
-the reviewed planner draft, the V2 frontend `I2V input image URL` field, or
-`V2_VIDEO_GENERATION_DEFAULT_IMAGE_URL`.
+素材发布和其他运行配置示例见 `backend/.env.example`。
 
-For real image-to-video calls with locally uploaded images, configure the asset
-publisher instead of manually editing a per-file URL:
+## 验证与评测
 
-```env
-ASSET_PUBLISHER_PROVIDER=tos
-ASSET_PUBLISHER_PUBLIC_BASE_URL=https://<bucket-or-cdn-domain>
-TOS_ACCESS_KEY_ID=...
-TOS_ACCESS_KEY_SECRET=...
-TOS_REGION=cn-beijing
-TOS_ENDPOINT=tos-cn-beijing.volces.com
-TOS_BUCKET=...
-TOS_OBJECT_PREFIX=dpl304/uploads
-ASSET_PUBLISHER_VERIFY_PUBLIC_URL=true
-ASSET_PUBLISHER_VERIFY_TIMEOUT_MS=10000
+V2 基础构建与时间线 smoke：
+
+```powershell
+npm.cmd run v2:check
 ```
 
-`POST /api/uploads` stores the file locally for Remotion and, when requested by
-the V2 page, publishes it to TOS for Seedance. The response contains `localPath`
-for local rendering and `publicUrl` for external providers. If public publishing
-is required but not configured, or if the uploaded object cannot be read from the
-published URL, upload fails before the provider call.
+构建并运行冻结评测集：
 
-## Runtime Trace
+```powershell
+npm.cmd --prefix backend run eval:v2:build
+npm.cmd --prefix backend run eval:v2:run -- --profile deterministic
+```
 
-The active desktop flow writes V2 Timeline trace under:
+其他评测 profile：
+
+- `live`：运行真实 Director、Planner、图片和样例理解，但禁止视频生成 Provider。
+- `stability`：对关键场景重复运行，检查结果稳定性。
+- `canary --allow-provider`：少量真实视频生成；有 RenderRun 数量、Provider 提交次数和目标生成秒数上限，会产生实际费用。
+
+付费 canary 完成后可离线追加人工评分，不会再次调用模型或重新生成视频：
+
+```powershell
+New-Item -ItemType Directory -Force backend/evaluation/reports | Out-Null
+Copy-Item backend/evaluation/datasets/source/manual-ratings.example.json `
+  backend/evaluation/reports/manual-ratings.local.json
+# 查看成片和 Trace 后填写 reports/manual-ratings.local.json，再执行：
+npm.cmd --prefix backend run eval:v2:score -- `
+  --report evaluation/reports/<canary>/report.json `
+  --ratings evaluation/reports/manual-ratings.local.json
+```
+
+评测说明见 [backend/evaluation/README.md](backend/evaluation/README.md)。
+
+## Trace 与运行产物
+
+默认 Trace 位于：
 
 ```text
-backend/tmp/v2-traces/tasks/<taskId>/
-  00-summary/summary.zh.md
-  01-input/timeline-planner-input.json
-  02-planning/timeline-spec.json
-  02-plan-review/timeline-review.zh.md
-  03-material-jobs/timeline-material-resolution.json
-  04-material-assets/timeline-standardized-assets.json
-  05-remotion-props/timeline-render-spec.json
-  06-remotion-render/timeline-render.log
-  07-evaluation/timeline-evaluation.json
+backend/tmp/v2-traces/
+  sessions/<workspace>/operations/<operation>/
+  tasks/<taskId>/
 ```
 
-If PowerShell displays Chinese text as mojibake, inspect the files in an editor
-with UTF-8 enabled. The trace writer stores these files as UTF-8.
+常见可清理产物：
 
-The old V1 trace writer and its environment settings are retained only for
-legacy tooling that is not called by the current desktop UI flow.
+- `fonted/dist/`
+- `backend/tmp/`
+- `backend/uploads/`
+- `backend/renders/`
+- `backend/v2-renders/`
+- `remotion/public/render-lab-cache/`
 
-## Generated And Runtime Artifacts
-
-Safe to delete at any time:
-
-| Path | Why |
-| --- | --- |
-| `fonted/dist/` | Vite production build output. |
-| `backend/tmp/` | debug artifacts, render props, local smoke DB. |
-| `backend/uploads/` | local uploaded files. |
-| `backend/renders/` | rendered MP4 outputs. |
-| `backend/v2-renders/` | V2 Timeline rendered MP4 outputs and render props. |
-| `tmp/`, `output/` | ad hoc local artifacts. |
-| `remotion/public/render-lab-cache/` | render lab frame cache. |
-
-Do not casually delete `shared/**/*.js`, `shared/**/*.d.ts`, or their maps.
-They are generated from shared TypeScript, but backend runtime imports use
-NodeNext `.js` specifiers. Regenerate them with:
+不要直接删除 `shared/**/*.js`、`shared/**/*.d.ts` 及其 map；后端 NodeNext 运行时会消费这些生成文件。需要更新时运行：
 
 ```powershell
 npm.cmd --prefix backend run build:shared
 ```
 
-## Verification
+## 已知边界
 
-```powershell
-npm.cmd --prefix backend run build
-npm.cmd --prefix fonted run build
-$env:DPL304_DESKTOP_SMOKE_MS='8000'; npm.cmd run desktop:dev
-```
+- 当前只复用未变化的 AI 镜头，Remotion 最终 MP4 仍完整重新合成；分段渲染缓存尚未进入生产。
+- 局部修订当前仍由完整候选方案、服务端作用域合并和完整 revision 保存完成；`revision fragment` 尚未实施。
+- Provider 已进入提交中或状态未知时，系统会让当前 Run 失败并停止交付，但不能虚假承诺第三方任务已经停止。
+- 后台 Worker、跨进程租约恢复和严格远程取消仍是后续能力。
+- 样例理解评测当前样本量有限，因此只报告结果，不作为正式质量发布门槛。
 
-Known non-fatal warnings:
+## 进一步阅读
 
-- Frontend build may warn that the main chunk is larger than 500 kB.
-- Backend startup may warn if Ark keys look truncated.
-
-## More Docs
-
-- [Desktop Runtime Boundaries](docs/DESKTOP_BOUNDARIES.md)
-- [V2 Architecture](docs/V2_ARCHITECTURE.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Mock Data](docs/MOCK_DATA.md)
+- [用户需求执行状态](docs/v2-user-requirement-execution.md)
+- [V2 架构](docs/V2_ARCHITECTURE.md)
+- [模块集成](docs/MODULES_INTEGRATION.md)
+- [Pipeline](docs/PIPELINE.md)
+- [当前项目状态](PROJECT_CURRENT_STATE.md)
