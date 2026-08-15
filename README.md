@@ -63,7 +63,6 @@
 | `shared/` | 前后端共享协议、时间线类型、校验器和确定性工具 |
 | `remotion/` | 最终时间线 Composition 与程序化画面组件 |
 | `desktop/` | Electron 本地启动器，不承载视频业务逻辑 |
-| `docs/` | 架构、模块集成、运行边界和需求执行状态 |
 
 ## 快速开始
 
@@ -206,11 +205,3 @@ npm.cmd --prefix backend run build:shared
 - Provider 已进入提交中或状态未知时，系统会让当前 Run 失败并停止交付，但不能虚假承诺第三方任务已经停止。
 - 后台 Worker、跨进程租约恢复和严格远程取消仍是后续能力。
 - 样例理解评测当前样本量有限，因此只报告结果，不作为正式质量发布门槛。
-
-## 进一步阅读
-
-- [用户需求执行状态](docs/v2-user-requirement-execution.md)
-- [V2 架构](docs/V2_ARCHITECTURE.md)
-- [模块集成](docs/MODULES_INTEGRATION.md)
-- [Pipeline](docs/PIPELINE.md)
-- [当前项目状态](PROJECT_CURRENT_STATE.md)

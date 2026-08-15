@@ -36,5 +36,5 @@ starting desktop mode:
 npm.cmd --prefix backend run build:shared
 ```
 
-See `../docs/DESKTOP_BOUNDARIES.md` for the responsibility split between the
-desktop shell, frontend, backend API, local store, job runner, and Remotion.
+The desktop shell only coordinates local startup; the frontend, backend API,
+local store, job runner, and Remotion keep their existing responsibilities.
