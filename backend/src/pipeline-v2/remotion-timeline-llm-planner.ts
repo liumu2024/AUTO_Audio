@@ -378,7 +378,7 @@ export interface V2TimelineLlmPlannerResult {
   extractionReport: StructuredJsonExtractionReport
   promptText: string
   visualInputReport: V2TimelineVisualInputReport
-  repairs: Array<{ job_id: string; scene_id: string; field: 'prompt' | 'status' | 'audio'; reason: string }>
+  repairs: Array<{ job_id: string; scene_id: string; field: 'prompt' | 'status' | 'audio' | 'asset_id'; reason: string }>
   structuredOutput: { requested: boolean; providerFallback: boolean; reason?: string }
   jsonRepair?: { request: string; responseAudit?: unknown; error?: string }
 }
@@ -411,9 +411,18 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
 } {
   const scenes = new Map(spec.scenes.map((scene) => [scene.id, scene]))
   const repairs: V2TimelineLlmPlannerResult['repairs'] = []
+  const plannedJobsByScene = new Map<string, RemotionTimelineSpecV1['material_jobs']>()
+  for (const job of spec.material_jobs) {
+    if (job.type !== 'generate_video' || job.status !== 'planned' || !job.output_asset_id) continue
+    plannedJobsByScene.set(job.scene_id, [...(plannedJobsByScene.get(job.scene_id) ?? []), job])
+  }
+  const plannedOutputAssetIds = new Set(
+    [...plannedJobsByScene.values()].flatMap((jobs) => jobs.map((job) => job.output_asset_id!)),
+  )
   const unresolvedGeneratedAssets = new Set(
     spec.assets
-      .filter((asset) => asset.source === 'generated_asset' && !asset.src.trim())
+      .filter((asset) => asset.source === 'generated_asset'
+        && (!asset.src.trim() || plannedOutputAssetIds.has(asset.id)))
       .map((asset) => asset.id),
   )
   const unsupportedAudioAssets = new Set(
@@ -477,9 +486,24 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
     }
   }
   const assets = spec.assets.filter((asset) => !unresolvedGeneratedAssets.has(asset.id))
+  const normalizedScenes = spec.scenes.map((scene) => {
+    const jobs = plannedJobsByScene.get(scene.id)
+    if (scene.type !== 'ai_video' || jobs?.length !== 1) return scene
+    const job = jobs[0]!
+    const outputAssetId = job.output_asset_id!
+    if (scene.asset_id === outputAssetId) return scene
+    repairs.push({
+      job_id: job.id,
+      scene_id: scene.id,
+      field: 'asset_id',
+      reason: 'ai_video 镜头已重新绑定到本镜头尚待生成的 output_asset_id。',
+    })
+    return { ...scene, asset_id: outputAssetId }
+  })
   const audio = spec.audio?.filter((clip) => !unsupportedAudioAssets.has(clip.asset_id))
   const nextSpec = {
     ...spec,
+    ...(normalizedScenes.some((scene, index) => scene !== spec.scenes[index]) ? { scenes: normalizedScenes } : {}),
     ...(assets.length !== spec.assets.length ? { assets } : {}),
     ...(audio?.length !== spec.audio?.length ? { audio } : {}),
     ...(material_jobs.length !== spec.material_jobs.length || repairs.some((repair) => repair.field === 'prompt' || repair.field === 'status') ? { material_jobs } : {}),
@@ -555,7 +579,7 @@ export function buildV2TimelinePlannerPrompt(
     '- 只返回符合当前 JSON Schema 的 JSON，不输出解释、Markdown、代码或执行命令。',
     `- schema_version 必须是 "${REMOTION_TIMELINE_SPEC_SCHEMA_VERSION}"；字段名、枚举和 ID 保持英文协议形式。`,
     '- 不得填写 planning_gaps、执行回执或虚假完成状态。新建 generate_video 任务只能是 planned，完成状态由服务端维护。',
-    '- 只能引用素材目录和组件目录中提供的 ID。assets[].src 必须逐字复制权威素材目录中的 src；不得改写或编造 URL、input_image_url 或 ID。',
+    '- 只能引用素材目录和组件目录中提供的 ID。素材目录中的 id 就是 assets[].id，使用素材时整行复制，不得另建别名；input_asset_id 必须使用同一个素材 ID。assets[].src 必须逐字复制权威素材目录中的 src；不得改写或编造 URL、input_image_url 或 ID。',
     '- creative_brief.direction 只表达全片创作方向；material_job.prompt 只表达当前镜头的具体主体、环境、光线、镜头运动和动作。',
     '- creative_brief.applied_preferences 只表达本轮实际采用的 recalled_user_preferences 原句；仅召回但未采用的偏好不得写入。',
     '- 文件名、内部 ID、布局约束和规划说明不得成为成片可见文字；除非用户明确要求逐字展示，否则上屏字段只能写观众文案。',
@@ -566,7 +590,7 @@ export function buildV2TimelinePlannerPrompt(
     '',
     '真实画面、素材与生成规则',
     '- 缺失的真实动态画面使用 ai_video + generate_video；remotion_card 只用于有意设计的文字或动态图形画面，不得冒充缺失的真实镜头。',
-    '- generate_video prompt 应具体描述主体、环境、光线、镜头运动和动作。assets 只包含已有且 src 非空的可渲染资产；ai_video scene 在生成前引用 material_job.output_asset_id，不伪造 asset。',
+    '- generate_video prompt 应具体描述主体、环境、光线、镜头运动和动作。assets 只包含已有且 src 非空的可渲染资产；ai_video 的 scene.asset_id 在生成前必须等于对应 material_job.output_asset_id，现有素材 ID 不得替代，也不得把尚未生成的 output_asset_id 写入 assets。',
     '- 没有真实音频素材时，只在 notes 描述音乐策略，不创建空 audio 或伪生成任务。',
     '- 用户明确指定镜头数时按该数量规划；用户明确要求使用全部素材时，每个可视素材都必须进入方案。用户没有限制镜头数时，多张图片优先分别作为主镜头，最多 12 个镜头。',
     ...(hasImageContext
@@ -1221,6 +1245,8 @@ function timelineFieldRepairPrompt(input: {
   return [
     'Correct only the fields implicated by the validation error below.',
     'Use only server-provided asset IDs and remove or replace rejected references when the error requires it.',
+    'A catalog id is the assets[].id itself, not an alias. Copy that id unchanged into assets[] and use the same id for input_asset_id.',
+    'For ai_video, scene.asset_id must remain equal to its generate_video job output_asset_id. Never replace it with the input image id or add the unresolved output id to assets[].',
     `Server-owned asset catalog (IDs and types only): ${JSON.stringify(input.assets)}`,
     input.outputContract.kind === 'fragment'
       ? 'Preserve fields in the fragment that are unrelated to the validation error.'
