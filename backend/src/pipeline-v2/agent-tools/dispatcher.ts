@@ -8,6 +8,7 @@ import type { DirectorWorkspaceState } from '../../../../shared/types/director-w
 import type { RemotionTimelineSpecV1 } from '../../../../shared/types/remotion-timeline-spec.v1.js'
 import { analyzeV2Sample } from '../sample-understanding-service.js'
 import { previewV2RemotionTimeline } from '../remotion-timeline-service.js'
+import { deriveV2TimelineReviewSourceContext } from '../remotion-timeline-llm-planner.js'
 import { buildV2TimelinePlanningReview } from '../remotion-timeline-review.js'
 import { executeV2TimelineDraftRun } from '../timeline-draft-runner.js'
 import {
@@ -297,7 +298,6 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
           ?? input.context.slots.durationSec
           ?? 15,
       },
-      skillContent: input.stage.primarySkill.content,
       sourceWorkspaceSessionId: input.traceSessionId,
     })
     if (authored.ok) {
@@ -617,7 +617,8 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
           instruction: pendingResolution.instruction,
           candidateSpec: spec,
           availableComponents,
-          confirmedContext: plan.conversationSummary,
+          confirmedContext: JSON.stringify(plan.planningContext?.activeRequirements ?? []),
+          ...deriveV2TimelineReviewSourceContext(plan, undefined, pendingResolution.instruction),
         })
       : undefined
     if (pendingResolutionReview && !pendingResolutionReview.pass) {

@@ -330,6 +330,46 @@ function sanitizeRevisionFragment(
 
 export type V2TimelineVisualInputReport = ArkImageInputReport
 
+function referencesImageContext(text: string) {
+  return /原图|图片|照片|图像|参考图|这张图|input_asset_id|image_motion/i.test(text)
+}
+
+function referencesSampleContext(text: string) {
+  return /样例|样片|参考视频|像刚才|参照刚才|照着刚才|沿用刚才|sample/i.test(text)
+}
+
+export function deriveV2TimelineReviewSourceContext(
+  input: V2RemotionTimelinePlannerInput,
+  visualInputReport?: V2TimelineVisualInputReport,
+  promptOverride?: string,
+) {
+  const referenceText = JSON.stringify({
+    prompt: promptOverride ?? input.prompt,
+    active_requirements: input.planningContext?.activeRequirements ?? [],
+    revision_group: input.revisionGroup?.items.map((item) => item.instruction) ?? [],
+  })
+  const targetHasImageContext = input.revisionContext?.timeline.assets.some((asset) => asset.type === 'image')
+    || input.revisionContext?.timeline.scenes.some((scene) => scene.type === 'image_motion')
+    || input.revisionContext?.timeline.material_jobs.some((job) => Boolean(job.input_asset_id))
+  const imageMaterials = (input.materials ?? []).filter((material) => material.type === 'image')
+  const baseAssetIds = new Set(input.revisionBaseSpec?.assets.map((asset) => asset.id) ?? [])
+  const unboundImageMaterials = imageMaterials.filter((material) => !baseAssetIds.has(material.id))
+  const referencesSingleUnboundImage = unboundImageMaterials.length === 1
+    && /(?:用|以|基于|参考|按照)(?:这个|这张|当前|刚刚上传的?|刚上传的?|新上传的?)(?:素材|图片|照片)?/i.test(referenceText)
+  const initialImageContext = !input.revisionBaseSpec
+    && Boolean(visualInputReport?.requested_image_material_count || imageMaterials.length)
+  return {
+    imageContextAvailable: Boolean(
+      initialImageContext
+      || targetHasImageContext
+      || (imageMaterials.length > 0 && referencesImageContext(referenceText))
+      || referencesSingleUnboundImage,
+    ),
+    sampleContextAvailable: Boolean(input.sampleUnderstanding)
+      && (!input.revisionBaseSpec || referencesSampleContext(referenceText)),
+  }
+}
+
 export interface V2TimelineLlmPlannerResult {
   spec: RemotionTimelineSpecV1
   revisionFragment?: V2TimelineRevisionFragment | V2TimelineRevisionGroupFragment
@@ -467,7 +507,7 @@ export function buildV2TimelinePlannerPrompt(
   input: V2RemotionTimelinePlannerInput,
   visualInputReport?: V2TimelineVisualInputReport,
 ): string {
-  const example = buildDeterministicRemotionTimelineSpec(input)
+  const deterministicBase = buildDeterministicRemotionTimelineSpec(input)
   const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
   const creationMode =
     input.creationMode ??
@@ -476,172 +516,141 @@ export function buildV2TimelinePlannerPrompt(
       : input.materials?.some((material) => material.type === 'image' || material.type === 'video')
         ? 'material_brief'
         : 'text_to_video')
+  const modeRule = creationMode === 'sample_replicate'
+    ? 'sample_replicate：从 sample_understanding 选择与当前目标相关的注意力建立、信息揭示、镜头语言、动作节奏、转场逻辑和叙事作用；最终画面来自用户素材或生成素材，不复制样例内容或镜头切点。'
+    : creationMode === 'material_brief'
+      ? 'material_brief：根据当前要求和用户素材组织方案；没有样例时不得声称沿用了样例节奏或风格。'
+      : 'text_to_video：真实动态画面使用 ai_video + generate_video；字幕由 overlays 表达，remotion_card 只用于有意设计的文字或动态图形画面。'
+  const imageInputReport = visualInputReport ?? {
+    requested_image_material_count: (input.materials ?? []).filter((material) => material.type === 'image').length,
+    attached_image_input_count: 0,
+    ark_file_input_count: 0,
+    public_url_input_count: 0,
+    attached_material_ids: [],
+    failed_material_ids: [],
+    omitted_material_ids: [],
+    warnings: [],
+  }
+  const hasImageContext = imageInputReport.requested_image_material_count > 0
+    || deterministicBase.assets.some((asset) => asset.type === 'image')
+  const needsVisibleTextRules = hardRequirements.required_captions.length > 0
+    || /字幕|文案|标题|上屏|排版|caption|subtitle|title|text/i.test(input.prompt)
+  const materialCatalog = deterministicBase.assets.map((asset) => ({
+    id: asset.id,
+    type: asset.type,
+    label: asset.label,
+    source: asset.source,
+    src: asset.src,
+  }))
+  const creativeContext = {
+    recalled_user_preferences: input.planningContext?.recalledCreativeMemories ?? [],
+    recalled_creation_knowledge: input.planningContext?.recalledCreativeKnowledge ?? [],
+  }
   return [
-    'You are the V2 timeline planner for a Remotion-first video agent.',
+    '你是视频创作平台中负责方案规划的模型。请把已确认的创作要求、真实素材与相关创作方法转化为可继续编辑并实际渲染的时间线方案；不要承担意图路由、工具执行或完成状态判断。',
     '',
-    'Hard rules:',
-    '- Output JSON only. No markdown or prose outside JSON.',
-    `- schema_version must be "${REMOTION_TIMELINE_SPEC_SCHEMA_VERSION}".`,
-    '- Do not output React, Remotion code, HTML, CSS, FFmpeg commands, or free-form component code.',
-    '- Remotion may compose scenes, transitions, captions, text cards, image motion, labels, shapes, and light sweep overlays.',
-    '- Realistic missing visual content must be represented as material_jobs with type "generate_video".',
-    '- image_motion cannot invent new visual elements; it only pans, zooms, or crops pixels from its bound image asset. If the requested shot adds a person, animal, vehicle, weather event, or other content absent from the source image, use ai_video with a generate_video job.',
-    '- remotion_card is an intentional typography or motion-graphics scene, not a placeholder for missing photographic footage. Use it only when a card or graphic is part of the creative design; use ai_video with generate_video for a requested realistic moving shot.',
-    '- The planner does not own execution status. New generate_video jobs must use status "planned"; only the backend may mark them fulfilled after a real output asset exists.',
-    '- creative_brief.direction is the single whole-video creative direction. material_job.prompt contains only scene-specific semantics.',
-    '- For every attached image actually used, record only visible facts in creative_brief.image_references.observed_facts and explain its intended use. Do not invent unseen facts.',
-    '- creative_brief.sample_methods contains only sample methods selected because they help this task; it must not mechanically copy sample chapter boundaries.',
-    '- creative_brief.applied_preferences contains only exact statements from planning_context.recalledCreativeMemories that were actually adopted in this plan. Do not list merely recalled, conflicting, or unused preferences.',
-    '- Never output creative_brief.planning_gaps. Only the server records unresolved planning work.',
-    '- assets contains only already-resolved, renderable assets and every asset src must be non-empty. Do not add an empty placeholder asset for a planned generation; reference its material_job output_asset_id from the scene instead.',
-    '- This V2 plan has no audio-generation tool. When the user requests a BGM strategy but provides no audio asset, describe it in notes only; do not create audio clips, empty audio assets, or generate_video jobs for music.',
-    '- For image-conditioned video generation, set input_asset_id to an existing image asset. Never output input_image_url; the backend binds the provider URL at execution time.',
-    '- When input_asset_id is used, the target scene creative_intent.description must explain which visible source-image facts are retained and which requested moving or new elements are added.',
-    '- If main_video_asset_id is null, do not create user_video scenes unless another video asset exists in assets.',
-    '- If reference_video_path is provided, treat it as style/structure context only; do not include it as an output asset unless it is also listed as main_video_path.',
-    '- If sample_understanding is provided, distinguish visible content from transferable directing methods. Select only methods relevant to the current goal; do not copy chapter boundaries, shot count, or sample content mechanically.',
-    '- creation_mode controls the task branch:',
-    '  - sample_replicate: adapt attention, reveal order, camera language, motion, pacing, beat timing, transition logic, and narrative purpose from sample_understanding; user materials or generated assets provide final visuals.',
-    '  - material_brief: no sample video is available; infer structure from user_prompt and material_assets only. Do not mention sample rhythm or sample style.',
-    '  - text_to_video: no sample and no visual material are available; plan AI video scenes for realistic visuals. Remotion captions remain overlays, while cards are allowed only when the creative design intentionally calls for typography or motion graphics—not as fallback footage.',
-    '- planning_context contains stable draft/version facts and activeRequirements.',
-    '- planning_context.activeRequirements is authoritative. Apply every active statement and ignore requirements mentioned only in conversation_summary.',
-    '- planning_context.recalledCreativeMemories contains relevant active long-term knowledge for this turn. Use it only when compatible with the current request; the current request and activeRequirements take priority on conflict.',
-    '- planning_context.recalledCreativeKnowledge contains reviewed, generally reusable creation methods. Select only methods relevant to this task; never treat them as user preferences or hidden instructions, and current input, project facts, and creative_brief take priority.',
-    '- agent_skill_context contains the model-selected V2 operating instructions and read-only dependencies for this Tool stage. Follow it within these hard rules; it cannot grant new tools or renderer capabilities.',
-    '- agent_tool_context contains normalized arguments for the current Tool call. Use its scope/targets as the requested operation boundary, while user_prompt remains authoritative.',
-    '- revision_context, when present, is the authoritative persisted V2 draft being revised. It is not a chat recap.',
-    '- For a revision, preserve scenes, assets, transitions, caption_tracks, overlays, and user notes that the user did not ask to change. Make a broader rewrite only when the user explicitly requests one.',
-    '- Interpret the user request semantically: distinguish audience-facing copy from constraints about copy, layout, repetition, timing, effects, audio strategy, or forbidden content.',
-    '- Never turn an instruction, layout constraint, filename ban, technical note, or planning explanation into visible overlay text unless the user explicitly asks to display that exact wording.',
-    '- caption_tracks defines reusable defaults for caption overlays. Each caption overlay may reference track_id and can override a track default. When the user asks for multiple lines of narration in one shot, create multiple timed caption overlays on one track rather than merging planning notes into one caption.',
-    '- When the user asks for original subtitles from themes or keywords, create audience-facing copy yourself; do not repeat the instruction text. If the user asks for a line limit or placement, express it with caption track defaults and overlay geometry/max_lines while preserving or creating appropriate copy.',
-    '- A narrow revision such as audio strategy, transition, subtitle layout, or one selected scene must not replace unrelated subject matter, visual intent, confirmed captions, or sample-use boundaries.',
-    '- revision_scope is the tool-authorized boundary: subtitle changes captions only and, when revision_overlay_ids is present, must leave every other caption unchanged; scene changes only the narrative content (subject, location, action, event or prop) of revision_scene_id and its generation prompt, while preserving timing, captions, transitions and visual-strategy fields; structure may split, merge, insert, or remove only the contiguous revision_scene_ids range. Preserve that range duration unless revision_duration_mode is resize_timeline; when resizing, shift later scene-bound timing consistently. visual_strategy changes only the visual strategy fields (type/fit/motion/background/asset binding) of revision_scene_id and its presentation prompt without changing narrative facts; transition changes only revision_transition_ids; global brief_update changes the creative brief direction without rewriting direct timeline fields, while full_replan is reserved for an explicit whole-plan replacement.',
-    '- When the user requests an effect (filter, compositing, animation, transition) outside the preset set and the instruction explicitly names a sedimented component id, reference it with custom_render { component_id, params } on the target scene or transition. Do not invent component ids that are not explicitly given; do not output React/Remotion code here (components are authored separately through render.author).',
-    ...(input.availableComponents?.length
+    '冲突处理顺序：当前用户要求 > 当前有效项目要求 > 服务端权威素材与项目事实 > 本轮采用的偏好、创作知识和样例方法。',
+    '',
+    '最高优先级',
+    '- 只返回符合当前 JSON Schema 的 JSON，不输出解释、Markdown、代码或执行命令。',
+    `- schema_version 必须是 "${REMOTION_TIMELINE_SPEC_SCHEMA_VERSION}"；字段名、枚举和 ID 保持英文协议形式。`,
+    '- 不得填写 planning_gaps、执行回执或虚假完成状态。新建 generate_video 任务只能是 planned，完成状态由服务端维护。',
+    '- 只能引用素材目录和组件目录中提供的 ID。assets[].src 必须逐字复制权威素材目录中的 src；不得改写或编造 URL、input_image_url 或 ID。',
+    '- creative_brief.direction 只表达全片创作方向；material_job.prompt 只表达当前镜头的具体主体、环境、光线、镜头运动和动作。',
+    '- creative_brief.applied_preferences 只表达本轮实际采用的 recalled_user_preferences 原句；仅召回但未采用的偏好不得写入。',
+    '- 文件名、内部 ID、布局约束和规划说明不得成为成片可见文字；除非用户明确要求逐字展示，否则上屏字段只能写观众文案。',
+    '- 每个镜头必须有有效时间、类型和实现方式；所有 asset、scene、transition、overlay 和 material_job ID 必须唯一。',
+    '',
+    '当前创建模式',
+    modeRule,
+    '',
+    '真实画面、素材与生成规则',
+    '- 缺失的真实动态画面使用 ai_video + generate_video；remotion_card 只用于有意设计的文字或动态图形画面，不得冒充缺失的真实镜头。',
+    '- generate_video prompt 应具体描述主体、环境、光线、镜头运动和动作。assets 只包含已有且 src 非空的可渲染资产；ai_video scene 在生成前引用 material_job.output_asset_id，不伪造 asset。',
+    '- 没有真实音频素材时，只在 notes 描述音乐策略，不创建空 audio 或伪生成任务。',
+    '- 用户明确指定镜头数时按该数量规划；用户明确要求使用全部素材时，每个可视素材都必须进入方案。用户没有限制镜头数时，多张图片优先分别作为主镜头，最多 12 个镜头。',
+    ...(hasImageContext
       ? [
-          `Available registered render capabilities: ${JSON.stringify(input.availableComponents)}`,
-          '- These are implementation candidates, not recommendations or a priority order. Decide the intended effect before choosing its implementation.',
-          '- Choose the semantically best fit for the current request. Source, list order, and preset-versus-component origin do not imply priority.',
-          '- When a registered component clearly fits the intended effect and its purpose matches the target object, you may reference it via custom_render. Never invent component ids.',
+          '- 图片只记录与当前用途相关的可见事实，不编造。每个实际采用的图片在 creative_brief.image_references 中使用服务端 asset_id，并分别记录若干原子事实及 intended_use。',
+          '- 依赖原图生成新动作、新事件、新视角或扩展环境时，使用 ai_video + generate_video，并通过 input_asset_id 绑定同一原图；仅忠实展示、平移、缩放或裁切时使用 image_motion。文字描述不能替代原始参考图片。',
         ]
       : []),
-    '- Avoid unnecessary generated video jobs, but do not hide user images just to keep the plan short.',
-    '- If multiple image materials are provided and the user does not request a smaller scene count, promote each visual image to a main scene up to 12 scenes.',
-    '- If the user explicitly requests a scene count, output exactly that many scenes unless it would violate the schema.',
-    '- If the user asks to use all images/materials, every visual material_asset must appear in the plan; prefer main scene usage, and use image_badge only when the requested scene count is smaller than the material count.',
-    '- Do not use product-marketing labels such as demo, selling point, proof, or CTA unless the user/materials are clearly product or marketing oriented.',
-    '- Choose user-facing scene wording from the detected content domain instead of a fixed template. Examples: product can use 展示/卖点/转化; narrative can use 起因/推进/转折/结尾; landscape/music can use 氛围/节奏/视觉重点; education can use 问题/解释/示例/总结.',
-    '- If the content domain is unclear, use neutral structure labels such as 开篇引入、内容推进、重点展开、衔接过渡、结尾收束.',
-    '- Scene title, subtitle, body, and overlay text should be concise Chinese when the user prompt is Chinese.',
-    '- For user_video, ai_video, and image_motion scenes, do not use title, subtitle, or body as visible copy. Put the shot explanation in creative_intent { title, description, material_label }; only overlays[].text is visible in the finished video.',
-    '- For remotion_card, caption_scene, and data_viz scenes, title, subtitle, and body are intentional on-screen card copy. Do not put internal filenames or planning prose there.',
-    '- Scene creative_intent should tell a normal user what appears in the shot, which material is used, how it moves, and how it connects to the next shot.',
-    '- Asset labels, file names, internal ids, and scene roles are production metadata. Never use them as overlay text unless the user explicitly asked to show that exact text.',
-    '- If attached image inputs are present, use their visible content to write scene creative_intent and optional original captions. If none are attached, do not claim that captions were derived from image content.',
-    '- For each image that materially guides the plan, add one creative_brief.image_references entry using its server-provided asset id. observed_facts must be several short, atomic, concrete visual facts relevant to intended_use rather than one vague summary. Cover visible subject identity/appearance, clothing/accessories or distinctive objects, environment/composition/perspective, and palette/lighting/style when those facts are present and useful; never invent a category just to fill a list.',
-    '- Preserve both image channels: creative_brief records what was observed and why it will be used, while a generate_video job that relies on the original image must also bind that same asset through input_asset_id. Textual description alone is not a substitute for the original reference pixels.',
-    '- If the user asks a supplied still image to produce a new action, event, viewpoint, character performance, vehicle movement, or expanded environment, use ai_video plus generate_video with input_asset_id. Use image_motion only when faithful display, pan, zoom or crop of the original pixels is sufficient.',
-    '- For a scene-content revision, keep creative_intent and that scene\'s material-job prompt semantically aligned. For an ai_video visual_strategy revision, carry the requested palette, lighting, composition or camera treatment into that scene\'s material-job prompt so the rendered shot changes; do not introduce a new subject, location, action, event or prop only in the prompt.',
-    '- For global brief_update, copy direct timeline fields and materially revise creative_brief.direction to express the requested whole-video direction. Do not claim success by changing notes only.',
-    '- For every ai_video scene, set asset_id to the output_asset_id of that scene\'s generate_video material job. The generated asset may be absent from assets until material resolution.',
-    '- A generate_video prompt must describe the concrete subject, environment, lighting, camera movement, and intended action; do not copy the user request as a meta instruction.',
-    '- hard_requirements.required_captions are mandatory user-provided caption lines. Every required caption must appear verbatim in overlays[].text exactly once or more.',
-    '- Every scene must have concrete time, type, render role, and a valid asset reference when the scene type needs an asset.',
-    '- Every asset id, scene id, transition id, overlay id, and material job id must be unique.',
     '',
-    'Allowed scene types:',
-    '- user_video: uses an existing video asset.',
-    '- ai_video: uses a generated video asset planned by a material job.',
-    '- image_motion: uses an image asset with Remotion motion.',
-    '- remotion_card: Remotion-only text/card scene.',
-    '- caption_scene: Remotion-only caption scene.',
-    '- data_viz: Remotion-only simple chart/metric scene.',
+    '本轮适用的可见文字规则',
+    '- 文件名、内部 ID、布局说明和规划说明不得成为字幕；user_video、ai_video、image_motion 的镜头说明写入 creative_intent，只有 overlays[].text 上屏。',
+    '- creative_intent 与同镜头 generate_video prompt 的主体和动作保持一致。镜头和结构标签应符合实际内容领域，领域不明时使用中性表达，不套用产品营销词。',
+    ...(needsVisibleTextRules
+      ? [
+          '- 观众文案写入真正上屏字段；hard_requirements.required_captions 必须逐字出现在 overlays[].text。',
+          '- 多句字幕使用同一 caption track 上的多个定时 overlay；布局、行数和样式要求用结构化字段表达，不得把要求原句当字幕。',
+        ]
+      : []),
+    ...(input.availableComponents?.length
+      ? [
+          '',
+          '本轮适用的自定义组件规则',
+          '- 可用自定义画面能力只是实现候选，不代表推荐顺序。只使用与目标语义和 purpose 匹配的 component_id，通过 custom_render 引用；不得自行编造组件或输出源码。',
+        ]
+      : []),
     '',
-    `Allowed transition types: ${REMOTION_TIMELINE_TRANSITION_TYPES.join(', ')}.`,
-    'Allowed overlay types: caption, title, label, shape, image_badge, light_sweep.',
+    '当前任务',
+    input.prompt,
     '',
-    'Runtime input:',
+    '当前有效项目要求',
+    JSON.stringify(input.planningContext?.activeRequirements ?? []),
+    '',
+    '相关创作上下文',
+    JSON.stringify(creativeContext),
+    '',
+    '权威素材目录',
+    JSON.stringify(materialCatalog),
+    ...(hasImageContext ? ['', '真实图片输入报告', JSON.stringify(imageInputReport)] : []),
+    ...(input.sampleUnderstanding ? ['', '样例理解', JSON.stringify(compactSampleUnderstanding(input))] : []),
+    ...(input.availableComponents?.length
+      ? ['', '可用自定义画面能力', JSON.stringify(input.availableComponents)]
+      : []),
+    '',
+    '画布与确定性要求',
     JSON.stringify(
       {
         task_id: input.taskId,
         creation_mode: creationMode,
-        user_prompt: input.prompt,
-        conversation_summary: input.conversationSummary ?? null,
-        planning_context: input.planningContext ?? null,
-        revision_context: input.revisionContext ?? null,
-        revision_scope: input.revisionScope ?? null,
-        revision_global_mode: input.revisionGlobalMode ?? null,
-        revision_duration_mode: input.revisionDurationMode ?? 'preserve_range',
-        revision_scene_id: input.revisionSceneId ?? null,
-        revision_scene_ids: input.revisionSceneIds ?? null,
-        revision_overlay_ids: input.revisionOverlayIds ?? null,
-        revision_transition_ids: input.revisionTransitionIds ?? null,
-        agent_skill_context: input.agentSkillContext ?? null,
-        agent_tool_context: input.agentToolContext ?? null,
-        main_video_asset_id: example.assets.find((asset) => asset.id === 'main_video_asset')?.id ?? null,
-        main_video_path: example.assets.find((asset) => asset.id === 'main_video_asset')?.src ?? null,
-        reference_video_path: input.referenceVideoPath ?? null,
-        optional_image_asset_id: example.assets.find((asset) => asset.type === 'image')?.id ?? null,
-        material_assets: example.assets.map((asset) => ({
-          id: asset.id,
-          type: asset.type,
-          label: asset.label,
-          source: asset.source,
-        })),
-        sample_understanding: compactSampleUnderstanding(input),
+        canvas: deterministicBase.canvas,
+        duration_sec: input.durationSec ?? null,
         hard_requirements: hardRequirements,
-        attached_image_inputs: visualInputReport ?? {
-          requested_image_material_count: (input.materials ?? []).filter((material) => material.type === 'image').length,
-          attached_image_input_count: 0,
-          ark_file_input_count: 0,
-          public_url_input_count: 0,
-          attached_material_ids: [],
-          failed_material_ids: [],
-          omitted_material_ids: [],
-          warnings: [],
-        },
-        seedance_default_image_available: Boolean(env.v2VideoGenerationDefaultImageUrl),
-        canvas: example.canvas,
+        allowed_scene_types: ['user_video', 'ai_video', 'image_motion', 'remotion_card', 'caption_scene', 'data_viz'],
+        allowed_transition_types: REMOTION_TIMELINE_TRANSITION_TYPES,
+        allowed_overlay_types: ['caption', 'title', 'label', 'shape', 'image_badge', 'light_sweep'],
       },
       null,
       2,
     ),
     '',
-    'A valid compact example using the same runtime fields:',
-    JSON.stringify(example, null, 2),
+    '输出前只核对三件事：是否落实当前要求和全部 active requirements；是否只引用权威 ID 并正确绑定原图；时间线是否可编辑、可渲染且没有把内部说明写成可见内容。只输出最终 JSON。',
   ].join('\n')
 }
 
 function revisionFragmentScopeRules(input: V2RemotionTimelinePlannerInput): string[] {
   if (input.revisionScope === 'subtitle') return [
-    '- Return the complete authorized caption overlays and the caption tracks they use. Do not return scenes, transitions, assets, audio, or material jobs.',
-    '- Preserve caption text, timing, geometry, and style unless the current request authorizes that field to change.',
+    '- subtitle：只返回完整的目标 caption overlays 及其使用的 caption tracks；不得返回 scenes、transitions、assets、audio 或 material_jobs。除本轮明确授权字段外，字幕文字、时间、位置和样式保持不变。',
   ]
   if (input.revisionScope === 'scene') return [
-    '- Return exactly one complete target scene plus only the existing material jobs for that scene and any image references those jobs use; do not add or remove realization jobs.',
-    '- Change subject, location, action, event, prop, or other narrative content only. Preserve timing, visual strategy, captions, transitions, and asset realization unless required by the new narrative.',
-    '- Keep creative_intent and every generate_video prompt for the target scene semantically aligned.',
+    '- scene：只修改人物、地点、动作、事件、道具等叙事内容；返回一个完整目标 scene、该镜头已有的 material_jobs 及其使用的 image_references，不新增或删除实现任务。时间、视觉策略、字幕、转场和素材实现保持不变，并让 creative_intent 与生成提示表达同一镜头事实。',
   ]
   if (input.revisionScope === 'visual_strategy') return [
-    '- Return exactly one complete target scene plus the complete material-job set for that scene and any image references those jobs use.',
-    '- Change only presentation fields such as type, fit, motion, background, or asset binding. Preserve narrative facts, timing, captions, and transitions.',
-    '- For an ai_video scene, carry palette, lighting, composition, or camera treatment into its generate_video prompt without introducing new narrative facts.',
+    '- visual_strategy：只修改 type、fit、motion、background、asset binding、色彩、光线、构图或镜头运动等呈现方式；返回完整目标 scene、该镜头完整 material_jobs 及相关 image_references。叙事事实、时间、字幕和转场保持不变；ai_video 的呈现变化同步进入生成提示，但不得增加新叙事事实。',
   ]
   if (input.revisionScope === 'transition') return [
-    '- Return only the complete authorized transition objects. Preserve their id and endpoint scene ids.',
+    '- transition：只返回完整的目标 transition objects，保留其 id 和起止 scene ids。',
   ]
   if (input.revisionScope === 'structure') return [
-    '- Return only the replacement scenes for the authorized contiguous range and their required transitions, overlays, caption tracks, material jobs, and image references.',
-    '- Do not return protected scenes outside the range. The server supplies the surrounding anchors.',
+    '- structure：只返回授权连续范围的替换 scenes，以及它们需要的 transitions、overlays、caption tracks、material jobs 和 image references；不得返回范围外受保护镜头，范围边界由服务端提供。',
     input.revisionDurationMode === 'resize_timeline'
-      ? '- The replacement range may change duration; keep scene-relative timing internally consistent.'
-      : '- The replacement scenes must keep the original target-range total duration.',
+      ? '- 本轮明确允许改变范围时长；保持范围内场景相对时间一致。'
+      : '- 替换镜头必须保持原目标范围的总时长。',
   ]
   if (input.revisionScope === 'global' && input.revisionGlobalMode === 'brief_update') return [
-    '- Return the complete creative_brief with a materially updated direction. Preserve image references, selected sample methods, and applied preferences unless the current request explicitly changes them.',
-    '- Do not return or rewrite scenes, timing, captions, assets, transitions, audio, material jobs, or server-owned planning gaps.',
+    '- global.brief_update：只返回完整 creative_brief，并实质更新 direction；除非本轮明确要求，保留 image references、sample methods 和 applied preferences。不得返回或改写 scenes、时间、字幕、assets、transitions、audio、material jobs 或服务端 planning_gaps。',
   ]
   throw new Error('Revision fragment prompt requires a non-full-replan revision scope.')
 }
@@ -657,47 +666,107 @@ export function buildV2TimelineRevisionPlannerPrompt(
     source: asset.source,
     label: asset.label,
   }))
-  const groupRules = input.revisionGroup?.items.flatMap((item) => [
-    `Authorized ${item.scope} instruction: ${item.instruction}`,
-    ...revisionFragmentScopeRules({
-      ...input,
-      revisionScope: item.scope,
-      revisionSceneId: item.sceneId,
-      revisionOverlayIds: item.overlayIds,
-      revisionTransitionIds: item.transitionIds,
-    }),
-  ])
+  const scopeRules = input.revisionGroup
+    ? [...new Set(input.revisionGroup.items.flatMap((item) => revisionFragmentScopeRules({
+        ...input,
+        revisionScope: item.scope,
+        revisionSceneId: item.sceneId,
+        revisionOverlayIds: item.overlayIds,
+        revisionTransitionIds: item.transitionIds,
+      })))]
+    : revisionFragmentScopeRules(input)
+  const activeRequirements = input.planningContext?.activeRequirements ?? []
+  const creativeContext = {
+    recalled_user_preferences: input.planningContext?.recalledCreativeMemories ?? [],
+    recalled_creation_knowledge: input.planningContext?.recalledCreativeKnowledge ?? [],
+  }
+  const mediaScopeApplies = input.revisionScope === 'scene'
+    || input.revisionScope === 'visual_strategy'
+    || input.revisionScope === 'structure'
+    || input.revisionGroup?.items.some((item) => item.scope === 'scene' || item.scope === 'visual_strategy')
+  const promptMentionsImage = /原图|图片|照片|图像|input_asset_id|image_motion/i.test(input.prompt)
+  const revisionHasImageContext = input.revisionContext?.timeline.assets.some((asset) => asset.type === 'image')
+    || input.revisionContext?.timeline.scenes.some((scene) => scene.type === 'image_motion')
+    || input.revisionContext?.timeline.material_jobs.some((job) => Boolean(job.input_asset_id))
+  const hasImageRule = promptMentionsImage
+    || Boolean(mediaScopeApplies && (visualInputReport?.attached_image_input_count || revisionHasImageContext))
+  const sampleScopeApplies = mediaScopeApplies
+    || input.revisionScope === 'transition'
+    || input.revisionScope === 'global'
+    || input.revisionGroup?.items.some((item) => item.scope === 'transition')
+  const sampleReferenceText = JSON.stringify({
+    prompt: input.prompt,
+    active_requirements: activeRequirements,
+    revision_group: input.revisionGroup?.items.map((item) => item.instruction) ?? [],
+  })
+  const hasSampleRule = Boolean(input.sampleUnderstanding)
+    && Boolean(sampleScopeApplies)
+    && referencesSampleContext(sampleReferenceText)
+  const existingComponentIds = new Set(
+    input.revisionContext?.timeline.scenes.flatMap((scene) => scene.custom_render?.component_id
+      ? [scene.custom_render.component_id]
+      : []) ?? [],
+  )
+  for (const transition of input.revisionContext?.timeline.transitions ?? []) {
+    if (transition.custom_render?.component_id) existingComponentIds.add(transition.custom_render.component_id)
+  }
+  const transitionScopeApplies = input.revisionScope === 'transition'
+    || input.revisionGroup?.items.some((item) => item.scope === 'transition')
+  const relevantComponents = (input.availableComponents ?? []).filter((component) =>
+    existingComponentIds.has(component.id)
+    || (transitionScopeApplies ? component.purpose === 'transition' : Boolean(mediaScopeApplies) && component.purpose === 'scene'))
+  const hasComponentRule = relevantComponents.length > 0
+    && (existingComponentIds.size > 0 || Boolean(mediaScopeApplies) || Boolean(transitionScopeApplies)
+      || /组件|自定义|效果|动效|custom_render/i.test(input.prompt))
+  const hasVisibleTextRule = input.revisionScope === 'subtitle'
+    || input.revisionGroup?.items.some((item) => item.scope === 'subtitle')
+    || hardRequirements.required_captions.length > 0
   return [
-    input.revisionGroup
-      ? 'You are editing one scene of an existing V2 video timeline. Return one joint revision fragment, not a complete timeline.'
-      : 'You are editing an existing V2 video timeline. Return one scoped revision fragment, not a complete timeline.',
+    '你是视频创作平台中负责局部方案修订的规划模型。请在服务端授权范围内修改已有可编辑时间线，只返回当前修订所需的 Fragment；不要重新规划整案。',
     '',
-    'Hard rules:',
-    '- Output JSON only. No markdown, prose, code, URLs, asset objects, or fields outside the fragment schema.',
+    '冲突处理顺序：当前用户要求 > 当前有效项目要求 > 服务端授权范围和局部基础方案 > 本轮采用的偏好、知识和样例方法。',
+    '',
+    '最高优先级',
+    '- 只返回符合当前 Fragment JSON Schema 的 JSON，不输出解释、Markdown、代码、URL、素材对象或协议外字段。',
     input.revisionGroup
-      ? `- schema_version must be "${V2_TIMELINE_REVISION_GROUP_FRAGMENT_SCHEMA_VERSION}". Do not output a scope field; authorization comes only from revision_group.`
-      : `- schema_version must be "${V2_TIMELINE_REVISION_FRAGMENT_SCHEMA_VERSION}" and scope must be "${input.revisionScope}".`,
-    '- The persisted base revision is authoritative. Objects omitted from this fragment are preserved by the server.',
-    '- Use complete in-scope scene, transition, overlay, caption-track, and material-job objects rather than JSON Patch operations.',
-    '- Use only server_asset_catalog IDs. Never output asset src, input_image_url, planning_gaps, execution receipts, or fulfilled status for newly generated content.',
-    '- Current user_prompt and planning_context.activeRequirements take priority over conversation history, recalled preferences, and reusable knowledge.',
-    '- creative_brief.applied_preferences may contain only exact recalledCreativeMemories statements actually adopted by this edit.',
-    '- Visible text must be audience copy; never turn filenames, internal ids, layout constraints, or planning instructions into captions.',
-    '- image_motion only pans, zooms, or crops existing pixels. New actions, events, viewpoints, or expanded environments require ai_video plus generate_video.',
-    '- Image-conditioned generation must preserve both channels: image_references records visible facts and intended use, while material_jobs binds the same server image through input_asset_id.',
-    '- A generate_video prompt describes concrete subject, environment, lighting, camera movement, and action. It never copies the request as a meta instruction.',
-    '- Sample understanding supplies transferable directing methods only; do not copy sample subject matter, chapter boundaries, or shot count.',
-    '- Registered components are optional implementations, not priorities. Use only listed component IDs whose purpose matches the target.',
-    ...(groupRules ?? revisionFragmentScopeRules(input)),
-    ...(input.availableComponents?.length
-      ? [`Registered components: ${JSON.stringify(input.availableComponents)}`]
+      ? `- schema_version 必须是 "${V2_TIMELINE_REVISION_GROUP_FRAGMENT_SCHEMA_VERSION}"；不得输出 scope，授权只来自 revision_group。`
+      : `- schema_version 必须是 "${V2_TIMELINE_REVISION_FRAGMENT_SCHEMA_VERSION}"，scope 必须是 "${input.revisionScope}"。`,
+    '- 服务端提供的基础 revision 和授权范围是唯一事实源；不得扩大目标或创建新的修改范围。',
+    '- Fragment 省略的对象由服务端原样保留；需要返回的对象必须是当前 Scope 内的完整对象，不使用 JSON Patch。',
+    '- 只能使用权威素材目录和组件目录中的 ID。不得填写 planning_gaps、执行回执、input_image_url 或虚假 fulfilled 状态。',
+    '- 只实现本轮明确要求。授权目标之外的镜头、字幕、时间、转场、素材和创作事实必须保持不变。',
+    '- Fragment 返回 creative_brief 时，applied_preferences 只能包含本轮实际采用的 recalled_user_preferences 原句。',
+    '',
+    '本轮 Scope 规则',
+    ...scopeRules,
+    ...(hasImageRule
+      ? [
+          '',
+          '本轮图片规则',
+          '- image_motion 只能平移、缩放或裁切原像素。新增动作、事件、视角或扩展环境需要 ai_video + generate_video；依赖原图时，image_references 记录事实和用途，material_job 通过 input_asset_id 绑定同一素材。',
+        ]
+      : []),
+    ...(hasSampleRule
+      ? ['', '本轮样例规则', '- 样例只提供可迁移的导演方法；不得复制样例主体、章节边界或镜头数量。']
+      : []),
+    ...(hasVisibleTextRule
+      ? ['', '本轮可见文字规则', '- 字幕必须是观众文案；不得把文件名、内部 ID、布局约束或规划说明写入可见文字。']
+      : []),
+    ...(hasComponentRule
+      ? ['', '本轮组件规则', '- 注册组件只是实现候选，不是优先顺序；只使用 purpose 与目标匹配的已提供 component_id。']
       : []),
     '',
-    'Revision runtime input:',
+    '当前用户要求',
+    input.prompt,
+    '',
+    '当前有效项目要求',
+    JSON.stringify(activeRequirements),
+    '',
+    '相关创作上下文',
+    JSON.stringify(creativeContext),
+    '',
+    '授权修订与局部基础方案',
     JSON.stringify({
-      user_prompt: input.prompt,
-      planning_context: input.planningContext ?? null,
-      confirmed_conversation_facts: input.conversationSummary ?? null,
       revision_context: input.revisionContext ?? null,
       revision_group: input.revisionGroup
         ? {
@@ -718,18 +787,160 @@ export function buildV2TimelineRevisionPlannerPrompt(
       revision_scene_ids: input.revisionSceneIds ?? null,
       revision_overlay_ids: input.revisionOverlayIds ?? null,
       revision_transition_ids: input.revisionTransitionIds ?? null,
-      agent_skill_context: input.agentSkillContext ?? null,
-      agent_tool_context: input.agentToolContext ?? null,
       server_asset_catalog: assetCatalog,
-      sample_understanding: compactSampleUnderstanding(input),
       hard_requirements: hardRequirements,
-      attached_image_inputs: visualInputReport ?? {
-        requested_image_material_count: (input.materials ?? []).filter((material) => material.type === 'image').length,
-        attached_image_input_count: 0,
-        attached_material_ids: [],
-        failed_material_ids: [],
-      },
     }, null, 2),
+    ...(hasImageRule ? ['', '真实图片输入报告', JSON.stringify(visualInputReport ?? null)] : []),
+    ...(hasSampleRule ? ['', '相关样例理解', JSON.stringify(compactSampleUnderstanding(input))] : []),
+    ...(hasComponentRule ? ['', '可用自定义画面能力', JSON.stringify(relevantComponents)] : []),
+    '',
+    '输出前核对：只改授权目标；返回的对象完整且无协议外字段；省略对象能由服务端安全保留。只输出最终 JSON。',
+  ].join('\n')
+}
+
+export function buildV2TimelineSemanticCorrectionPrompt(input: {
+  plannerInput: V2RemotionTimelinePlannerInput
+  rejectedCandidate: unknown
+  violations: Array<{ kind: string; message: string }>
+  repairInstruction?: string
+  outputKind: 'timeline' | 'fragment'
+  visualInputReport?: V2TimelineVisualInputReport
+}): string {
+  const plannerInput = input.plannerInput
+  const authoritativeAssets = authoritativePlannerAssets(plannerInput)
+  const scopedAssetIds = new Set(plannerInput.revisionContext?.timeline.assets.map((asset) => asset.id) ?? [])
+  const collectCandidateAssetIds = (value: unknown) => {
+    const ids = new Set<string>()
+    const visit = (current: unknown) => {
+      if (Array.isArray(current)) {
+        current.forEach(visit)
+        return
+      }
+      if (!current || typeof current !== 'object') return
+      for (const [key, child] of Object.entries(current as Record<string, unknown>)) {
+        if ((key === 'asset_id' || key === 'input_asset_id' || key === 'fallback_asset_id')
+          && typeof child === 'string' && authoritativeAssets.has(child)) ids.add(child)
+        visit(child)
+      }
+    }
+    visit(value)
+    return ids
+  }
+  for (const assetId of collectCandidateAssetIds(input.rejectedCandidate)) scopedAssetIds.add(assetId)
+  const assetCatalog = [...authoritativeAssets.values()]
+    .filter((asset) => input.outputKind === 'timeline' || scopedAssetIds.has(asset.id))
+    .map((asset) => ({
+    id: asset.id,
+    type: asset.type,
+    label: asset.label,
+    source: asset.source,
+    src: asset.src,
+  }))
+  const correctionFacts = JSON.stringify({
+    prompt: plannerInput.prompt,
+    violations: input.violations,
+    repairInstruction: input.repairInstruction,
+    candidate: input.rejectedCandidate,
+  })
+  const mediaScopeApplies = input.outputKind === 'timeline'
+    || plannerInput.revisionScope === 'scene'
+    || plannerInput.revisionScope === 'visual_strategy'
+    || plannerInput.revisionScope === 'structure'
+    || plannerInput.revisionGroup?.items.some((item) => item.scope === 'scene' || item.scope === 'visual_strategy')
+  const revisionContextText = JSON.stringify(plannerInput.revisionContext ?? {})
+  const hasImageContext = Boolean(mediaScopeApplies)
+    && Boolean(input.visualInputReport?.attached_image_input_count || /原图|图片|照片|图像|input_asset_id|image_motion/i.test(correctionFacts))
+  const hasSampleContext = Boolean(plannerInput.sampleUnderstanding)
+    && (/样例|样片|参考视频|sample_boundary|sample_methods/i.test(correctionFacts)
+      || /"sample_methods":\s*\[(?!\s*\])/.test(revisionContextText))
+  const componentIds = new Set((plannerInput.availableComponents ?? []).map((component) => component.id))
+  const hasComponentContext = Boolean(plannerInput.availableComponents?.length)
+    && (/custom_render|组件|自定义画面|component/i.test(correctionFacts)
+      || [...componentIds].some((id) => correctionFacts.includes(id) || revisionContextText.includes(id)))
+  const recalledPreferences = (plannerInput.planningContext?.recalledCreativeMemories ?? [])
+    .filter((item) => correctionFacts.includes(item))
+  const recalledKnowledge = (plannerInput.planningContext?.recalledCreativeKnowledge ?? [])
+    .filter((item) => correctionFacts.includes(item))
+  const creativeContext = {
+    recalled_user_preferences: recalledPreferences,
+    recalled_creation_knowledge: recalledKnowledge,
+  }
+  const scopeRules = input.outputKind === 'fragment'
+    ? plannerInput.revisionGroup
+      ? [...new Set(plannerInput.revisionGroup.items.flatMap((item) => revisionFragmentScopeRules({
+          ...plannerInput,
+          revisionScope: item.scope,
+          revisionSceneId: item.sceneId,
+          revisionOverlayIds: item.overlayIds,
+          revisionTransitionIds: item.transitionIds,
+        })))]
+      : revisionFragmentScopeRules(plannerInput)
+    : []
+  const outputRule = input.outputKind === 'fragment'
+    ? plannerInput.revisionGroup
+      ? `返回一个修正后的联合 Fragment，schema_version 为 "${V2_TIMELINE_REVISION_GROUP_FRAGMENT_SCHEMA_VERSION}"；不得拆成多次修订或扩大 revision_group。`
+      : `返回一个修正后的 ${plannerInput.revisionScope} Fragment，schema_version 为 "${V2_TIMELINE_REVISION_FRAGMENT_SCHEMA_VERSION}"；不得扩大 Scope。`
+    : '返回修正后的完整 Timeline JSON；保留未被当前要求改变的内容。'
+  return [
+    '你是视频创作平台中负责语义修正的规划模型。请直接修正刚被拒绝的候选，不要重新解释用户意图或从头规划。',
+    '',
+    '最高优先级',
+    '- 只返回符合当前 JSON Schema 的 JSON，不输出解释、Markdown 或代码。',
+    `- ${outputRule}`,
+    '- 只修复列出的违规项；服务端授权范围、权威素材 ID、未授权对象和已经正确的内容必须保持不变。',
+    input.outputKind === 'timeline'
+      ? '- 不得填写 planning_gaps、执行回执、input_image_url 或虚假 fulfilled 状态。assets[].src 只能逐字复制权威素材目录。'
+      : '- 不得填写 planning_gaps、执行回执、素材 URL、input_image_url 或虚假 fulfilled 状态。',
+    ...scopeRules,
+    '',
+    '当前用户要求',
+    plannerInput.prompt,
+    '',
+    '当前有效项目要求',
+    JSON.stringify(plannerInput.planningContext?.activeRequirements ?? []),
+    '',
+    '修正必需的权威事实',
+    JSON.stringify({
+      server_asset_catalog: assetCatalog,
+      creative_context: creativeContext,
+    }, null, 2),
+    ...(hasImageContext
+      ? ['', '真实图片输入报告', JSON.stringify(input.visualInputReport ?? null)]
+      : []),
+    ...(hasSampleContext
+      ? ['', '相关样例理解', JSON.stringify(compactSampleUnderstanding(plannerInput))]
+      : []),
+    ...(hasComponentContext
+      ? ['', '可用自定义画面能力', JSON.stringify(plannerInput.availableComponents)]
+      : []),
+    ...(input.outputKind === 'fragment'
+      ? [
+          '',
+          '服务端授权与局部基础方案',
+          JSON.stringify({
+            revision_scope: plannerInput.revisionScope,
+            revision_group: plannerInput.revisionGroup ?? null,
+            revision_scene_id: plannerInput.revisionSceneId ?? null,
+            revision_scene_ids: plannerInput.revisionSceneIds ?? null,
+            revision_overlay_ids: plannerInput.revisionOverlayIds ?? null,
+            revision_transition_ids: plannerInput.revisionTransitionIds ?? null,
+            revision_global_mode: plannerInput.revisionGlobalMode ?? null,
+            revision_duration_mode: plannerInput.revisionDurationMode ?? 'preserve_range',
+            revision_context: plannerInput.revisionContext ?? null,
+          }, null, 2),
+        ]
+      : []),
+    '',
+    '刚被拒绝的候选',
+    JSON.stringify(input.rejectedCandidate, null, 2),
+    '',
+    '审查发现的违规项',
+    JSON.stringify(input.violations, null, 2),
+    '',
+    '本次修正要求',
+    input.repairInstruction ?? '修正列出的语义违规，不扩大授权范围。',
+    '',
+    '输出前核对：每项违规都有对应修正；授权外内容未变；返回类型与原候选一致。只输出最终 JSON。',
   ].join('\n')
 }
 
@@ -878,6 +1089,29 @@ async function preparePlannerImageInputs(input: V2RemotionTimelinePlannerInput) 
   })
 }
 
+export function buildV2TimelineSchemaFallbackPrompt(
+  promptText: string,
+  outputContract: { schemaName: string; schemaVersion: string; schema: Record<string, unknown> },
+) {
+  const required = Array.isArray(outputContract.schema.required)
+    ? outputContract.schema.required.filter((item): item is string => typeof item === 'string')
+    : []
+  const properties = outputContract.schema.properties && typeof outputContract.schema.properties === 'object'
+    ? Object.keys(outputContract.schema.properties)
+    : []
+  return [
+    promptText,
+    '',
+    '结构化输出当前不可用，仍须严格返回一个 JSON object。不得输出 Markdown 或解释。',
+    JSON.stringify({
+      schema_name: outputContract.schemaName,
+      schema_version: outputContract.schemaVersion,
+      required_top_level_fields: required,
+      allowed_top_level_fields: properties,
+    }),
+  ].join('\n')
+}
+
 async function callResponsesApi(
   promptText: string,
   imageInputs: ArkResponsesImageInput[],
@@ -908,7 +1142,12 @@ async function callResponsesApi(
       {
         role: 'user',
         content: [
-          { type: 'input_text', text: promptText },
+          {
+            type: 'input_text',
+            text: useSchema
+              ? promptText
+              : buildV2TimelineSchemaFallbackPrompt(promptText, options.outputContract),
+          },
           ...imageInputs,
         ],
       },

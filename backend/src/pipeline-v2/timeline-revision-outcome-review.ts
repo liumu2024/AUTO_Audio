@@ -614,72 +614,167 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
   revisionGlobalMode?: 'brief_update' | 'full_replan'
   revisionDurationMode?: 'preserve_range' | 'resize_timeline'
   revisionGroup?: V2TimelineRevisionGroup
+  imageContextAvailable?: boolean
+  sampleContextAvailable?: boolean
 }) {
   const componentsById = new Map((input.availableComponents ?? []).map((item) => [item.id, item]))
-  const effectiveTransitions = input.candidateDigest.transitions.map((transition) => {
-    const componentId = transition.custom_render_component_id
-    if (!componentId) {
-      return { id: transition.id, effective_render: { kind: 'preset', preset: transition.type } }
-    }
-    return {
+  const effectiveComponents = [
+    ...input.candidateDigest.scenes.flatMap((scene) => scene.custom_render_component_id
+      ? [{
+          target: 'scene',
+          id: scene.id,
+          component_id: scene.custom_render_component_id,
+          display_name: componentsById.get(scene.custom_render_component_id)?.displayName,
+          effect_summary: componentsById.get(scene.custom_render_component_id)?.effectSummary,
+        }]
+      : []),
+    ...input.candidateDigest.transitions.flatMap((transition) => {
+      const componentId = transition.custom_render_component_id
+      if (!componentId) return []
+      return [{
+        target: 'transition',
       id: transition.id,
-      effective_render: {
-        kind: 'custom_component',
         component_id: componentId,
         display_name: componentsById.get(componentId)?.displayName ?? transition.custom_render_display_name,
         effect_summary: componentsById.get(componentId)?.effectSummary,
-      },
       fallback_preset: transition.type,
-    }
-  })
+      }]
+    }),
+  ]
+  const promptMentionsImage = /图片|照片|图像|原图|image|photo|picture/i.test(input.prompt)
+  const candidateUsesImageRealization = input.candidateDigest.scenes.some((scene) =>
+    scene.type === 'image_motion'
+    || scene.material_jobs.some((job) => Boolean(job.input_asset_id)))
+  const groupUsesImageRelevantScope = input.revisionGroup?.items.some((item) =>
+    item.scope === 'scene' || item.scope === 'visual_strategy')
+  const mediaScopeApplies = !input.hasBase
+    || ['scene', 'visual_strategy', 'structure'].includes(input.revisionScope ?? '')
+    || Boolean(groupUsesImageRelevantScope)
+  const imageRiskApplies = promptMentionsImage
+    || (!input.hasBase && candidateUsesImageRealization)
+    || (['scene', 'visual_strategy', 'structure'].includes(input.revisionScope ?? '') && candidateUsesImageRealization)
+    || Boolean(groupUsesImageRelevantScope && candidateUsesImageRealization)
+    || Boolean(input.imageContextAvailable && mediaScopeApplies)
+  const sceneVisualRiskApplies = imageRiskApplies
+    || !input.hasBase
+    || ['scene', 'visual_strategy', 'structure'].includes(input.revisionScope ?? '')
+    || input.revisionGroup?.items.some((item) => item.scope === 'scene' || item.scope === 'visual_strategy')
+    || /镜头|人物|地点|动作|事件|道具|色彩|光线|构图|运镜|scene|visual|camera|lighting/i.test(input.prompt)
+  const sampleRiskApplies = /样例|样片|参考视频|sample|reference video/i.test(input.prompt)
+    || (!input.hasBase && Boolean(input.candidateDigest.creative_brief?.sample_methods?.length))
+    || Boolean(input.sampleContextAvailable && (
+      mediaScopeApplies
+      || input.revisionScope === 'transition'
+      || input.revisionScope === 'global'
+      || input.revisionGroup?.items.some((item) => item.scope === 'transition')
+    ))
+  const globalRiskApplies = input.revisionScope === 'global'
+    || /全片|整体方向|整案|whole video|full replan|global/i.test(input.prompt)
+  const visibleTextRiskApplies = input.revisionScope === 'subtitle'
+    || input.revisionGroup?.items.some((item) => item.scope === 'subtitle')
+    || /字幕|文案|标题|上屏|caption|subtitle|copy/i.test(input.prompt)
+  const authoritativeDiff = input.specDiff
+    ? [
+        ...input.specDiff.scenes,
+        ...input.specDiff.visibleText,
+        ...input.specDiff.transitions,
+        ...input.specDiff.audio,
+        ...input.specDiff.other,
+      ]
+    : input.hasBase
+      ? buildV2TimelineRevisionDiff(input.baseDigest, input.candidateDigest)
+      : undefined
+  const authorizedBoundary = input.revisionGroup
+    ? { kind: 'revision_group', items: input.revisionGroup.items.map((item) => ({
+        scope: item.scope,
+        instruction: item.instruction,
+        scene_id: item.sceneId,
+        overlay_ids: item.overlayIds ?? [],
+        transition_ids: item.transitionIds ?? [],
+      })) }
+    : input.revisionScope
+      ? {
+          kind: 'revision',
+          scope: input.revisionScope,
+          global_mode: input.revisionGlobalMode,
+          duration_mode: input.revisionDurationMode,
+          scene_id: input.revisionSceneId,
+          scene_ids: input.revisionSceneIds,
+          overlay_ids: input.revisionOverlayIds,
+          transition_ids: input.revisionTransitionIds,
+        }
+      : { kind: input.hasBase ? 'revision_without_explicit_scope' : 'initial_plan' }
   return [
-    'You are the V2 timeline revision outcome reviewer.',
-    'Judge the actual candidate against the user\'s current request and the persisted base timeline.',
-    'Use semantic judgment, not a fixed keyword list. First determine the semantic change scope of the current request: it may target scene content, on-screen copy, presentation, audio, transitions, timing, or the whole concept.',
-    'A revision must implement the requested change while preserving confirmed content outside that scope. The base timeline is evidence, not a blanket instruction to preserve every field exactly.',
-    'When the current request asks to create, rewrite, or freely author on-screen copy, the old on-screen copy is intentionally replaceable. Do not require its exact wording, a prior product-name caption, or its previous phrasing to survive solely because it existed in the base. Preserve the product subject in the timeline unless the user asks to change that subject.',
-    'Only call a change unrelated when it alters a field outside the current request scope; do not call a necessary rewording inside the requested scope unrelated.',
-    'Visible text must be audience copy. Do not accept technical notes, filenames, internal planning instructions, or display constraints as captions unless the user explicitly asked to show those exact words.',
-    'When the request is a presentation constraint (placement, line limit, non-repetition), evaluate the candidate\'s displayed text and geometry rather than treating the constraint itself as copy.',
-    'When a sample is used for inspiration, reject copied sample-specific subject matter or copy; reusable rhythm and structure are allowed.',
-    'Treat scene realization fields as authoritative: image_motion can only pan, zoom, or crop existing pixels and cannot create a new person, animal, vehicle, or environmental event. A newly invented visual element requires an ai_video scene backed by a generate_video material job (or an equivalent custom scene component whose registered effect explicitly implements it).',
-    'When the user supplies an image as a visual reference for a newly generated subject, action, event, or expanded environment, require the matching generate_video job to carry that server-owned image asset as input_asset_id. A textual resemblance without the actual reference binding is incomplete.',
-    'Judge image understanding against the requested use. The creative brief should retain concrete visible facts relevant to that use (for example subject appearance, clothing or distinctive objects; environment, composition and perspective; palette, lighting and visual style) without inventing facts. Do not require every category when it is not visible or relevant.',
-    'Scene content and visual strategy are different boundaries. A change to subject, location, action, event, or prop belongs in scene content and must be reflected consistently in both creative_intent and the scene material-job prompt. visual_strategy may change presentation such as palette, lighting, composition, camera motion, fit, background or asset realization, but must not smuggle new narrative facts only into a generation prompt. For an ai_video scene, a requested visual-strategy change must also reach that scene material-job prompt; changing editor metadata while reusing an unchanged generation request is incomplete.',
-    'For global brief_update, require creative_brief.direction to materially express the requested whole-video direction while direct scene timing, captions, assets and transitions stay unchanged. full_replan is the only global mode that may replace the whole plan.',
-    'A remotion_card can fulfill only an intentional typography or motion-graphics scene. It cannot count as completed photographic or cinematic footage merely because its text describes the requested shot.',
-    'When custom_render_component_id is present, that custom component defines the effective transition. The preset type and direction are fallback presentation settings only; do not require the custom effect name to appear in the preset type.',
-    'Return JSON only. Do not reveal reasoning.',
-    `User request: ${input.prompt}`,
-    `Confirmed V2 conversation facts: ${input.confirmedContext ?? 'None supplied; rely on the persisted base timeline.'}`,
-    `Base timeline facts: ${input.hasBase ? JSON.stringify(input.baseDigest) : 'No prior timeline; judge whether the initial plan fulfils the request.'}`,
-    `Candidate timeline facts: ${JSON.stringify(input.candidateDigest)}`,
-    `Candidate effective transition facts: ${JSON.stringify(effectiveTransitions)}`,
-    `Observed diff: ${JSON.stringify(buildV2TimelineRevisionDiff(input.baseDigest, input.candidateDigest))}`,
-    ...(input.specDiff
+    '你是视频创作平台中负责时间线结果审查的模型。请依据用户要求、服务端授权边界和程序计算的实际差异，判断候选是否真正落实要求且没有越界；不要规划或修改方案。',
+    '',
+    '最高优先级',
+    input.hasBase
+      ? '- 程序计算的实际差异是“实际改变了什么”的唯一事实源；不得根据候选措辞猜测不存在的变化，也不得要求它未包含的改动。'
+      : '- 首次创建时，候选方案事实是要求落实的依据；没有基础方案，不使用差异判断。',
+    '- 只返回 JSON，字段仅为 pass、violations 和可选 repairInstruction；不输出思维过程。',
+    '',
+    '判断顺序',
+    input.hasBase
+      ? '1. 用户要求的每项变化是否在候选和实际差异中落实；'
+      : '1. 用户要求的每项内容是否在候选方案事实中落实；',
+    '2. 实际变化是否全部位于授权边界内；',
+    '3. 未授权的既有内容是否保持不变；',
+    '4. 当前任务适用的高风险规则是否满足。',
+    '',
+    '通用判断',
+    '- 使用语义判断，不使用固定关键词命中。必要的范围内改写不算越界，范围外字段变化才算 unrelated_change。',
+    '- 可见文字必须是观众文案；技术说明、文件名、内部 ID、布局约束和规划指令不得成为字幕，除非用户明确要求逐字展示。',
+    ...(visibleTextRiskApplies
+      ? ['- 用户要求重写或创作字幕时，旧字幕允许被替换；不要因为基础方案存在旧文案就要求逐字保留。布局、行数和位置要求应检查结构化字段，不把约束文字本身当字幕。']
+      : []),
+    ...(imageRiskApplies
       ? [
-          `Computed spec diff (authoritative for field changes): ${[
-            ...input.specDiff.scenes,
-            ...input.specDiff.visibleText,
-            ...input.specDiff.transitions,
-            ...input.specDiff.audio,
-            ...input.specDiff.other,
-          ].join('\n')}`,
-          'Field and presentation changes are computed by the program above. Evaluate only whether those changes satisfy the user request semantically; do not demand changes that the computed diff does not contain.',
+          '',
+          '本轮适用的风险规则',
+          '- 图片条件生成：新动作、新事件、新视角或扩展环境必须由 ai_video + generate_video 实现，并用 input_asset_id 绑定用户原图；只有文字相似而没有原图绑定不算落实。',
+          '- 图片理解：creative_brief 只保留与用途有关的可见事实，不得编造；不机械要求图片没有呈现或任务不需要的类别。',
+          '- 真实画面实现：remotion_card 只能实现有意设计的文字或动态图形镜头，不能因为文字描述了目标画面就算作真实或电影化镜头已经完成。',
         ]
       : []),
+    ...(sceneVisualRiskApplies
+      ? ['- scene/visual_strategy 一致性：人物、地点、动作、事件或道具等叙事变化必须同时进入 creative_intent 与生成 Prompt；visual_strategy 只改变呈现方式，不能把新叙事事实偷偷写进生成 Prompt，也不能只改编辑器字段而让生成请求保持不变。']
+      : []),
+    ...(sampleRiskApplies
+      ? ['- 样例迁移：可以迁移节奏、镜头语言和叙事方法，不得复制样例主体、字幕或章节结构。']
+      : []),
+    ...(globalRiskApplies
+      ? ['- global.brief_update：creative_brief.direction 必须实际体现全片新方向，scene 时间、字幕、素材和转场保持不变；只有 full_replan 可以替换整案。']
+      : []),
+    ...(effectiveComponents.length
+      ? ['- 自定义组件：custom_render 指定的注册组件是实际呈现方式；preset 只是回退，不要求两者名称相同。']
+      : []),
+    '',
+    '当前用户要求',
+    input.prompt,
+    '',
+    '服务端授权边界',
+    JSON.stringify(authorizedBoundary),
     ...(input.revisionScope
-      ? [`Tool-authorized revision boundary: scope=${input.revisionScope}${input.revisionGlobalMode ? `, global_mode=${input.revisionGlobalMode}` : ''}${input.revisionDurationMode ? `, duration_mode=${input.revisionDurationMode}` : ''}${input.revisionSceneId ? `, scene_id=${input.revisionSceneId}` : ''}${input.revisionSceneIds?.length ? `, scene_ids=${input.revisionSceneIds.join(',')}` : ''}${input.revisionOverlayIds?.length ? `, overlay_ids=${input.revisionOverlayIds.join(',')}` : ''}${input.revisionTransitionIds?.length ? `, transition_ids=${input.revisionTransitionIds.join(',')}` : ''}. Any change outside this boundary is an unrelated change.`]
+      ? [`scope=${input.revisionScope}${input.revisionGlobalMode ? `, global_mode=${input.revisionGlobalMode}` : ''}${input.revisionDurationMode ? `, duration_mode=${input.revisionDurationMode}` : ''}${input.revisionSceneId ? `, scene_id=${input.revisionSceneId}` : ''}${input.revisionSceneIds?.length ? `, scene_ids=${input.revisionSceneIds.join(',')}` : ''}${input.revisionOverlayIds?.length ? `, overlay_ids=${input.revisionOverlayIds.join(',')}` : ''}${input.revisionTransitionIds?.length ? `, transition_ids=${input.revisionTransitionIds.join(',')}` : ''}`]
       : []),
-    ...(input.revisionGroup
-      ? [`Server-authorized same-scene revision group: ${JSON.stringify(input.revisionGroup.items.map((item) => ({
-          scope: item.scope,
-          instruction: item.instruction,
-          scene_id: item.sceneId,
-          overlay_ids: item.overlayIds ?? [],
-          transition_ids: item.transitionIds ?? [],
-        })))}. Judge every instruction together; changes outside their union are unrelated.`]
+    '',
+    '相关有效要求',
+    input.confirmedContext ?? '[]',
+    '',
+    '基础方案事实',
+    input.hasBase ? JSON.stringify(input.baseDigest) : '无基础方案；这是首次创建。',
+    '',
+    '候选方案事实',
+    JSON.stringify(input.candidateDigest),
+    '',
+    ...(input.hasBase ? ['', '程序计算的实际差异', JSON.stringify(authoritativeDiff)] : []),
+    ...(effectiveComponents.length
+      ? ['', '有效自定义组件事实', JSON.stringify(effectiveComponents)]
       : []),
+    '',
+    input.hasBase
+      ? '输出前核对：每项明确要求是否有实际差异支撑；每项实际差异是否位于授权边界；violations 与 repairInstruction 是否只描述真实未落实或越界问题。只输出最终 JSON。'
+      : '输出前核对：每项明确要求是否由候选方案事实落实；violations 与 repairInstruction 是否只描述真实未落实问题。只输出最终 JSON。',
   ].join('\n')
 }
 
@@ -753,6 +848,8 @@ export async function reviewV2TimelineRevisionOutcome(input: {
   revisionGlobalMode?: 'brief_update' | 'full_replan'
   revisionDurationMode?: 'preserve_range' | 'resize_timeline'
   revisionGroup?: V2TimelineRevisionGroup
+  imageContextAvailable?: boolean
+  sampleContextAvailable?: boolean
   assess?: (input: {
     prompt: string
     baseDigest: V2TimelineFactDigest
@@ -823,6 +920,8 @@ export async function reviewV2TimelineRevisionOutcome(input: {
     revisionGlobalMode: input.revisionGlobalMode,
     revisionDurationMode: input.revisionDurationMode,
     revisionGroup: input.revisionGroup,
+    imageContextAvailable: input.imageContextAvailable,
+    sampleContextAvailable: input.sampleContextAvailable,
   })
   const requested = env.directorAgentStructuredOutputMode === 'auto'
   let raw: unknown
@@ -887,6 +986,8 @@ export function verifyV2TimelinePendingResolution(input: {
   candidateSpec: RemotionTimelineSpecV1
   availableComponents?: V2TimelineAvailableComponents
   confirmedContext?: string
+  imageContextAvailable?: boolean
+  sampleContextAvailable?: boolean
   assess?: Parameters<typeof reviewV2TimelineRevisionOutcome>[0]['assess']
 }) {
   return reviewV2TimelineRevisionOutcome({
@@ -894,6 +995,8 @@ export function verifyV2TimelinePendingResolution(input: {
     candidateSpec: input.candidateSpec,
     availableComponents: input.availableComponents,
     confirmedContext: input.confirmedContext,
+    imageContextAvailable: input.imageContextAvailable,
+    sampleContextAvailable: input.sampleContextAvailable,
     assess: input.assess,
   })
 }

@@ -37,7 +37,11 @@ import {
 import { createV2TraceWriter } from './trace.js'
 import type { V2TraceContext } from './trace.js'
 import type { V2PlannerInput } from './v2-input.js'
-import type { V2TimelineVisualInputReport } from './remotion-timeline-llm-planner.js'
+import {
+  buildV2TimelineSemanticCorrectionPrompt,
+  deriveV2TimelineReviewSourceContext,
+  type V2TimelineVisualInputReport,
+} from './remotion-timeline-llm-planner.js'
 import { applyV2TimelineRevisionPreservation } from './timeline-revision-context.js'
 import { assertV2TimelinePlanningComplete } from './timeline-planning-gaps.js'
 import {
@@ -196,12 +200,16 @@ async function resolveTimelineSpec(input: {
           ...llmPlanner,
           spec: await bindComponentNames(llmPlanner.spec),
         }
+        let reviewSourceContext = deriveV2TimelineReviewSourceContext(
+          input.plannerInput,
+          llmPlanner.visualInputReport,
+        )
         let outcomeReview = await reviewV2TimelineRevisionOutcome({
           prompt: input.plannerInput.prompt,
           baseSpec: input.plannerInput.revisionBaseSpec,
           candidateSpec: llmPlanner.spec,
           availableComponents: input.plannerInput.availableComponents,
-          confirmedContext: input.plannerInput.conversationSummary,
+          confirmedContext: JSON.stringify(input.plannerInput.planningContext?.activeRequirements ?? []),
           revisionScope: input.plannerInput.revisionScope,
           revisionSceneId: input.plannerInput.revisionSceneId,
           revisionSceneIds: input.plannerInput.revisionSceneIds,
@@ -210,24 +218,19 @@ async function resolveTimelineSpec(input: {
           revisionGlobalMode: input.plannerInput.revisionGlobalMode,
           revisionDurationMode: input.plannerInput.revisionDurationMode,
           revisionGroup: input.plannerInput.revisionGroup,
+          ...reviewSourceContext,
         })
         await input.trace.writeJson('02-planning', 'timeline-outcome-review.json', outcomeReview)
         if (!outcomeReview.pass) {
           correctionApplied = true
-          const correctionPrompt = [
-            llmPlanner.promptText,
-            '',
-            'The candidate revision did not satisfy the independent V2 outcome review.',
-            llmPlanner.revisionFragment
-              ? input.plannerInput.revisionGroup
-                ? 'Return one corrected joint revision fragment using the same server-authorized revision group and group fragment schema.'
-                : 'Return a corrected revision fragment using the same scope and fragment schema.'
-              : input.plannerInput.revisionBaseSpec
-                ? 'Return a corrected full timeline JSON. Preserve all confirmed content that the user did not ask to change.'
-                : 'Return a corrected full timeline JSON that fulfils the user request.',
-            `Review violations: ${JSON.stringify(outcomeReview.violations)}`,
-            `Required repair: ${outcomeReview.repairInstruction ?? 'Correct the listed semantic violations without broadening the revision scope.'}`,
-          ].join('\n')
+          const correctionPrompt = buildV2TimelineSemanticCorrectionPrompt({
+            plannerInput: input.plannerInput,
+            rejectedCandidate: llmPlanner.revisionFragment ?? llmPlanner.spec,
+            violations: outcomeReview.violations,
+            repairInstruction: outcomeReview.repairInstruction,
+            outputKind: llmPlanner.revisionFragment ? 'fragment' : 'timeline',
+            visualInputReport: llmPlanner.visualInputReport,
+          })
           await input.trace.writeText('02-planning', 'timeline-outcome-correction-request.md', correctionPrompt)
           const correctionMayRepairProtocol = !llmPlanner.jsonRepair
           llmPlanner = await runV2TimelineLlmPlanner(
@@ -264,12 +267,16 @@ async function resolveTimelineSpec(input: {
             ...llmPlanner,
             spec: await bindComponentNames(llmPlanner.spec),
           }
+          reviewSourceContext = deriveV2TimelineReviewSourceContext(
+            input.plannerInput,
+            llmPlanner.visualInputReport,
+          )
           outcomeReview = await reviewV2TimelineRevisionOutcome({
             prompt: input.plannerInput.prompt,
             baseSpec: input.plannerInput.revisionBaseSpec,
             candidateSpec: llmPlanner.spec,
             availableComponents: input.plannerInput.availableComponents,
-            confirmedContext: input.plannerInput.conversationSummary,
+            confirmedContext: JSON.stringify(input.plannerInput.planningContext?.activeRequirements ?? []),
             revisionScope: input.plannerInput.revisionScope,
             revisionSceneId: input.plannerInput.revisionSceneId,
             revisionSceneIds: input.plannerInput.revisionSceneIds,
@@ -278,6 +285,7 @@ async function resolveTimelineSpec(input: {
             revisionGlobalMode: input.plannerInput.revisionGlobalMode,
             revisionDurationMode: input.plannerInput.revisionDurationMode,
             revisionGroup: input.plannerInput.revisionGroup,
+            ...reviewSourceContext,
           })
           await input.trace.writeJson('02-planning', 'timeline-outcome-correction-review.json', outcomeReview)
           if (!outcomeReview.pass) {

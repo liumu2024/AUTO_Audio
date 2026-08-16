@@ -89,7 +89,6 @@ export interface RenderComponentAuthoringInput {
   effectBrief: string
   acceptanceCriteria: string[]
   canvas: { width: number; height: number; fps: number; durationSec: number }
-  skillContent: string
   sourceWorkspaceSessionId?: string
 }
 
@@ -143,8 +142,23 @@ export function buildRenderComponentCodingPrompt(input: RenderComponentAuthoring
   repairFeedback?: string
   previousSource?: string
 }): string {
+  const purposeContract = input.purpose === 'transition'
+    ? CUSTOM_TRANSITION_PROPS_CONTRACT
+    : CUSTOM_SCENE_PROPS_CONTRACT
+  const purposeRules = input.purpose === 'transition'
+    ? [
+        'Render children, cover the full frame, and support both entering and exiting.',
+        'progress=0 and progress=1 must produce the correct endpoint states for each direction.',
+        'Do not hide, replace, or asynchronously load the child scene.',
+      ]
+    : [
+        'Use scene and assets as authoritative inputs.',
+        'Use useCurrentFrame(), useVideoConfig(), and interpolate() for animation.',
+        'Do not load external resources; render only supplied assets and generated React/CSS composition.',
+      ]
   return [
-    'You are the coding Agent for one sandboxed React/Remotion component. Return JSON only: {"source": string, "effectSummary": string}.',
+    `You author one sandboxed React/Remotion ${input.purpose} component. Implement the requested visual behavior as reusable frame-driven code; do not make scheduling or delivery decisions.`,
+    'Return JSON only with exactly two fields: source and effectSummary.',
     `Installed runtime: ${RENDER_COMPONENT_RUNTIME_VERSION}.`,
     `Canvas: ${input.canvas.width}x${input.canvas.height}, ${input.canvas.fps}fps, current task duration ${input.canvas.durationSec}s.`,
     `Purpose: ${input.purpose}.`,
@@ -158,14 +172,11 @@ export function buildRenderComponentCodingPrompt(input: RenderComponentAuthoring
     'Scale layout dimensions and gaps from the actual width/height so every required element remains distinct and in-frame at preview and reuse sizes.',
     'Treat quantified criteria literally: if N elements must always be present, give all N a non-zero visible size on every frame; stagger animation state, not element existence.',
     'Express all frame offsets and animation durations as fractions of durationInFrames; never hard-code frame counts from the task duration.',
-    'A transition must render children, cover the full frame, implement entering and exiting, and have correct progress=0 and progress=1 endpoints.',
-    'A scene animation should use useCurrentFrame/useVideoConfig/interpolate.',
-    CUSTOM_TRANSITION_PROPS_CONTRACT,
-    CUSTOM_SCENE_PROPS_CONTRACT,
-    SCENE_EXAMPLE,
-    TRANSITION_EXAMPLE,
-    'Full project Skill follows:',
-    input.skillContent,
+    'Current contract:',
+    purposeContract,
+    'Current purpose rules:',
+    ...purposeRules,
+    input.purpose === 'transition' ? TRANSITION_EXAMPLE : SCENE_EXAMPLE,
     ...(input.repairFeedback ? [
       `Previous attempt failed. Repair this exact error without changing the requested effect:\n${input.repairFeedback}`,
       'Every failed acceptance criterion must map to visible code behavior. Change the prior source where the evidence says it failed; do not return an unchanged implementation.',
@@ -473,7 +484,6 @@ export async function ensureRenderComponentVisualEvidence(
     effectBrief: component.manifest.effectBrief,
     acceptanceCriteria: component.manifest.acceptanceCriteria,
     canvas: input.canvas,
-    skillContent: '',
     sourceWorkspaceSessionId: component.manifest.sourceWorkspaceSessionId,
   })
   if (!authoring.effectBrief.trim() || authoring.acceptanceCriteria.length === 0) {
