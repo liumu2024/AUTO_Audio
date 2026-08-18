@@ -1,0 +1,1970 @@
+{
+  "version": "creative_library_seed.v1",
+  "purpose": "isolated_evaluation_bootstrap",
+  "preferenceProfile": {
+    "key": "synthetic_video_creator_v1",
+    "label": "合成视频创作者画像（仅用于隔离评测）",
+    "entries": [
+      {
+        "id": "pref_color_neutral",
+        "statement": "整体画面优先使用中性低饱和色调"
+      },
+      {
+        "id": "pref_color_skin",
+        "statement": "人物肤色保持自然，避免过度磨皮和偏色"
+      },
+      {
+        "id": "pref_color_tech",
+        "statement": "科技题材使用冷蓝基调并以少量高亮色强调重点"
+      },
+      {
+        "id": "pref_color_food",
+        "statement": "食品题材使用温暖自然光，保留食物真实质感"
+      },
+      {
+        "id": "pref_color_travel",
+        "statement": "旅行题材保留天空、水面和植被的自然颜色"
+      },
+      {
+        "id": "pref_color_night",
+        "statement": "夜景控制高光不过曝，同时保留暗部层次"
+      },
+      {
+        "id": "pref_color_indoor",
+        "statement": "室内画面避免混合色温造成明显色偏"
+      },
+      {
+        "id": "pref_color_climax",
+        "statement": "情绪高潮可以适度升温，但不破坏全片色彩统一"
+      },
+      {
+        "id": "pref_frame_safe_area",
+        "statement": "主体保持在安全区域，避免被画幅边缘裁切"
+      },
+      {
+        "id": "pref_frame_caption_space",
+        "statement": "构图预留字幕空间且不挤压主体"
+      },
+      {
+        "id": "pref_frame_product",
+        "statement": "产品展示使用干净背景突出核心物体"
+      },
+      {
+        "id": "pref_frame_portrait",
+        "statement": "人像镜头优先保持眼神方向和视线空间"
+      },
+      {
+        "id": "pref_frame_landscape",
+        "statement": "风景镜头通过前景、中景和远景建立空间层次"
+      },
+      {
+        "id": "pref_frame_data",
+        "statement": "数据画面先建立信息层级再添加装饰"
+      },
+      {
+        "id": "pref_frame_vertical",
+        "statement": "竖屏视频避免把关键内容放在上下交互遮挡区"
+      },
+      {
+        "id": "pref_frame_montage",
+        "statement": "多素材混剪保持构图密度和视觉重心一致"
+      },
+      {
+        "id": "pref_camera_stable",
+        "statement": "运镜保持平稳，避免无目的抖动"
+      },
+      {
+        "id": "pref_camera_push",
+        "statement": "缓慢推近只用于强调关键信息或情绪"
+      },
+      {
+        "id": "pref_camera_pull",
+        "statement": "拉远用于揭示环境关系，不机械重复"
+      },
+      {
+        "id": "pref_camera_follow",
+        "statement": "横移和跟拍尽量顺应主体运动方向"
+      },
+      {
+        "id": "pref_camera_still",
+        "statement": "静态内容使用轻微呼吸运动维持画面活力"
+      },
+      {
+        "id": "pref_camera_handheld",
+        "statement": "仅在主观紧张场景使用明显手持感"
+      },
+      {
+        "id": "pref_camera_continuity",
+        "statement": "镜头切换前后保持运动方向连续"
+      },
+      {
+        "id": "pref_camera_restrained",
+        "statement": "不为了炫技给每个镜头增加缩放和旋转"
+      },
+      {
+        "id": "pref_pacing_opening",
+        "statement": "开头尽快进入主题，避免长时间空镜铺垫"
+      },
+      {
+        "id": "pref_pacing_reading",
+        "statement": "信息密集内容必须留出足够阅读时间"
+      },
+      {
+        "id": "pref_pacing_lyrical",
+        "statement": "抒情内容保持舒缓节奏，避免过度快切"
+      },
+      {
+        "id": "pref_pacing_product",
+        "statement": "产品演示按问题、过程和结果组织节奏"
+      },
+      {
+        "id": "pref_pacing_travel",
+        "statement": "旅行混剪交替使用全景和细节避免单调"
+      },
+      {
+        "id": "pref_pacing_teaching",
+        "statement": "教学内容每个镜头只承担一个主要知识点"
+      },
+      {
+        "id": "pref_pacing_climax",
+        "statement": "冲突或高潮阶段可以逐步缩短镜头时长"
+      },
+      {
+        "id": "pref_pacing_ending",
+        "statement": "结尾保留短暂停顿让主题自然收束"
+      },
+      {
+        "id": "pref_caption_concise",
+        "statement": "字幕文案保持简洁，只保留关键信息"
+      },
+      {
+        "id": "pref_caption_subject",
+        "statement": "字幕不得遮挡人物面部或产品主体"
+      },
+      {
+        "id": "pref_caption_two_lines",
+        "statement": "常规字幕控制在两行以内"
+      },
+      {
+        "id": "pref_caption_contrast",
+        "statement": "字幕对比度要足够，但避免大面积厚重底板"
+      },
+      {
+        "id": "pref_caption_emphasis",
+        "statement": "关键词强调保持克制，不要整句反复高亮"
+      },
+      {
+        "id": "pref_caption_breaks",
+        "statement": "字幕断句遵循自然语义和口语停顿"
+      },
+      {
+        "id": "pref_caption_terms",
+        "statement": "专有名词和关键术语在全片保持一致"
+      },
+      {
+        "id": "pref_caption_verbatim",
+        "statement": "用户明确给出的必备字幕必须逐字保留"
+      },
+      {
+        "id": "pref_transition_restrained",
+        "statement": "转场整体保持自然克制，不抢主体注意力"
+      },
+      {
+        "id": "pref_transition_flash",
+        "statement": "避免快速闪白、频繁闪烁和强烈眩光转场"
+      },
+      {
+        "id": "pref_transition_direction",
+        "statement": "有空间连续关系时优先使用方向一致的转场"
+      },
+      {
+        "id": "pref_transition_dissolve",
+        "statement": "时间或季节变化可以使用柔和叠化"
+      },
+      {
+        "id": "pref_transition_cut",
+        "statement": "强节奏节点可以使用干净硬切"
+      },
+      {
+        "id": "pref_transition_variety",
+        "statement": "不要在全片机械重复同一种花哨转场"
+      },
+      {
+        "id": "pref_transition_duration",
+        "statement": "常规转场时长保持短促，不拖慢内容推进"
+      },
+      {
+        "id": "pref_transition_narrative",
+        "statement": "转场效果必须服务叙事关系而不是单独炫技"
+      },
+      {
+        "id": "pref_audio_voice",
+        "statement": "旁白使用清晰、沉稳且不过度播音化的语气"
+      },
+      {
+        "id": "pref_audio_music_level",
+        "statement": "背景音乐不得遮盖旁白和关键环境声"
+      },
+      {
+        "id": "pref_audio_effects",
+        "statement": "音效只用于强化真实动作或信息节点"
+      },
+      {
+        "id": "pref_audio_beats",
+        "statement": "不要让每个剪辑点都机械对齐音乐鼓点"
+      },
+      {
+        "id": "pref_audio_ambience",
+        "statement": "安静题材优先保留自然环境声和空间感"
+      },
+      {
+        "id": "pref_audio_progression",
+        "statement": "情绪推进时音乐强度逐步变化，不突然跳变"
+      },
+      {
+        "id": "pref_audio_ending",
+        "statement": "结尾音乐自然衰减，避免生硬截断"
+      },
+      {
+        "id": "pref_audio_tone",
+        "statement": "沟通和旁白语气保持可靠但不冰冷"
+      },
+      {
+        "id": "pref_story_opening",
+        "statement": "开场优先用具体画面建立吸引力，不堆砌口号"
+      },
+      {
+        "id": "pref_story_progression",
+        "statement": "叙事镜头之间保持清晰的因果或信息递进"
+      },
+      {
+        "id": "pref_story_identity",
+        "statement": "同一人物或物体在不同镜头中保持身份一致"
+      },
+      {
+        "id": "pref_story_no_repeat",
+        "statement": "避免用多个镜头重复表达同一信息"
+      },
+      {
+        "id": "pref_story_visualize",
+        "statement": "抽象概念优先转换为可观察的画面或动作"
+      },
+      {
+        "id": "pref_story_reveal",
+        "statement": "关键信息分步揭示，不一次性堆满屏幕"
+      },
+      {
+        "id": "pref_story_closure",
+        "statement": "结尾回应开头主题并形成明确收束"
+      },
+      {
+        "id": "pref_story_truthful",
+        "statement": "文案避免夸张承诺和无法由画面证明的结论"
+      },
+      {
+        "id": "pref_material_original",
+        "statement": "用户素材能够完成目标时优先使用原素材"
+      },
+      {
+        "id": "pref_material_identity",
+        "statement": "使用参考图生成时保留人物和物体的核心身份特征"
+      },
+      {
+        "id": "pref_material_static",
+        "statement": "仅做原图展示时不要伪造图片中不存在的新动作"
+      },
+      {
+        "id": "pref_material_generate",
+        "statement": "只有用户要求扩展动作或场景时才使用条件生成"
+      },
+      {
+        "id": "pref_material_match",
+        "statement": "生成镜头的色彩和光线应与相邻真实素材协调"
+      },
+      {
+        "id": "pref_material_texture",
+        "statement": "人物和产品质感保持真实，避免塑料感和过度锐化"
+      },
+      {
+        "id": "pref_material_ratio",
+        "statement": "不得为适配画幅而明显拉伸人物或物体比例"
+      },
+      {
+        "id": "pref_material_failure",
+        "statement": "生成失败时宁可诚实保留可用素材，也不伪装成等价动态结果"
+      },
+      {
+        "id": "pref_genre_travel",
+        "statement": "旅行内容优先保留地点的自然氛围和真实尺度"
+      },
+      {
+        "id": "pref_genre_product",
+        "statement": "产品内容使用细节特写说明材质和功能"
+      },
+      {
+        "id": "pref_genre_education",
+        "statement": "教育内容优先用清晰示意和分步解释"
+      },
+      {
+        "id": "pref_genre_corporate",
+        "statement": "企业内容保持稳定、清晰和可信，避免娱乐化特效"
+      },
+      {
+        "id": "pref_genre_lifestyle",
+        "statement": "生活方式内容保持自然抓拍感，避免过度摆拍"
+      },
+      {
+        "id": "pref_genre_poetic",
+        "statement": "诗意内容适当使用留白和慢节奏建立情绪"
+      },
+      {
+        "id": "pref_genre_social",
+        "statement": "社交短视频在开头建立明确看点但不使用虚假悬念"
+      },
+      {
+        "id": "pref_genre_documentary",
+        "statement": "纪实内容避免夸张戏剧化和改变事实关系的包装"
+      },
+      {
+        "id": "pref_brand_logo_safe",
+        "statement": "品牌标识出现时保持完整比例和足够留白，不与字幕或装饰重叠"
+      },
+      {
+        "id": "pref_brand_color_role",
+        "statement": "品牌色只用于识别和强调，不让整片被单一高饱和颜色覆盖"
+      },
+      {
+        "id": "pref_brand_typography",
+        "statement": "品牌内容中的字体层级保持统一，避免同一层级频繁更换字形"
+      },
+      {
+        "id": "pref_brand_tone",
+        "statement": "品牌表达保持可信和克制，不使用无法由素材或事实支持的夸张承诺"
+      },
+      {
+        "id": "pref_brand_product_first",
+        "statement": "品牌短片优先让产品或服务价值成为视觉主体，而不是堆叠装饰"
+      },
+      {
+        "id": "pref_brand_consistency",
+        "statement": "同一系列视频保持色彩、字幕、转场和片尾识别方式一致"
+      },
+      {
+        "id": "pref_brand_ending",
+        "statement": "片尾品牌露出简洁稳定，并给标识和行动信息留出阅读时间"
+      },
+      {
+        "id": "pref_brand_people",
+        "statement": "人物与品牌同框时先保证人物状态自然，再安排品牌信息位置"
+      },
+      {
+        "id": "pref_platform_mobile",
+        "statement": "移动端观看优先保证主体、字幕和关键操作在小屏上清晰可辨"
+      },
+      {
+        "id": "pref_platform_silent",
+        "statement": "社交平台短片在静音观看时也能通过画面和字幕理解核心内容"
+      },
+      {
+        "id": "pref_platform_hook",
+        "statement": "短视频开头用具体问题、动作或结果建立兴趣，不使用空泛铺垫"
+      },
+      {
+        "id": "pref_platform_loop",
+        "statement": "需要循环播放时让结尾动作或构图能自然衔接开头"
+      },
+      {
+        "id": "pref_platform_cover",
+        "statement": "封面候选帧优先选择主体清晰且信息密度适中的画面"
+      },
+      {
+        "id": "pref_platform_cta",
+        "statement": "行动提示只保留一个主要目标，避免同时要求关注、购买和分享"
+      },
+      {
+        "id": "pref_platform_landscape",
+        "statement": "横屏内容优先利用环境关系和左右空间，不机械放大竖屏构图"
+      },
+      {
+        "id": "pref_platform_vertical",
+        "statement": "竖屏内容优先利用纵向层次和人物近景，不简单裁切横屏画面"
+      },
+      {
+        "id": "pref_hierarchy_one_focus",
+        "statement": "每个镜头只建立一个首要视觉焦点，辅助信息服从主体"
+      },
+      {
+        "id": "pref_hierarchy_title",
+        "statement": "标题、说明和补充信息使用稳定层级，不让多个文本同时争夺注意力"
+      },
+      {
+        "id": "pref_hierarchy_color",
+        "statement": "强调色只标记真正重要的信息，不把所有元素都做成高对比"
+      },
+      {
+        "id": "pref_hierarchy_motion",
+        "statement": "动态元素的速度和幅度按信息优先级分配，背景动效保持克制"
+      },
+      {
+        "id": "pref_hierarchy_density",
+        "statement": "信息密集画面先删除非必要装饰，再通过分组和留白建立秩序"
+      },
+      {
+        "id": "pref_hierarchy_sequence",
+        "statement": "复杂信息按观看顺序逐步出现，不在同一时刻全部堆入画面"
+      },
+      {
+        "id": "pref_hierarchy_comparison",
+        "statement": "对比信息使用统一尺度和对齐方式，避免视觉大小误导结论"
+      },
+      {
+        "id": "pref_hierarchy_result",
+        "statement": "结果数字或结论出现时减少背景干扰并保持足够停留时间"
+      },
+      {
+        "id": "pref_people_expression",
+        "statement": "人物情绪通过表情、动作和环境共同呈现，避免过度表演"
+      },
+      {
+        "id": "pref_people_eye_line",
+        "statement": "对话或观察镜头保持合理视线方向，避免人物关系跳变"
+      },
+      {
+        "id": "pref_people_action",
+        "statement": "人物动作在切镜前后保持阶段连续，不重复或凭空跳到结果"
+      },
+      {
+        "id": "pref_people_distance",
+        "statement": "情绪变化优先通过景别和距离变化表达，不依赖夸张特效"
+      },
+      {
+        "id": "pref_people_group",
+        "statement": "多人场景先交代人物关系和空间位置，再进入单人特写"
+      },
+      {
+        "id": "pref_people_interview",
+        "statement": "访谈人物保留自然停顿和呼吸，不把语句剪得过碎"
+      },
+      {
+        "id": "pref_people_privacy",
+        "statement": "涉及隐私或敏感身份时避免展示不必要的面部、地址和账号信息"
+      },
+      {
+        "id": "pref_people_continuity",
+        "statement": "同一人物跨镜头保持服饰、发型、道具和光线方向一致"
+      },
+      {
+        "id": "pref_demo_problem",
+        "statement": "功能演示先明确用户问题，再展示操作和可验证结果"
+      },
+      {
+        "id": "pref_demo_cursor",
+        "statement": "屏幕操作镜头保持指针和点击目标清晰，不做无关快速移动"
+      },
+      {
+        "id": "pref_demo_steps",
+        "statement": "连续操作按步骤拆分，每个镜头只承担一个关键动作"
+      },
+      {
+        "id": "pref_demo_before_after",
+        "statement": "前后对比使用相同尺度、视角和时间范围，保证比较公平"
+      },
+      {
+        "id": "pref_demo_result",
+        "statement": "展示结果时保留可核验界面或物理反馈，不只用口号替代"
+      },
+      {
+        "id": "pref_demo_detail",
+        "statement": "关键按钮、结构或工艺使用局部特写，但先让观众知道其所在位置"
+      },
+      {
+        "id": "pref_demo_error",
+        "statement": "错误场景只展示理解问题所需的信息，避免把失败过程拖得过长"
+      },
+      {
+        "id": "pref_demo_speed",
+        "statement": "操作加速时保留关键节点和因果关系，不让步骤看起来凭空完成"
+      },
+      {
+        "id": "pref_documentary_context",
+        "statement": "纪实内容先交代时间、地点和人物关系，再呈现观点"
+      },
+      {
+        "id": "pref_documentary_evidence",
+        "statement": "观点性旁白优先配合真实行动、环境或资料证据"
+      },
+      {
+        "id": "pref_documentary_observation",
+        "statement": "观察性镜头保留现场节奏和环境声，不过度依赖音乐煽情"
+      },
+      {
+        "id": "pref_documentary_quote",
+        "statement": "引用人物原话时保持语义完整，不用拼接改变原意"
+      },
+      {
+        "id": "pref_documentary_archive",
+        "statement": "历史资料明确区分来源与当前画面，避免制造时间混淆"
+      },
+      {
+        "id": "pref_documentary_location",
+        "statement": "地点变化使用环境建立镜头或明确文字提示建立方向感"
+      },
+      {
+        "id": "pref_documentary_detail",
+        "statement": "细节镜头用于补充事实和生活质感，不替代必要背景"
+      },
+      {
+        "id": "pref_documentary_ending",
+        "statement": "纪实结尾回到人物处境或核心事实，不强行给出过度结论"
+      },
+      {
+        "id": "pref_data_baseline",
+        "statement": "数据比较保持统一基线和单位，不用截断坐标夸大差异"
+      },
+      {
+        "id": "pref_data_labels",
+        "statement": "图表标签直接靠近对应数据，减少观众来回寻找图例"
+      },
+      {
+        "id": "pref_data_sequence",
+        "statement": "多组数据按问题顺序逐项展开，不让所有曲线同时出现"
+      },
+      {
+        "id": "pref_data_source",
+        "statement": "关键数据在画面或说明中保留来源和统计口径"
+      },
+      {
+        "id": "pref_data_motion",
+        "statement": "数据动画用于解释变化过程，速度应允许观众读取数值"
+      },
+      {
+        "id": "pref_data_highlight",
+        "statement": "只高亮与当前结论相关的数据，其他信息降低视觉权重"
+      },
+      {
+        "id": "pref_data_uncertainty",
+        "statement": "存在区间或不确定性时明确展示，避免把估计值表达为确定事实"
+      },
+      {
+        "id": "pref_data_summary",
+        "statement": "图表结束后用一句可核验结论收束，不重复朗读全部数值"
+      },
+      {
+        "id": "pref_access_caption",
+        "statement": "关键信息同时提供可读字幕，不只依赖声音传达"
+      },
+      {
+        "id": "pref_access_contrast",
+        "statement": "文字与背景保持稳定对比，避免依赖相近颜色区分信息"
+      },
+      {
+        "id": "pref_access_flash",
+        "statement": "避免可能造成不适的高频闪烁和快速明暗反转"
+      },
+      {
+        "id": "pref_access_reading",
+        "statement": "专业术语、数字和行动提示给予比普通字幕更长的阅读时间"
+      },
+      {
+        "id": "pref_access_audio",
+        "statement": "重要提示不用单一音效表达，应同时提供画面或文字线索"
+      },
+      {
+        "id": "pref_access_language",
+        "statement": "说明文字使用直接句式和一致术语，避免不必要的复杂表达"
+      },
+      {
+        "id": "pref_access_safe_area",
+        "statement": "字幕和交互提示避开平台控件遮挡区及画面裁切边缘"
+      },
+      {
+        "id": "pref_access_scale",
+        "statement": "移动端关键文字和图标保持足够尺寸，不用缩小内容换取信息量"
+      }
+    ]
+  },
+  "knowledgeCandidates": [
+    {
+      "id": "knowledge_landscape_establishing",
+      "statement": "景观短片可用航拍或广角全景先建立湖泊、山体与城镇的空间尺度，再进入局部细节。",
+      "applicability": "适用于旅行、城市形象和自然景观类开场；主体需要先建立空间关系时采用。",
+      "source": {
+        "type": "sample",
+        "taskId": "seed_sample_1_v1",
+        "sampleName": "1.mp4",
+        "methodIds": [
+          "wide_establishing"
+        ],
+        "evidenceRanges": [
+          {
+            "start_sec": 0,
+            "end_sec": 16.14
+          }
+        ]
+      }
+    },
+    {
+      "id": "knowledge_landscape_montage",
+      "statement": "多地点景观可通过远景与建筑细节交替的蒙太奇保持变化，同时维持统一的地理氛围。",
+      "applicability": "适用于需要在短时长内呈现多个地点，又不能让画面彼此割裂的旅行或宣传短片。",
+      "source": {
+        "type": "sample",
+        "taskId": "seed_sample_1_v1",
+        "sampleName": "1.mp4",
+        "methodIds": [
+          "location_montage"
+        ],
+        "evidenceRanges": [
+          {
+            "start_sec": 0,
+            "end_sec": 16.14
+          }
+        ]
+      }
+    },
+    {
+      "id": "knowledge_landscape_detail_reveal",
+      "statement": "景观叙事在全景建立环境后，应以水面、建筑或地形细节补充可感知信息，再回到总体空间完成收束。",
+      "applicability": "适用于景观、文旅和地点介绍，需要兼顾规模感与具体观察时采用。",
+      "source": {
+        "type": "sample",
+        "taskId": "seed_sample_1_v1",
+        "sampleName": "1.mp4",
+        "methodIds": [
+          "wide_establishing",
+          "location_montage"
+        ],
+        "evidenceRanges": [
+          {
+            "start_sec": 0,
+            "end_sec": 4
+          },
+          {
+            "start_sec": 8,
+            "end_sec": 12
+          },
+          {
+            "start_sec": 14,
+            "end_sec": 16.14
+          }
+        ]
+      }
+    },
+    {
+      "id": "knowledge_flower_closeups",
+      "statement": "花卉主题可交替使用整体环境和浅景深特写，以花瓣、花蕊等细节承接季节氛围。",
+      "applicability": "适用于花卉、春日、自然生活方式等需要兼顾环境与细节质感的短片。",
+      "source": {
+        "type": "sample",
+        "taskId": "seed_sample_8_v1",
+        "sampleName": "8.mp4",
+        "methodIds": [
+          "flower_closeups"
+        ],
+        "evidenceRanges": [
+          {
+            "start_sec": 2,
+            "end_sec": 4
+          },
+          {
+            "start_sec": 8,
+            "end_sec": 15.67
+          }
+        ]
+      }
+    },
+    {
+      "id": "knowledge_seasonal_montage",
+      "statement": "同一季节主题可用不同花卉、色彩与景别的蒙太奇制造丰富度，但应保持光线和情绪连续。",
+      "applicability": "适用于季节、自然、生活方式和节日主题的短时长混剪。",
+      "source": {
+        "type": "sample",
+        "taskId": "seed_sample_8_v1",
+        "sampleName": "8.mp4",
+        "methodIds": [
+          "seasonal_montage"
+        ],
+        "evidenceRanges": [
+          {
+            "start_sec": 0,
+            "end_sec": 15.67
+          }
+        ]
+      }
+    },
+    {
+      "id": "knowledge_text_visual_sync",
+      "statement": "诗意文案应在相关自然画面出现时同步进入，并给观众留出完整阅读时间，避免文字与视觉主题脱节。",
+      "applicability": "适用于诗意、节气、旅行和品牌情绪短片中需要画面与字幕共同表达主题的段落。",
+      "source": {
+        "type": "sample",
+        "taskId": "seed_sample_8_v1",
+        "sampleName": "8.mp4",
+        "methodIds": [
+          "onscreen_text",
+          "seasonal_montage"
+        ],
+        "evidenceRanges": [
+          {
+            "start_sec": 0,
+            "end_sec": 15.67
+          }
+        ]
+      }
+    },
+    {
+      "id": "knowledge_product_problem_process_result",
+      "statement": "产品与服务演示中，先呈现明确问题，再展示处理过程和可验证结果，形成完整因果链",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；需要证明价值而不是只做氛围展示时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:problem_process_result",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_wide_to_detail",
+      "statement": "产品与服务演示中，先用全景建立空间和关系，再进入与目标直接相关的局部细节",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；观众需要同时理解整体位置与关键细节时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:wide_to_detail",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_action_match",
+      "statement": "产品与服务演示中，利用动作方向和动作阶段连接相邻镜头，减少切换造成的跳跃感",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；连续动作、操作过程或移动场景的剪辑",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:action_match",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_visual_question_answer",
+      "statement": "产品与服务演示中，前一镜头提出视觉问题，后一镜头用动作、结果或细节完成回答",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；需要建立期待并保持短片推进感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:visual_question_answer",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_progressive_reveal",
+      "statement": "产品与服务演示中，把关键信息拆成环境、主体和结果三个层次逐步揭示",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；重要信息不宜一次性堆满画面时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:progressive_reveal",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_contrast_pair",
+      "statement": "产品与服务演示中，用统一尺度和视角组织前后、强弱或新旧对比，避免比较口径变化",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；对比是核心论证方式时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:contrast_pair",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_one_idea_per_shot",
+      "statement": "产品与服务演示中，每个镜头只承担一个主要信息点，并让字幕与画面共同服务该信息",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；信息密度较高或观众需要快速理解时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:one_idea_per_shot",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_rhythm_breathing",
+      "statement": "产品与服务演示中，在连续高信息镜头之间插入短暂停顿或低密度画面恢复阅读节奏",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；快速剪辑容易造成理解疲劳时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:rhythm_breathing",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_motif_recurrence",
+      "statement": "产品与服务演示中，让同一颜色、物体或构图母题在关键段落重复出现以连接结构",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；多地点、多人物或多步骤内容需要统一感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:motif_recurrence",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_spatial_orientation",
+      "statement": "产品与服务演示中，地点或视角变化前先提供方向、环境或相对位置线索",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；跨空间切换可能让观众失去方向感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:spatial_orientation",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_detail_evidence",
+      "statement": "产品与服务演示中，用可观察的细节镜头支撑旁白结论，不用无关氛围画面替代证据",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；内容包含事实、品质或过程判断时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:detail_evidence",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_text_on_relevance",
+      "statement": "产品与服务演示中，文字只在对应事实或动作出现时进入，并保留完整阅读时间",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；字幕、标题或数据需要与画面同步时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:text_on_relevance",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_audio_lead",
+      "statement": "产品与服务演示中，允许下一场景的声音提前进入，为地点、人物或情绪变化建立预期",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；需要让场景转换更自然时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:audio_lead",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_audio_tail",
+      "statement": "产品与服务演示中，切换画面后短暂保留上一场景声音，维持语义或情绪连续",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；采访、环境观察或叙事段落的衔接",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:audio_tail",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_pace_escalation",
+      "statement": "产品与服务演示中，随着冲突、步骤或信息接近结果逐步缩短镜头时长",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；内容存在明确高潮或结果节点时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:pace_escalation",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_pace_release",
+      "statement": "产品与服务演示中，关键结果出现后适当放慢并留出停顿，让观众完成理解",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；结论、成果或情绪落点需要被记住时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:pace_release",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_foreground_depth",
+      "statement": "产品与服务演示中，利用前景、中景和背景建立深度，同时保持主体不被遮挡",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；平面素材或普通环境需要增强空间感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:foreground_depth",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_light_direction",
+      "statement": "产品与服务演示中，相邻镜头保持主要光线方向和明暗逻辑连续，减少身份与空间跳变",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；人物、产品或同一地点跨镜头连续出现时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:light_direction",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_color_progression",
+      "statement": "产品与服务演示中，色彩变化应对应叙事阶段或情绪推进，而不是逐镜头随机换色",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；短片需要建立统一视觉方向时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:color_progression",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_camera_motivation",
+      "statement": "产品与服务演示中，推近、拉远或横移必须由信息揭示、人物动作或空间关系驱动",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；需要使用明显运镜但不希望产生炫技感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:camera_motivation",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_identity_anchor",
+      "statement": "产品与服务演示中，跨镜头保留人物、物体或地点的稳定识别特征作为身份锚点",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；素材来源复杂或生成镜头较多时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:identity_anchor",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_step_checkpoint",
+      "statement": "产品与服务演示中，多步骤过程在关键节点展示可核验中间状态，防止步骤看起来凭空完成",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；教程、操作演示和流程说明",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:step_checkpoint",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_exception_then_rule",
+      "statement": "产品与服务演示中，先用具体反例暴露问题，再总结可迁移的方法或判断规则",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；抽象知识需要降低理解门槛时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:exception_then_rule",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_rule_then_example",
+      "statement": "产品与服务演示中，先给出简短原则，再立刻用一个可观察案例验证其作用",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；观众已有基础背景且需要快速掌握方法时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:rule_then_example",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_source_visible",
+      "statement": "产品与服务演示中，关键事实、数字或引用在对应画面保留来源与口径线索",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；可信度和可复核性高于纯情绪表达时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:source_visible",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_safe_fallback",
+      "statement": "产品与服务演示中，缺少理想素材时选择与镜头目的相符的降级表达，并明确不伪造缺失结果",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；素材生成或外部资源可能失败时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:safe_fallback",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_ending_callback",
+      "statement": "产品与服务演示中，结尾回到开头的问题、物体或构图，形成结构闭环",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；短片需要明确收束而不是突然停止时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:ending_callback",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_product_single_cta",
+      "statement": "产品与服务演示中，结尾只保留一个与前文价值直接相关的行动目标",
+      "applicability": "产品功能、软件操作、服务流程和商业说明；内容需要引导下一步行为时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "product:single_cta",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_problem_process_result",
+      "statement": "人物与纪实表达中，先呈现明确问题，再展示处理过程和可验证结果，形成完整因果链",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；需要证明价值而不是只做氛围展示时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:problem_process_result",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_wide_to_detail",
+      "statement": "人物与纪实表达中，先用全景建立空间和关系，再进入与目标直接相关的局部细节",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；观众需要同时理解整体位置与关键细节时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:wide_to_detail",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_action_match",
+      "statement": "人物与纪实表达中，利用动作方向和动作阶段连接相邻镜头，减少切换造成的跳跃感",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；连续动作、操作过程或移动场景的剪辑",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:action_match",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_visual_question_answer",
+      "statement": "人物与纪实表达中，前一镜头提出视觉问题，后一镜头用动作、结果或细节完成回答",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；需要建立期待并保持短片推进感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:visual_question_answer",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_progressive_reveal",
+      "statement": "人物与纪实表达中，把关键信息拆成环境、主体和结果三个层次逐步揭示",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；重要信息不宜一次性堆满画面时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:progressive_reveal",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_contrast_pair",
+      "statement": "人物与纪实表达中，用统一尺度和视角组织前后、强弱或新旧对比，避免比较口径变化",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；对比是核心论证方式时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:contrast_pair",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_one_idea_per_shot",
+      "statement": "人物与纪实表达中，每个镜头只承担一个主要信息点，并让字幕与画面共同服务该信息",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；信息密度较高或观众需要快速理解时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:one_idea_per_shot",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_rhythm_breathing",
+      "statement": "人物与纪实表达中，在连续高信息镜头之间插入短暂停顿或低密度画面恢复阅读节奏",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；快速剪辑容易造成理解疲劳时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:rhythm_breathing",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_motif_recurrence",
+      "statement": "人物与纪实表达中，让同一颜色、物体或构图母题在关键段落重复出现以连接结构",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；多地点、多人物或多步骤内容需要统一感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:motif_recurrence",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_spatial_orientation",
+      "statement": "人物与纪实表达中，地点或视角变化前先提供方向、环境或相对位置线索",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；跨空间切换可能让观众失去方向感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:spatial_orientation",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_detail_evidence",
+      "statement": "人物与纪实表达中，用可观察的细节镜头支撑旁白结论，不用无关氛围画面替代证据",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；内容包含事实、品质或过程判断时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:detail_evidence",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_text_on_relevance",
+      "statement": "人物与纪实表达中，文字只在对应事实或动作出现时进入，并保留完整阅读时间",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；字幕、标题或数据需要与画面同步时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:text_on_relevance",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_audio_lead",
+      "statement": "人物与纪实表达中，允许下一场景的声音提前进入，为地点、人物或情绪变化建立预期",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；需要让场景转换更自然时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:audio_lead",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_audio_tail",
+      "statement": "人物与纪实表达中，切换画面后短暂保留上一场景声音，维持语义或情绪连续",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；采访、环境观察或叙事段落的衔接",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:audio_tail",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_pace_escalation",
+      "statement": "人物与纪实表达中，随着冲突、步骤或信息接近结果逐步缩短镜头时长",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；内容存在明确高潮或结果节点时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:pace_escalation",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_pace_release",
+      "statement": "人物与纪实表达中，关键结果出现后适当放慢并留出停顿，让观众完成理解",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；结论、成果或情绪落点需要被记住时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:pace_release",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_foreground_depth",
+      "statement": "人物与纪实表达中，利用前景、中景和背景建立深度，同时保持主体不被遮挡",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；平面素材或普通环境需要增强空间感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:foreground_depth",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_light_direction",
+      "statement": "人物与纪实表达中，相邻镜头保持主要光线方向和明暗逻辑连续，减少身份与空间跳变",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；人物、产品或同一地点跨镜头连续出现时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:light_direction",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_color_progression",
+      "statement": "人物与纪实表达中，色彩变化应对应叙事阶段或情绪推进，而不是逐镜头随机换色",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；短片需要建立统一视觉方向时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:color_progression",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_camera_motivation",
+      "statement": "人物与纪实表达中，推近、拉远或横移必须由信息揭示、人物动作或空间关系驱动",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；需要使用明显运镜但不希望产生炫技感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:camera_motivation",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_identity_anchor",
+      "statement": "人物与纪实表达中，跨镜头保留人物、物体或地点的稳定识别特征作为身份锚点",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；素材来源复杂或生成镜头较多时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:identity_anchor",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_step_checkpoint",
+      "statement": "人物与纪实表达中，多步骤过程在关键节点展示可核验中间状态，防止步骤看起来凭空完成",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；教程、操作演示和流程说明",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:step_checkpoint",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_exception_then_rule",
+      "statement": "人物与纪实表达中，先用具体反例暴露问题，再总结可迁移的方法或判断规则",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；抽象知识需要降低理解门槛时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:exception_then_rule",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_rule_then_example",
+      "statement": "人物与纪实表达中，先给出简短原则，再立刻用一个可观察案例验证其作用",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；观众已有基础背景且需要快速掌握方法时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:rule_then_example",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_source_visible",
+      "statement": "人物与纪实表达中，关键事实、数字或引用在对应画面保留来源与口径线索",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；可信度和可复核性高于纯情绪表达时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:source_visible",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_safe_fallback",
+      "statement": "人物与纪实表达中，缺少理想素材时选择与镜头目的相符的降级表达，并明确不伪造缺失结果",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；素材生成或外部资源可能失败时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:safe_fallback",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_ending_callback",
+      "statement": "人物与纪实表达中，结尾回到开头的问题、物体或构图，形成结构闭环",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；短片需要明确收束而不是突然停止时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:ending_callback",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_people_single_cta",
+      "statement": "人物与纪实表达中，结尾只保留一个与前文价值直接相关的行动目标",
+      "applicability": "人物故事、访谈、纪录观察和组织文化；内容需要引导下一步行为时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "people:single_cta",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_problem_process_result",
+      "statement": "旅行与生活方式中，先呈现明确问题，再展示处理过程和可验证结果，形成完整因果链",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；需要证明价值而不是只做氛围展示时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:problem_process_result",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_wide_to_detail",
+      "statement": "旅行与生活方式中，先用全景建立空间和关系，再进入与目标直接相关的局部细节",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；观众需要同时理解整体位置与关键细节时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:wide_to_detail",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_action_match",
+      "statement": "旅行与生活方式中，利用动作方向和动作阶段连接相邻镜头，减少切换造成的跳跃感",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；连续动作、操作过程或移动场景的剪辑",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:action_match",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_visual_question_answer",
+      "statement": "旅行与生活方式中，前一镜头提出视觉问题，后一镜头用动作、结果或细节完成回答",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；需要建立期待并保持短片推进感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:visual_question_answer",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_progressive_reveal",
+      "statement": "旅行与生活方式中，把关键信息拆成环境、主体和结果三个层次逐步揭示",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；重要信息不宜一次性堆满画面时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:progressive_reveal",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_contrast_pair",
+      "statement": "旅行与生活方式中，用统一尺度和视角组织前后、强弱或新旧对比，避免比较口径变化",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；对比是核心论证方式时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:contrast_pair",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_one_idea_per_shot",
+      "statement": "旅行与生活方式中，每个镜头只承担一个主要信息点，并让字幕与画面共同服务该信息",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；信息密度较高或观众需要快速理解时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:one_idea_per_shot",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_rhythm_breathing",
+      "statement": "旅行与生活方式中，在连续高信息镜头之间插入短暂停顿或低密度画面恢复阅读节奏",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；快速剪辑容易造成理解疲劳时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:rhythm_breathing",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_motif_recurrence",
+      "statement": "旅行与生活方式中，让同一颜色、物体或构图母题在关键段落重复出现以连接结构",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；多地点、多人物或多步骤内容需要统一感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:motif_recurrence",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_spatial_orientation",
+      "statement": "旅行与生活方式中，地点或视角变化前先提供方向、环境或相对位置线索",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；跨空间切换可能让观众失去方向感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:spatial_orientation",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_detail_evidence",
+      "statement": "旅行与生活方式中，用可观察的细节镜头支撑旁白结论，不用无关氛围画面替代证据",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；内容包含事实、品质或过程判断时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:detail_evidence",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_text_on_relevance",
+      "statement": "旅行与生活方式中，文字只在对应事实或动作出现时进入，并保留完整阅读时间",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；字幕、标题或数据需要与画面同步时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:text_on_relevance",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_audio_lead",
+      "statement": "旅行与生活方式中，允许下一场景的声音提前进入，为地点、人物或情绪变化建立预期",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；需要让场景转换更自然时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:audio_lead",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_audio_tail",
+      "statement": "旅行与生活方式中，切换画面后短暂保留上一场景声音，维持语义或情绪连续",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；采访、环境观察或叙事段落的衔接",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:audio_tail",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_pace_escalation",
+      "statement": "旅行与生活方式中，随着冲突、步骤或信息接近结果逐步缩短镜头时长",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；内容存在明确高潮或结果节点时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:pace_escalation",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_pace_release",
+      "statement": "旅行与生活方式中，关键结果出现后适当放慢并留出停顿，让观众完成理解",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；结论、成果或情绪落点需要被记住时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:pace_release",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_foreground_depth",
+      "statement": "旅行与生活方式中，利用前景、中景和背景建立深度，同时保持主体不被遮挡",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；平面素材或普通环境需要增强空间感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:foreground_depth",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_light_direction",
+      "statement": "旅行与生活方式中，相邻镜头保持主要光线方向和明暗逻辑连续，减少身份与空间跳变",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；人物、产品或同一地点跨镜头连续出现时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:light_direction",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_color_progression",
+      "statement": "旅行与生活方式中，色彩变化应对应叙事阶段或情绪推进，而不是逐镜头随机换色",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；短片需要建立统一视觉方向时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:color_progression",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_camera_motivation",
+      "statement": "旅行与生活方式中，推近、拉远或横移必须由信息揭示、人物动作或空间关系驱动",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；需要使用明显运镜但不希望产生炫技感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:camera_motivation",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_identity_anchor",
+      "statement": "旅行与生活方式中，跨镜头保留人物、物体或地点的稳定识别特征作为身份锚点",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；素材来源复杂或生成镜头较多时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:identity_anchor",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_step_checkpoint",
+      "statement": "旅行与生活方式中，多步骤过程在关键节点展示可核验中间状态，防止步骤看起来凭空完成",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；教程、操作演示和流程说明",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:step_checkpoint",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_exception_then_rule",
+      "statement": "旅行与生活方式中，先用具体反例暴露问题，再总结可迁移的方法或判断规则",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；抽象知识需要降低理解门槛时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:exception_then_rule",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_rule_then_example",
+      "statement": "旅行与生活方式中，先给出简短原则，再立刻用一个可观察案例验证其作用",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；观众已有基础背景且需要快速掌握方法时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:rule_then_example",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_source_visible",
+      "statement": "旅行与生活方式中，关键事实、数字或引用在对应画面保留来源与口径线索",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；可信度和可复核性高于纯情绪表达时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:source_visible",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_safe_fallback",
+      "statement": "旅行与生活方式中，缺少理想素材时选择与镜头目的相符的降级表达，并明确不伪造缺失结果",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；素材生成或外部资源可能失败时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:safe_fallback",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_ending_callback",
+      "statement": "旅行与生活方式中，结尾回到开头的问题、物体或构图，形成结构闭环",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；短片需要明确收束而不是突然停止时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:ending_callback",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_travel_single_cta",
+      "statement": "旅行与生活方式中，结尾只保留一个与前文价值直接相关的行动目标",
+      "applicability": "地点介绍、自然景观、活动记录和生活方式内容；内容需要引导下一步行为时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "travel:single_cta",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_problem_process_result",
+      "statement": "教育与知识说明中，先呈现明确问题，再展示处理过程和可验证结果，形成完整因果链",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；需要证明价值而不是只做氛围展示时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:problem_process_result",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_wide_to_detail",
+      "statement": "教育与知识说明中，先用全景建立空间和关系，再进入与目标直接相关的局部细节",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；观众需要同时理解整体位置与关键细节时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:wide_to_detail",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_action_match",
+      "statement": "教育与知识说明中，利用动作方向和动作阶段连接相邻镜头，减少切换造成的跳跃感",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；连续动作、操作过程或移动场景的剪辑",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:action_match",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_visual_question_answer",
+      "statement": "教育与知识说明中，前一镜头提出视觉问题，后一镜头用动作、结果或细节完成回答",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；需要建立期待并保持短片推进感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:visual_question_answer",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_progressive_reveal",
+      "statement": "教育与知识说明中，把关键信息拆成环境、主体和结果三个层次逐步揭示",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；重要信息不宜一次性堆满画面时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:progressive_reveal",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_contrast_pair",
+      "statement": "教育与知识说明中，用统一尺度和视角组织前后、强弱或新旧对比，避免比较口径变化",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；对比是核心论证方式时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:contrast_pair",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_one_idea_per_shot",
+      "statement": "教育与知识说明中，每个镜头只承担一个主要信息点，并让字幕与画面共同服务该信息",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；信息密度较高或观众需要快速理解时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:one_idea_per_shot",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_rhythm_breathing",
+      "statement": "教育与知识说明中，在连续高信息镜头之间插入短暂停顿或低密度画面恢复阅读节奏",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；快速剪辑容易造成理解疲劳时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:rhythm_breathing",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_motif_recurrence",
+      "statement": "教育与知识说明中，让同一颜色、物体或构图母题在关键段落重复出现以连接结构",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；多地点、多人物或多步骤内容需要统一感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:motif_recurrence",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_spatial_orientation",
+      "statement": "教育与知识说明中，地点或视角变化前先提供方向、环境或相对位置线索",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；跨空间切换可能让观众失去方向感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:spatial_orientation",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_detail_evidence",
+      "statement": "教育与知识说明中，用可观察的细节镜头支撑旁白结论，不用无关氛围画面替代证据",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；内容包含事实、品质或过程判断时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:detail_evidence",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_text_on_relevance",
+      "statement": "教育与知识说明中，文字只在对应事实或动作出现时进入，并保留完整阅读时间",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；字幕、标题或数据需要与画面同步时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:text_on_relevance",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_audio_lead",
+      "statement": "教育与知识说明中，允许下一场景的声音提前进入，为地点、人物或情绪变化建立预期",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；需要让场景转换更自然时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:audio_lead",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_audio_tail",
+      "statement": "教育与知识说明中，切换画面后短暂保留上一场景声音，维持语义或情绪连续",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；采访、环境观察或叙事段落的衔接",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:audio_tail",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_pace_escalation",
+      "statement": "教育与知识说明中，随着冲突、步骤或信息接近结果逐步缩短镜头时长",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；内容存在明确高潮或结果节点时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:pace_escalation",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_pace_release",
+      "statement": "教育与知识说明中，关键结果出现后适当放慢并留出停顿，让观众完成理解",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；结论、成果或情绪落点需要被记住时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:pace_release",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_foreground_depth",
+      "statement": "教育与知识说明中，利用前景、中景和背景建立深度，同时保持主体不被遮挡",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；平面素材或普通环境需要增强空间感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:foreground_depth",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_light_direction",
+      "statement": "教育与知识说明中，相邻镜头保持主要光线方向和明暗逻辑连续，减少身份与空间跳变",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；人物、产品或同一地点跨镜头连续出现时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:light_direction",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_color_progression",
+      "statement": "教育与知识说明中，色彩变化应对应叙事阶段或情绪推进，而不是逐镜头随机换色",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；短片需要建立统一视觉方向时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:color_progression",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_camera_motivation",
+      "statement": "教育与知识说明中，推近、拉远或横移必须由信息揭示、人物动作或空间关系驱动",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；需要使用明显运镜但不希望产生炫技感时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:camera_motivation",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_identity_anchor",
+      "statement": "教育与知识说明中，跨镜头保留人物、物体或地点的稳定识别特征作为身份锚点",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；素材来源复杂或生成镜头较多时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:identity_anchor",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_step_checkpoint",
+      "statement": "教育与知识说明中，多步骤过程在关键节点展示可核验中间状态，防止步骤看起来凭空完成",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；教程、操作演示和流程说明",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:step_checkpoint",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_exception_then_rule",
+      "statement": "教育与知识说明中，先用具体反例暴露问题，再总结可迁移的方法或判断规则",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；抽象知识需要降低理解门槛时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:exception_then_rule",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_rule_then_example",
+      "statement": "教育与知识说明中，先给出简短原则，再立刻用一个可观察案例验证其作用",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；观众已有基础背景且需要快速掌握方法时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:rule_then_example",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_source_visible",
+      "statement": "教育与知识说明中，关键事实、数字或引用在对应画面保留来源与口径线索",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；可信度和可复核性高于纯情绪表达时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:source_visible",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_safe_fallback",
+      "statement": "教育与知识说明中，缺少理想素材时选择与镜头目的相符的降级表达，并明确不伪造缺失结果",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；素材生成或外部资源可能失败时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:safe_fallback",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_ending_callback",
+      "statement": "教育与知识说明中，结尾回到开头的问题、物体或构图，形成结构闭环",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；短片需要明确收束而不是突然停止时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:ending_callback",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_education_single_cta",
+      "statement": "教育与知识说明中，结尾只保留一个与前文价值直接相关的行动目标",
+      "applicability": "课程讲解、科普、数据解读和步骤教学；内容需要引导下一步行为时",
+      "source": {
+        "type": "catalog",
+        "sourceId": "education:single_cta",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_accessibility_multichannel",
+      "statement": "关键信息应至少通过画面、文字或声音中的两种方式表达，避免单一通道丢失信息",
+      "applicability": "静音观看、弱网预览、无障碍表达和公共环境播放",
+      "source": {
+        "type": "catalog",
+        "sourceId": "accessibility:multichannel",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    },
+    {
+      "id": "knowledge_revision_non_target",
+      "statement": "局部修改完成后必须同时核对目标变化和非目标内容保持不变",
+      "applicability": "字幕、镜头内容、视觉呈现、转场和时长的版本化局部修改",
+      "source": {
+        "type": "catalog",
+        "sourceId": "revision:non-target-protection",
+        "sourceTitle": "合成知识候选目录（待审核）",
+        "catalogVersion": "creative_library_seed.v1"
+      }
+    }
+  ]
+}

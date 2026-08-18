@@ -56,6 +56,12 @@ export function rankCreativeTextRows<T>(input: {
   }
   const documents = input.rows.map((row) => ({ row, terms: tokenizeCreativeText(input.text(row)) }))
   const averageLength = documents.reduce((sum, item) => sum + item.terms.length, 0) / Math.max(1, documents.length)
+  const documentFrequencies = new Map<string, number>()
+  for (const document of documents) {
+    for (const term of new Set(document.terms)) {
+      documentFrequencies.set(term, (documentFrequencies.get(term) ?? 0) + 1)
+    }
+  }
   const queryText = normalizeCreativeText(input.query)
   const scored = documents.map(({ row, terms }) => {
     const frequencies = new Map<string, number>()
@@ -66,7 +72,7 @@ export function rankCreativeTextRows<T>(input: {
       const frequency = frequencies.get(term) ?? 0
       if (!frequency) continue
       matchedTerms.push(term)
-      const documentFrequency = documents.filter((item) => item.terms.includes(term)).length
+      const documentFrequency = documentFrequencies.get(term) ?? 0
       const idf = Math.log(1 + (documents.length - documentFrequency + 0.5) / (documentFrequency + 0.5))
       const denominator = frequency + 1.2 * (0.25 + 0.75 * terms.length / Math.max(1, averageLength))
       score += idf * (frequency * 2.2) / denominator
@@ -93,10 +99,11 @@ export function rankCreativeTextRows<T>(input: {
     rank: index + 1,
   }))
   const selectedIds = new Set(items.map((item) => input.id(item.row)))
+  const eligibleRanks = new Map(eligible.map((item, index) => [input.id(item.row), index + 1]))
   return {
     items,
     audit: scored.map((item) => {
-      const eligibleRank = item.score >= minimumScore ? eligible.indexOf(item) + 1 : undefined
+      const eligibleRank = eligibleRanks.get(input.id(item.row))
       const selected = selectedIds.has(input.id(item.row))
       return {
         row: item.row,

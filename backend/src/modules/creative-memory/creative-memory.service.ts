@@ -14,7 +14,7 @@ import {
 
 export type CreativeMemoryScope = 'user' | 'draft'
 export type CreativeMemoryStatus = 'active' | 'candidate' | 'revoked'
-export type CreativeMemoryOrigin = 'explicit' | 'inferred'
+export type CreativeMemoryOrigin = 'explicit' | 'inferred' | 'synthetic'
 
 export interface CreativeMemoryRecord {
   id: string
@@ -95,7 +95,12 @@ type DbMemory = {
 
 type CreativeMemoryDelegate = {
   create(input: { data: Record<string, unknown> }): Promise<DbMemory>
-  findMany(input: { where: Record<string, unknown>; orderBy?: Record<string, 'asc' | 'desc'>; take?: number }): Promise<DbMemory[]>
+  findMany(input: {
+    where: Record<string, unknown>
+    orderBy?: Record<string, 'asc' | 'desc'>
+    skip?: number
+    take?: number
+  }): Promise<DbMemory[]>
   findFirst(input: { where: Record<string, unknown> }): Promise<DbMemory | null>
   updateMany(input: { where: Record<string, unknown>; data: Record<string, unknown> }): Promise<{ count: number }>
   deleteMany(input: { where: Record<string, unknown> }): Promise<{ count: number }>
@@ -181,7 +186,7 @@ async function effectiveCreativeMemoryStatus(input: {
 }): Promise<'active' | 'candidate'> {
   if (input.requestedStatus === 'candidate') return 'candidate'
   if (input.origin === 'inferred') return 'candidate'
-  const rows = await memories().findMany({ where: { userId: input.userId }, take: 500 })
+  const rows = await memories().findMany({ where: { userId: input.userId } })
   const normalized = normalizedText(input.statement)
   const sameScope = (item: DbMemory) =>
     item.scopeType === input.scopeType
@@ -224,6 +229,7 @@ export async function createCreativeMemory(input: {
   sourceWorkspaceSessionId?: string
   sourceTurnIds?: string[]
   sourceExcerpt?: string
+  preserveExistingStatus?: boolean
 }): Promise<CreativeMemoryRecord> {
   const statement = assertStatement(input.statement)
   await assertScope(input.userId, input.scopeType, input.draftId)
@@ -232,6 +238,21 @@ export async function createCreativeMemory(input: {
   const reuseExisting = async (existing: DbMemory) => {
     let current = existing
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (input.preserveExistingStatus) {
+        await memories().updateMany({
+          where: { id: current.id, userId: input.userId },
+          data: {
+            statement,
+            origin: input.origin,
+            sourceWorkspaceSessionId: input.sourceWorkspaceSessionId?.trim() || null,
+            sourceTurnIdsJson: (input.sourceTurnIds ?? []).slice(0, 20),
+            sourceExcerpt: input.sourceExcerpt?.trim().slice(0, 1_000) || null,
+          },
+        })
+        const refreshed = await memories().findFirst({ where: { id: current.id, userId: input.userId } })
+        if (!refreshed) throw new Error('Creative memory disappeared after metadata refresh.')
+        return record(refreshed)
+      }
       const needsPromotion = current.status === 'revoked'
         || (current.status === 'candidate' && input.status === 'active')
       if (!needsPromotion) return record(current)
@@ -281,6 +302,75 @@ export async function createCreativeMemory(input: {
   }
 }
 
+export async function synchronizeSyntheticCreativeMemory(input: {
+  userId: number
+  id: string
+  statement: string
+  sourceWorkspaceSessionId: string
+  sourceTurnId: string
+  sourceExcerpt: string
+}): Promise<CreativeMemoryRecord> {
+  const current = await memories().findFirst({ where: { id: input.id, userId: input.userId } })
+  if (!current) throw new Error('Creative memory not found during seed synchronization.')
+  if (current.origin !== 'synthetic' || current.status !== 'active') return record(current)
+  const statement = assertStatement(input.statement)
+  const semanticKey = memorySemanticKey(statement)
+  const collision = await memories().findFirst({
+    where: { userId: input.userId, scopeKey: current.scopeKey, semanticKey },
+  })
+  if (collision && collision.id !== current.id) {
+    await memories().deleteMany({ where: { id: current.id, userId: input.userId, origin: 'synthetic' } })
+    return record(collision)
+  }
+  const updated = await memories().updateMany({
+    where: { id: current.id, userId: input.userId, origin: 'synthetic', status: 'active' },
+    data: {
+      statement,
+      semanticKey,
+      sourceWorkspaceSessionId: input.sourceWorkspaceSessionId,
+      sourceTurnIdsJson: [input.sourceTurnId],
+      sourceExcerpt: input.sourceExcerpt,
+    },
+  })
+  if (updated.count !== 1) throw new Error('Creative memory changed during seed synchronization.')
+  const refreshed = await memories().findFirst({ where: { id: current.id, userId: input.userId } })
+  if (!refreshed) throw new Error('Creative memory disappeared after seed synchronization.')
+  return record(refreshed)
+}
+
+export interface CreativeMemoryPage {
+  items: CreativeMemoryRecord[]
+  total: number
+  offset: number
+  limit: number
+}
+
+export async function listCreativeMemoriesPage(input: {
+  userId: number
+  draftId?: string
+  scopeType?: CreativeMemoryScope
+  status?: CreativeMemoryStatus
+  offset?: number
+  limit?: number
+}): Promise<CreativeMemoryPage> {
+  const offset = Math.max(0, Math.floor(input.offset ?? 0))
+  const limit = Math.max(1, Math.min(Math.floor(input.limit ?? 50), 200))
+  const rows = await memories().findMany({
+    where: { userId: input.userId },
+    orderBy: { updatedAt: 'desc' },
+  })
+  const filtered = rows
+    .filter((item) => !input.scopeType || item.scopeType === input.scopeType)
+    .filter((item) => !input.status || item.status === input.status)
+    .filter((item) => item.scopeType === 'user' || item.draftId === input.draftId)
+  return {
+    items: filtered.slice(offset, offset + limit).map(record),
+    total: filtered.length,
+    offset,
+    limit,
+  }
+}
+
 export async function listCreativeMemories(input: {
   userId: number
   draftId?: string
@@ -288,19 +378,7 @@ export async function listCreativeMemories(input: {
   status?: CreativeMemoryStatus
   limit?: number
 }): Promise<CreativeMemoryRecord[]> {
-  // ponytail: bounded in-process filtering is sufficient for the current small corpus;
-  // move scope/status filtering into indexed queries if a user can exceed 500 memories.
-  const rows = await memories().findMany({
-    where: { userId: input.userId },
-    orderBy: { updatedAt: 'desc' },
-    take: 500,
-  })
-  return rows
-    .filter((item) => !input.scopeType || item.scopeType === input.scopeType)
-    .filter((item) => !input.status || item.status === input.status)
-    .filter((item) => item.scopeType === 'user' || item.draftId === input.draftId)
-    .slice(0, Math.max(1, Math.min(input.limit ?? 100, 200)))
-    .map(record)
+  return (await listCreativeMemoriesPage({ ...input, limit: input.limit ?? 100 })).items
 }
 
 export async function updateCreativeMemory(input: {
@@ -317,6 +395,8 @@ export async function updateCreativeMemory(input: {
     const statement = assertStatement(input.statement)
     data.statement = statement
     data.semanticKey = memorySemanticKey(statement)
+    data.origin = 'explicit'
+    data.sourceExcerpt = statement
   }
   if (input.status !== undefined) {
     data.status = input.status
@@ -379,7 +459,7 @@ export async function searchCreativeMemories(input: {
   activeLimit?: number
   candidateLimit?: number
 }): Promise<CreativeMemorySearchResult> {
-  const rows = await memories().findMany({ where: { userId: input.userId }, take: 500 })
+  const rows = await memories().findMany({ where: { userId: input.userId } })
   const scopeFiltered = rows.filter(
     (item) => item.scopeType === 'draft' && item.draftId !== input.draftId,
   )

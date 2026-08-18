@@ -178,7 +178,7 @@ export interface CreativeMemoryDto {
   draftId?: string
   statement: string
   status: 'active' | 'candidate' | 'revoked'
-  origin: 'explicit' | 'inferred'
+  origin: 'explicit' | 'inferred' | 'synthetic'
   sourceWorkspaceSessionId?: string
   sourceTurnIds: string[]
   sourceExcerpt?: string
@@ -217,10 +217,27 @@ export interface CreativeKnowledgeDto {
   applicability: string
   status: 'active' | 'candidate' | 'revoked'
   sources: Array<{
+    type: 'sample'
+    seedId?: string
     taskId: string
     sampleName?: string
     methodIds: string[]
     evidenceRanges: Array<{ start_sec: number; end_sec: number }>
+  } | {
+    type: 'catalog' | 'manual'
+    seedId?: string
+    sourceId: string
+    sourceTitle: string
+    catalogVersion?: string
+  } | {
+    type: 'manual_revision'
+    seedId?: string
+    editorUserId: number
+    editedAt: string
+  } | {
+    type: 'review'
+    reviewerId: string
+    reviewedAt: string
   }>
   createdByUserId?: number
   createdAt: string
@@ -241,7 +258,7 @@ export interface CreativeKnowledgeSearchResult {
     matchedTerms: string[]
     rank?: number
     selected: boolean
-    reason: 'selected' | 'below_threshold' | 'top_k_cutoff' | 'status_filtered'
+    reason: 'selected' | 'below_threshold' | 'top_k_cutoff' | 'status_filtered' | 'review_filtered'
   }>
 }
 
@@ -252,7 +269,9 @@ async function request<T>(
   const res = await requestResponse(path, init)
 
   if (!res.ok) {
-    throw new Error(res.status === 409
+    throw new Error(res.status === 403
+      ? '当前操作需要管理员权限，请检查管理凭证。'
+      : res.status === 409
       ? '当前内容已经发生变化，请刷新后重试。'
       : '请求暂时没有完成，请稍后重试。')
   }
@@ -325,12 +344,21 @@ export async function listCreativeMemories(input: {
   draftId?: string
   scopeType?: CreativeMemoryDto['scopeType']
   status?: CreativeMemoryDto['status']
+  offset?: number
+  limit?: number
 } = {}) {
   const query = new URLSearchParams()
   if (input.draftId) query.set('draftId', input.draftId)
   if (input.scopeType) query.set('scopeType', input.scopeType)
   if (input.status) query.set('status', input.status)
-  return request<{ memories: CreativeMemoryDto[] }>(
+  if (input.offset !== undefined) query.set('offset', String(input.offset))
+  if (input.limit !== undefined) query.set('limit', String(input.limit))
+  return request<{
+    memories: CreativeMemoryDto[]
+    total: number
+    offset: number
+    limit: number
+  }>(
     `/api/creative-memories${query.size ? `?${query}` : ''}`,
   )
 }
@@ -378,17 +406,47 @@ export async function deleteCreativeMemory(id: string) {
   )
 }
 
-export async function listCreativeKnowledge(status?: CreativeKnowledgeDto['status']) {
+export async function listCreativeKnowledge(input: {
+  status?: CreativeKnowledgeDto['status']
+  offset?: number
+  limit?: number
+  adminToken?: string
+} = {}) {
   const query = new URLSearchParams()
-  if (status) query.set('status', status)
-  return request<{ knowledge: CreativeKnowledgeDto[] }>(
+  if (input.status) query.set('status', input.status)
+  if (input.offset !== undefined) query.set('offset', String(input.offset))
+  if (input.limit !== undefined) query.set('limit', String(input.limit))
+  return request<{
+    knowledge: CreativeKnowledgeDto[]
+    total: number
+    offset: number
+    limit: number
+  }>(
     `/api/creative-knowledge${query.size ? `?${query}` : ''}`,
+    input.adminToken ? { headers: { Authorization: `Bearer ${input.adminToken}` } } : undefined,
   )
 }
 
-export async function searchCreativeKnowledge(queryText: string) {
+export async function createCreativeKnowledge(input: {
+  statement: string
+  applicability: string
+}) {
+  return request<{ knowledge: CreativeKnowledgeDto }>('/api/creative-knowledge', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function searchCreativeKnowledge(queryText: string, input: {
+  status?: CreativeKnowledgeDto['status']
+  adminToken?: string
+} = {}) {
   const query = new URLSearchParams({ q: queryText })
-  return request<CreativeKnowledgeSearchResult>(`/api/creative-knowledge/search?${query}`)
+  if (input.status) query.set('status', input.status)
+  return request<CreativeKnowledgeSearchResult>(
+    `/api/creative-knowledge/search?${query}`,
+    input.adminToken ? { headers: { Authorization: `Bearer ${input.adminToken}` } } : undefined,
+  )
 }
 
 export async function updateCreativeKnowledge(input: {
@@ -396,17 +454,26 @@ export async function updateCreativeKnowledge(input: {
   statement?: string
   applicability?: string
   status?: CreativeKnowledgeDto['status']
+  adminToken?: string
 }) {
+  const { id, adminToken, ...body } = input
   return request<{ knowledge: CreativeKnowledgeDto }>(
-    `/api/creative-knowledge/${encodeURIComponent(input.id)}`,
-    { method: 'PATCH', body: JSON.stringify(input) },
+    `/api/creative-knowledge/${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      headers: adminToken ? { Authorization: `Bearer ${adminToken}` } : undefined,
+      body: JSON.stringify(body),
+    },
   )
 }
 
-export async function deleteCreativeKnowledge(id: string) {
+export async function deleteCreativeKnowledge(input: { id: string; adminToken?: string }) {
   return request<{ deleted: true }>(
-    `/api/creative-knowledge/${encodeURIComponent(id)}`,
-    { method: 'DELETE' },
+    `/api/creative-knowledge/${encodeURIComponent(input.id)}`,
+    {
+      method: 'DELETE',
+      headers: input.adminToken ? { Authorization: `Bearer ${input.adminToken}` } : undefined,
+    },
   )
 }
 

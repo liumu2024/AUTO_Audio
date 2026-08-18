@@ -29,6 +29,7 @@ const defaultAgentTraceDir = readEnv('AGENT_TRACE_DIR') ?? 'tmp/agent-trace'
 export const env = {
   port: Number(process.env.PORT ?? 3001),
   databaseUrl: process.env.DATABASE_URL ?? '',
+  creativeKnowledgeAdminToken: readEnv('CREATIVE_KNOWLEDGE_ADMIN_TOKEN'),
   redisUrl: process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
   wsPath: process.env.WS_PATH ?? '/ws/tasks',
   isDev: process.env.NODE_ENV !== 'production',

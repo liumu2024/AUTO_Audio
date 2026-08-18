@@ -27,6 +27,8 @@ type StatusFilter = 'all' | CreativeMemoryDto['status']
 export function CreativePreferencesView() {
   const draftId = useV2TimelineStore((state) => state.draftId)
   const [memories, setMemories] = useState<CreativeMemoryDto[]>([])
+  const [total, setTotal] = useState(0)
+  const [offset, setOffset] = useState(0)
   const [createScope, setCreateScope] = useState<CreativeMemoryDto['scopeType']>('user')
   const [scope, setScope] = useState<ScopeFilter>('all')
   const [status, setStatus] = useState<StatusFilter>('all')
@@ -44,13 +46,16 @@ export function CreativePreferencesView() {
         draftId: draftId ?? undefined,
         scopeType: scope === 'all' ? undefined : scope,
         status: status === 'all' ? undefined : status,
+        offset,
+        limit: 50,
       })
       setMemories(result.memories)
+      setTotal(result.total)
       setSearchResult(null)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
-  }, [draftId, scope, status])
+  }, [draftId, offset, scope, status])
 
   useEffect(() => { void refresh() }, [refresh])
 
@@ -139,7 +144,10 @@ export function CreativePreferencesView() {
           <select
             aria-label="偏好作用域筛选"
             value={scope}
-            onChange={(event) => setScope(event.target.value as ScopeFilter)}
+            onChange={(event) => {
+              setScope(event.target.value as ScopeFilter)
+              setOffset(0)
+            }}
             className="h-9 rounded-md border border-zinc-800 bg-zinc-900 px-3 text-sm"
           >
             <option value="all">全部作用域</option>
@@ -149,7 +157,10 @@ export function CreativePreferencesView() {
           <select
             aria-label="偏好状态筛选"
             value={status}
-            onChange={(event) => setStatus(event.target.value as StatusFilter)}
+            onChange={(event) => {
+              setStatus(event.target.value as StatusFilter)
+              setOffset(0)
+            }}
             className="h-9 rounded-md border border-zinc-800 bg-zinc-900 px-3 text-sm"
           >
             <option value="all">全部状态</option>
@@ -187,7 +198,9 @@ export function CreativePreferencesView() {
                   <div className="mb-2 flex flex-wrap gap-2 text-[11px]">
                     <span className="rounded bg-zinc-800 px-2 py-1">{memory.scopeType === 'user' ? '通用' : '当前草稿'}</span>
                     <span className="rounded bg-zinc-800 px-2 py-1">{memory.status === 'active' ? '已启用' : memory.status === 'candidate' ? '待观察' : '已停用'}</span>
-                    <span className="rounded bg-zinc-800 px-2 py-1">{memory.origin === 'explicit' ? '用户明确表达' : '从对话中推断'}</span>
+                    <span className="rounded bg-zinc-800 px-2 py-1">{memory.origin === 'explicit'
+                      ? '用户明确表达'
+                      : memory.origin === 'synthetic' ? '隔离评测画像' : '从对话中推断'}</span>
                   </div>
                   <p className="break-words text-sm leading-6">{memory.statement}</p>
                   {matchedTerms.length > 0 && score !== undefined && (
@@ -230,6 +243,15 @@ export function CreativePreferencesView() {
             <p className="rounded-xl border border-dashed border-zinc-800 p-8 text-center text-sm text-zinc-500">当前筛选下还没有创作偏好。</p>
           )}
         </div>
+        {!searchResult && total > 50 && (
+          <div className="flex items-center justify-between text-xs text-zinc-500">
+            <span>共 {total} 条，第 {offset + 1}–{Math.min(offset + memories.length, total)} 条</span>
+            <div className="flex gap-2">
+              <Button size="sm" variant="ghost" disabled={saving || offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}>上一页</Button>
+              <Button size="sm" variant="ghost" disabled={saving || offset + 50 >= total} onClick={() => setOffset(offset + 50)}>下一页</Button>
+            </div>
+          </div>
+        )}
         <CreativeKnowledgePanel />
       </div>
       <Dialog

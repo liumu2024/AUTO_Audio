@@ -22,6 +22,7 @@ import {
 import {
   getCreativeKnowledge,
   patchCreativeKnowledge,
+  postCreativeKnowledge,
   removeCreativeKnowledge,
   searchCreativeKnowledge,
 } from './modules/creative-knowledge/creative-knowledge.controller.js'
@@ -65,6 +66,7 @@ app.patch('/api/creative-memories/:memoryId', patchCreativeMemory)
 app.delete('/api/creative-memories/:memoryId', removeCreativeMemory)
 app.get('/api/creative-knowledge', getCreativeKnowledge)
 app.get('/api/creative-knowledge/search', searchCreativeKnowledge)
+app.post('/api/creative-knowledge', postCreativeKnowledge)
 app.patch('/api/creative-knowledge/:knowledgeId', patchCreativeKnowledge)
 app.delete('/api/creative-knowledge/:knowledgeId', removeCreativeKnowledge)
 app.use('/v2-renders', express.static(path.resolve(process.cwd(), 'v2-renders')))

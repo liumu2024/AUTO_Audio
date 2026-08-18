@@ -117,6 +117,26 @@ npm.cmd --prefix backend run dev
 npm.cmd --prefix fonted run dev
 ```
 
+## 创作偏好与知识数据库
+
+偏好和通用创作知识在运行时分别存入 `creative_memories` 与 `creative_knowledge`，业务检索只读取数据库。版本化初始化数据位于 `backend/prisma/data`：当前包含 144 条隔离合成画像偏好和 120 条知识候选，用于数据库容量、状态和检索评测，不冒充真实用户表达或人工审核结果。知识候选经管理员明确采纳后才参与 Planner；初始化按稳定条目 ID 更新和清理未审核数据，不覆盖人工修改、人工审核或已撤销记录。
+
+PostgreSQL 模式在完成 `db:push` 后导入：
+
+```powershell
+npm.cmd --prefix backend run db:seed
+```
+
+桌面本地数据库导入：
+
+```powershell
+$env:DPL304_LOCAL_MODE='true'
+$env:DPL304_LOCAL_DATA_DIR="$env:APPDATA\bytedance-dpl304-desktop\backend"
+npm.cmd --prefix backend run db:seed
+```
+
+管理界面支持偏好与知识的分页查询、搜索、编辑和删除。手动新增的通用方法先进入待审核状态；全局采纳、撤销及已采纳内容管理必须由后端配置 `CREATIVE_KNOWLEDGE_ADMIN_TOKEN`，管理员凭证只在当前管理页面会话中输入，不写入前端构建配置。修改已采纳知识会自动退回待审核并废止旧证据，防止改写后的内容继续沿用原审核结论。PostgreSQL 也可使用 `npm.cmd --prefix backend run db:studio` 检查原始记录。当前 `X-User-Id` 仍是本地开发身份边界，并非生产级账号鉴权；上线公网前仍需接入真实账号认证。
+
 ## 关键环境配置
 
 ```env

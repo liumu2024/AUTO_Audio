@@ -3,7 +3,7 @@ import type { Request, Response } from 'express'
 import {
   createCreativeMemory,
   deleteCreativeMemory,
-  listCreativeMemories,
+  listCreativeMemoriesPage,
   searchCreativeMemories as searchCreativeMemoriesService,
   updateCreativeMemory,
   type CreativeMemoryScope,
@@ -26,14 +26,15 @@ function status(value: unknown): CreativeMemoryStatus | undefined {
 }
 
 export async function getCreativeMemories(req: Request, res: Response) {
-  const records = await listCreativeMemories({
+  const page = await listCreativeMemoriesPage({
     userId: userIdFrom(req),
     draftId: typeof req.query.draftId === 'string' ? req.query.draftId : undefined,
     scopeType: scope(req.query.scopeType),
     status: status(req.query.status),
+    offset: Number(req.query.offset) || undefined,
     limit: Number(req.query.limit) || undefined,
   })
-  res.json({ memories: records })
+  res.json({ memories: page.items, total: page.total, offset: page.offset, limit: page.limit })
 }
 
 export async function searchCreativeMemories(req: Request, res: Response) {

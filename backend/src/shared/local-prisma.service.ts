@@ -65,7 +65,7 @@ interface LocalCreativeMemory {
   semanticKey: string
   statement: string
   status: 'active' | 'candidate' | 'revoked'
-  origin: 'explicit' | 'inferred'
+  origin: 'explicit' | 'inferred' | 'synthetic'
   sourceWorkspaceSessionId: string | null
   sourceTurnIdsJson: unknown
   sourceExcerpt: string | null
@@ -317,6 +317,7 @@ function makeLocalPrisma() {
       findMany: async (args: {
         where?: Record<string, unknown>
         orderBy?: Record<string, 'asc' | 'desc'>
+        skip?: number
         take?: number
       }) => {
         const drafts = state.v2TimelineDrafts.filter((item) =>
@@ -492,6 +493,7 @@ function makeLocalPrisma() {
       findMany: async (args: {
         where?: Record<string, unknown>
         orderBy?: Record<string, 'asc' | 'desc'>
+        skip?: number
         take?: number
       }) => {
         const memories = state.creativeMemories.filter((memory) =>
@@ -508,7 +510,9 @@ function makeLocalPrisma() {
             ) * factor,
           )
         }
-        return memories.slice(0, args.take ?? undefined).map(creativeMemoryOut)
+        const start = Math.max(0, args.skip ?? 0)
+        return memories.slice(start, args.take === undefined ? undefined : start + args.take)
+          .map(creativeMemoryOut)
       },
       findFirst: async (args: { where?: Record<string, unknown> }) => {
         const memory = state.creativeMemories.find((item) =>
@@ -582,6 +586,7 @@ function makeLocalPrisma() {
       findMany: async (args: {
         where?: Record<string, unknown>
         orderBy?: Record<string, 'asc' | 'desc'>
+        skip?: number
         take?: number
       }) => {
         const rows = state.creativeKnowledge.filter((knowledge) =>
@@ -595,8 +600,15 @@ function makeLocalPrisma() {
           rows.sort((left, right) => String(left[field as keyof LocalCreativeKnowledge] ?? '')
             .localeCompare(String(right[field as keyof LocalCreativeKnowledge] ?? '')) * factor)
         }
-        return rows.slice(0, args.take ?? undefined).map(creativeKnowledgeOut)
+        const start = Math.max(0, args.skip ?? 0)
+        return rows.slice(start, args.take === undefined ? undefined : start + args.take)
+          .map(creativeKnowledgeOut)
       },
+      count: async (args: { where?: Record<string, unknown> }) => state.creativeKnowledge.filter((knowledge) =>
+        Object.entries(args.where ?? {}).every(
+          ([key, value]) => knowledge[key as keyof LocalCreativeKnowledge] === value,
+        ),
+      ).length,
       findFirst: async (args: { where?: Record<string, unknown> }) => {
         const row = state.creativeKnowledge.find((knowledge) =>
           Object.entries(args.where ?? {}).every(
