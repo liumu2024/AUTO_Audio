@@ -70,7 +70,7 @@ Write-Host ''
 Write-Host 'Next steps:' -ForegroundColor White
 Write-Host '  cd backend'
 Write-Host '  copy .env.example .env'
-Write-Host '  npm run db:push'
+Write-Host '  npm run db:deploy'
 Write-Host '  npm run db:seed'
 Write-Host '  npm run dev'
 Write-Host '  # new terminal: npm run worker:analyzer'

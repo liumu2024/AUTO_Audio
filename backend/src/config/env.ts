@@ -30,6 +30,10 @@ export const env = {
   port: Number(process.env.PORT ?? 3001),
   databaseUrl: process.env.DATABASE_URL ?? '',
   creativeKnowledgeAdminToken: readEnv('CREATIVE_KNOWLEDGE_ADMIN_TOKEN'),
+  creativeRetrievalMode:
+    readEnv('CREATIVE_RETRIEVAL_MODE') === 'hybrid' ? 'hybrid' as const : 'bm25' as const,
+  creativeEmbeddingRemoteHost:
+    readEnv('CREATIVE_EMBEDDING_REMOTE_HOST') ?? 'https://huggingface.co/',
   redisUrl: process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
   wsPath: process.env.WS_PATH ?? '/ws/tasks',
   isDev: process.env.NODE_ENV !== 'production',

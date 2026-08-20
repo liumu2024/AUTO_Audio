@@ -9,7 +9,7 @@ import {
 import {
   longestSharedCreativeHanPhrase,
   normalizeCreativeText,
-  rankCreativeTextRows,
+  rankConfiguredCreativeTextRows,
 } from './creative-text-retrieval.js'
 
 export type CreativeMemoryScope = 'user' | 'draft'
@@ -424,8 +424,9 @@ export async function deleteCreativeMemory(input: { userId: number; id: string }
   return (await memories().deleteMany({ where: { id: input.id, userId: input.userId } })).count === 1
 }
 
-function rank(rows: DbMemory[], query: string, limit: number) {
-  const ranked = rankCreativeTextRows({
+async function rank(rows: DbMemory[], query: string, limit: number) {
+  const ranked = await rankConfiguredCreativeTextRows({
+    entityType: 'memory',
     rows,
     id: (row) => row.id,
     text: (row) => row.statement,
@@ -469,12 +470,12 @@ export async function searchCreativeMemories(input: {
   const scoped = rows
     .filter((item) => item.scopeType === 'user' || item.draftId === input.draftId)
     .filter((item) => item.status === 'active' || item.status === 'candidate')
-  const active = rank(
+  const active = await rank(
     scoped.filter((item) => item.status === 'active'),
     input.query,
     Math.min(input.activeLimit ?? 8, 8),
   )
-  const candidate = rank(
+  const candidate = await rank(
     scoped.filter((item) => item.status === 'candidate'),
     input.query,
     Math.min(input.candidateLimit ?? 3, 3),

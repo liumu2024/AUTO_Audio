@@ -30,4 +30,4 @@ if ($confirm -ne 'yes') {
 Write-Host '==> Removing containers and volumes...' -ForegroundColor Yellow
 $exitCode = Invoke-Docker compose down -v
 if ($exitCode -ne 0) { exit $exitCode }
-Write-Host '[OK] Reset complete. Run db-up.ps1 and npm run db:push again.' -ForegroundColor Green
+Write-Host '[OK] Reset complete. Run db-up.ps1 and npm run db:deploy again.' -ForegroundColor Green

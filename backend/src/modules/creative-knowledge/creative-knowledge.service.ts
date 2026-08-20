@@ -7,7 +7,7 @@ import type {
 import { prisma } from '../../shared/prisma.service.js'
 import {
   normalizeCreativeText,
-  rankCreativeTextRows,
+  rankConfiguredCreativeTextRows,
 } from '../creative-memory/creative-text-retrieval.js'
 
 export type CreativeKnowledgeStatus = 'active' | 'candidate' | 'revoked'
@@ -550,7 +550,8 @@ export async function searchCreativeKnowledge(input: {
   const reviewFilteredIds = new Set(statusEligible
     .filter((item) => !eligibleIds.has(item.id))
     .map((item) => item.id))
-  const ranked = rankCreativeTextRows({
+  const ranked = await rankConfiguredCreativeTextRows({
+    entityType: 'knowledge',
     rows: eligible,
     id: (row) => row.id,
     text: (row) => `${row.statement} ${row.applicability}`,

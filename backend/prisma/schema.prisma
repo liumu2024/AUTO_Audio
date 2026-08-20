@@ -132,6 +132,19 @@ model CreativeKnowledge {
   @@map("creative_knowledge")
 }
 
+model CreativeRetrievalEmbedding {
+  entityType  String                     @map("entity_type")
+  entityId    String                     @map("entity_id")
+  contentHash String                     @map("content_hash")
+  model       String
+  embedding   Unsupported("vector(512)")
+  updatedAt   DateTime                   @default(now()) @map("updated_at")
+
+  @@id([entityType, entityId])
+  @@index([entityType, model], map: "creative_retrieval_embeddings_model_idx")
+  @@map("creative_retrieval_embeddings")
+}
+
 model V2IdempotencyReceipt {
   id             String    @id
   userId         Int       @map("user_id")

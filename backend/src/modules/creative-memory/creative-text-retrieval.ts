@@ -120,3 +120,110 @@ export function rankCreativeTextRows<T>(input: {
     }),
   }
 }
+
+export async function rankHybridCreativeTextRows<T>(input: {
+  entityType: 'memory' | 'knowledge'
+  rows: T[]
+  id: (row: T) => string
+  text: (row: T) => string
+  updatedAt: (row: T) => Date
+  query: string
+  limit: number
+  minimumScore?: number
+}) {
+  const lexical = rankCreativeTextRows({
+    ...input,
+    limit: Math.min(20, input.rows.length),
+  })
+  if (!input.rows.length) return lexical
+
+  const { scoreCreativeSemantics } = await import('./creative-embedding.js')
+  const similarities = await scoreCreativeSemantics({
+    entityType: input.entityType,
+    rows: input.rows.map((row) => ({ id: input.id(row), text: input.text(row) })),
+    query: input.query,
+  })
+  const semantic = input.rows.map((row) => ({
+    row,
+    similarity: similarities.get(input.id(row)) ?? -1,
+  })).sort((left, right) =>
+    right.similarity - left.similarity
+    || input.updatedAt(right.row).getTime() - input.updatedAt(left.row).getTime()
+    || input.id(left.row).localeCompare(input.id(right.row)),
+  )
+
+  const lexicalById = new Map(lexical.audit.map((item) => [input.id(item.row), item]))
+  const topLexicalScore = lexical.audit[0]?.score ?? 0
+  const topSemanticScore = semantic[0]?.similarity ?? 0
+  const eligible = semantic.map((item) => {
+    const id = input.id(item.row)
+    const lexicalItem = lexicalById.get(id)
+    const minimumLexicalScore = input.minimumScore ?? 1.5
+    const semanticFloor = Math.max(0.58, topSemanticScore - 0.15)
+    const lexicalEligible = (lexicalItem?.score ?? 0) >= minimumLexicalScore
+      && ((lexicalItem?.score ?? 0) >= topLexicalScore * 0.30
+        || (lexicalItem?.matchedTerms.length ?? 0) >= 2)
+    const semanticEligible = item.similarity >= semanticFloor
+      && ((lexicalItem?.matchedTerms.length ?? 0) > 0
+        || (item.similarity === topSemanticScore && topSemanticScore >= 0.65))
+    const lexicalScore = topLexicalScore > 0 ? (lexicalItem?.score ?? 0) / topLexicalScore : 0
+    const semanticScore = topSemanticScore > semanticFloor
+      ? Math.max(0, (item.similarity - semanticFloor) / (topSemanticScore - semanticFloor))
+      : Number(item.similarity === topSemanticScore)
+    const score = Math.max(semanticScore, lexicalScore) + Math.min(semanticScore, lexicalScore) * 0.05
+    return {
+      row: item.row,
+      score,
+      similarity: item.similarity,
+      matchedTerms: lexicalItem?.matchedTerms ?? [],
+      eligible: lexicalEligible || semanticEligible,
+    }
+  }).filter((item) => item.eligible)
+    .sort((left, right) => right.score - left.score
+      || right.similarity - left.similarity
+      || input.updatedAt(right.row).getTime() - input.updatedAt(left.row).getTime()
+      || input.id(left.row).localeCompare(input.id(right.row)))
+
+  const items = eligible.slice(0, input.limit).map((item, index) => ({
+    row: item.row,
+    score: Number((item.score * 100).toFixed(6)),
+    matchedTerms: item.matchedTerms,
+    rank: index + 1,
+  }))
+  const selectedIds = new Set(items.map((item) => input.id(item.row)))
+  const eligibleRanks = new Map(eligible.map((item, index) => [input.id(item.row), index + 1]))
+  return {
+    items,
+    audit: semantic.map((item) => {
+      const id = input.id(item.row)
+      const fused = eligible.find((candidate) => input.id(candidate.row) === id)
+      const rank = eligibleRanks.get(id)
+      const selected = selectedIds.has(id)
+      return {
+        row: item.row,
+        score: fused ? Number((fused.score * 100).toFixed(6)) : 0,
+        matchedTerms: lexicalById.get(id)?.matchedTerms ?? [],
+        ...(rank ? { rank } : {}),
+        selected,
+        reason: selected
+          ? 'selected' as const
+          : rank
+            ? 'top_k_cutoff' as const
+            : 'below_threshold' as const,
+      }
+    }),
+  }
+}
+
+export async function rankConfiguredCreativeTextRows<T>(input: Parameters<typeof rankCreativeTextRows<T>>[0] & {
+  entityType: 'memory' | 'knowledge'
+}) {
+  const { env } = await import('../../config/env.js')
+  if (env.creativeRetrievalMode !== 'hybrid') return rankCreativeTextRows(input)
+  try {
+    return await rankHybridCreativeTextRows(input)
+  } catch (error) {
+    console.warn('[creative-retrieval] Vector ranking unavailable; using BM25.', error)
+    return rankCreativeTextRows(input)
+  }
+}

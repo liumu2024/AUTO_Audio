@@ -112,16 +112,16 @@ npm.cmd run desktop:dev
 ```powershell
 .\script\docker\db-up.ps1
 npm.cmd --prefix backend run db:generate
-npm.cmd --prefix backend run db:push
+npm.cmd --prefix backend run db:deploy
 npm.cmd --prefix backend run dev
 npm.cmd --prefix fonted run dev
 ```
 
 ## 创作偏好与知识数据库
 
-偏好和通用创作知识在运行时分别存入 `creative_memories` 与 `creative_knowledge`，业务检索只读取数据库。版本化初始化数据位于 `backend/prisma/data`：当前包含 144 条隔离合成画像偏好和 120 条知识候选，用于数据库容量、状态和检索评测，不冒充真实用户表达或人工审核结果。知识候选经管理员明确采纳后才参与 Planner；初始化按稳定条目 ID 更新和清理未审核数据，不覆盖人工修改、人工审核或已撤销记录。
+偏好和通用创作知识在运行时分别存入 `creative_memories` 与 `creative_knowledge`，业务检索只读取数据库；启用 hybrid 模式后，以 pgvector 精确余弦检索与 BM25 融合排序，当前数据量不建立近似索引。版本化初始化数据位于 `backend/prisma/data`：当前包含 144 条隔离合成画像偏好和 120 条知识候选，用于数据库容量、状态和检索评测，不冒充真实用户表达或人工审核结果。知识候选经管理员明确采纳后才参与 Planner；初始化按稳定条目 ID 更新和清理未审核数据，不覆盖人工修改、人工审核或已撤销记录。
 
-PostgreSQL 模式在完成 `db:push` 后导入：
+PostgreSQL 模式在完成 `db:deploy` 后导入：
 
 ```powershell
 npm.cmd --prefix backend run db:seed

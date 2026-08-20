@@ -58,7 +58,7 @@ Use this mode when developing against PostgreSQL:
 ```powershell
 npm.cmd install
 npm.cmd run db:generate
-npm.cmd run db:push
+npm.cmd run db:deploy
 npm.cmd run dev
 ```
 
