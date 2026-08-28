@@ -5,7 +5,8 @@
   "type": "module",
   "main": "desktop/main.cjs",
   "scripts": {
-    "desktop:dev": "node desktop/scripts/dev.mjs"
+    "desktop:dev": "node desktop/scripts/dev.mjs",
+    "server:dev": "node script/dev-server.mjs"
   },
   "devDependencies": {
     "electron": "^39.2.7"

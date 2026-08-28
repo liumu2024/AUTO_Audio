@@ -44,6 +44,7 @@
 | `fonted/` | 对话式创作工作区、可编辑时间线、素材与历史状态界面 |
 | `shared/` | 前后端共享协议、时间线类型与校验逻辑 |
 | `remotion/` | 视频 Composition 与程序化渲染组件 |
+| `official-skills/` | 随仓库保留的 Remotion 官方参考资料；正式链只按注册表加载已启用部分 |
 | `desktop/` | Electron 本地启动器 |
 
 ## 快速开始
@@ -56,12 +57,13 @@ npm.cmd --prefix backend install
 npm.cmd --prefix fonted install
 npm.cmd --prefix remotion install
 npm.cmd --prefix backend run build:shared
+npm.cmd --prefix backend run db:generate
 ```
 
 复制并填写环境变量：
 
 - `backend/.env.example` → `backend/.env`
-- `fonted/.env.example` → `fonted/.env`
+- `fonted/.env.example` → `fonted/.env.development`
 
 真实模型调用需要配置 Ark / Seedance 凭证。本地渲染需要 FFmpeg，以及 Remotion 可用的 Chrome 或 Chromium。
 
@@ -75,18 +77,18 @@ npm.cmd run desktop:dev
 
 ### PostgreSQL 开发模式
 
+日常启动只需在项目根目录运行：
+
 ```powershell
-docker compose up -d --wait
-npm.cmd --prefix backend run db:generate
-npm.cmd --prefix backend run db:deploy
-npm.cmd --prefix backend run db:seed
+npm.cmd run server:dev
 ```
 
-分别启动后端和前端：
+请先启动 Docker Desktop。该命令不调用 PowerShell 脚本，因此无需修改系统执行策略；它会启动 PostgreSQL 与 Redis、应用数据库迁移，并同时启动后端和前端。按 `Ctrl+C` 会停止前后端进程，数据库容器及其数据仍保留。
+
+首次创建数据库后，另执行一次初始化数据：
 
 ```powershell
-npm.cmd --prefix backend run dev
-npm.cmd --prefix fonted run dev
+npm.cmd --prefix backend run db:seed
 ```
 
 `db:seed` 用于空数据库初始化，也可在版本化 Seed 更新后重复执行；人工审核、修改或撤销的数据不会被覆盖。
