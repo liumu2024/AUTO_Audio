@@ -1,70 +1,54 @@
 # 多模态智能视频创作平台
 
-一个面向多轮 AI 视频创作的可编辑 Agent 平台。系统把自然语言、图片素材和样例视频转换为版本化时间线，支持持续修改、AI 镜头生成、程序化合成与失败恢复。
+面向 AI 视频创作中多轮需求容易偏移、个人偏好与样片方法难复用、局部修改常需重做整案等问题，构建基于 LLM 决策的 Agent 视频创作平台，实现从自然语言与用户素材到可编辑时间线和最终视频的完整闭环。
 
-当前主链以 `RemotionTimelineSpecV1` 为唯一交付协议：Seedance 等视觉模型负责生成真实动态镜头，Remotion 负责字幕、转场、覆盖层和确定性时间线合成，FFmpeg 负责媒体标准化与最终封装。
+## 核心能力
 
-## 核心差异
+- **多轮需求对齐与可信执行**：通过创作总纲统一用户要求、素材事实、样片方法和镜头意图；方案创建与修改先形成可核对提案，再依据真实工具结果继续决策。
+- **创作记忆与知识复用**：区分用户偏好、草稿偏好和通用创作方法，支持状态管理、来源追踪及按任务相关性检索，并以当前要求为最高优先级。
+- **可编辑时间线**：将镜头、字幕、转场、素材和全局方向保存为版本化时间线；同镜头多项修改可联合规划、审查和保存，并保护授权范围外的内容。
+- **低成本二次创作**：复用未变化的素材与 AI 镜头，只重新生成受影响内容；通过幂等、版本冲突保护和失败隔离控制重复执行。
+- **多模态素材协同**：结合用户图片与视频、样例视频、AI 生成画面和程序化动效；支持参考图条件生成，而非仅将图片静态拼接。
+- **混合渲染交付**：Seedance 负责动态镜头生成，Remotion 负责字幕、转场与程序化画面，FFmpeg 负责媒体标准化和最终封装。
 
-- **先规划、再确认、后执行**：首次创作和方案修订都先生成可审查提案；高成本生成与渲染只有在用户明确确认后才执行。
-- **版本化可编辑方案**：镜头、字幕、转场、素材和创作总纲保存在统一时间线中；局部修改经过作用域合并和结果审查，非目标内容保持不变。
-- **真实工具回执**：用户回复以服务端实际执行结果为事实来源；模型只负责自然组织表达，不能把失败改写成成功。
-- **素材知识迁移**：图片既参与语义理解，也作为条件生成的真实输入；样例视频提取内容、表现方法、时机依据和可迁移知识，而不是机械复刻分段。
-- **长期创作上下文**：区分用户个人偏好与普适创作知识，支持候选、启用、撤销、来源追踪及按任务检索。
-- **低成本二次创作**：生成请求使用幂等记录；未变化的 AI 镜头按请求指纹、文件哈希和媒体可读性校验后复用，只重新生成受影响镜头。
-- **混合渲染交付**：用户素材、AI 视频、程序化画面、字幕和转场在同一时间线中合成，避免让单一生成模型承担全部工作。
-
-## 创作链路
+## 工作流程
 
 ```text
-自然语言 + 图片素材 + 样例视频
-  -> Director Agent 理解意图与选择工具
-  -> 首次创作摘要 / 修改提案
+自然语言 + 用户素材 + 样例视频
+  -> Director Agent 理解需求并选择工具
+  -> 创作摘要或修改提案
   -> 用户确认
-  -> Planner 生成或修订 RemotionTimelineSpecV1
-  -> 结构校验 + 作用域合并 + 结果审查
-  -> 素材解析与 AI 镜头生成/复用
-  -> FFmpeg 标准化
-  -> Remotion 完整时间线合成
-  -> MP4 + Trace + 版本化执行记录
+  -> Planner 生成或修订可编辑时间线
+  -> 结构校验、权限裁剪与结果审查
+  -> 素材生成或复用
+  -> Remotion + FFmpeg 合成
+  -> MP4、版本记录与可追溯回执
 ```
-
-文本、图片和样例不是互斥分支。用户可以从纯文本开始，之后继续添加图片或样例；所有新方案都通过创作总纲统一方向、图片观察事实、样例方法和实际采用的偏好。
-
-## 当前能力
-
-| 领域 | 已实现 |
-| --- | --- |
-| Director Agent | 多轮意图理解、工具选择、执行前确认、自然终态回复、工作区冲突恢复 |
-| 可编辑时间线 | 镜头、字幕、转场、素材、音频、全局创作方向及版本历史 |
-| 局部修改 | 字幕、镜头内容、视觉策略、结构、转场和全局总纲修订；非目标对象受保护 |
-| 多模态素材 | 图片像素理解、条件视频生成、样例视频方法提取、素材身份与依赖闭包 |
-| 生成与渲染 | Seedance 适配、AI 镜头复用、FFmpeg 标准化、Remotion 完整合成 |
-| 执行安全 | readiness 预检、幂等请求、版本冲突保护、真实取消状态、失败修订门禁 |
-| 记忆与知识 | 用户/草稿偏好、普适创作知识、状态管理、BM25 检索、来源与采用记录 |
 
 ## 技术栈
 
-- TypeScript、React、Vite、Zustand
-- Express、Prisma、PostgreSQL（服务器模式）
-- OpenAI Responses API 兼容的结构化模型调用
-- Ark / Seedance 视频理解与生成
-- Remotion、FFmpeg
-- Electron 桌面壳
-
-## 目录
-
-| 路径 | 职责 |
+| 层级 | 技术 |
 | --- | --- |
-| `backend/` | Director、Planner、素材分析、时间线服务、生成/渲染、记忆和知识 |
-| `fonted/` | React 编辑器、对话工作区、时间线编辑、素材与历史运行状态 |
-| `shared/` | 前后端共享协议、时间线类型、校验器和确定性工具 |
-| `remotion/` | 最终时间线 Composition 与程序化画面组件 |
-| `desktop/` | Electron 本地启动器，不承载视频业务逻辑 |
+| 前端 | TypeScript、React、Vite、Zustand |
+| Agent 与服务端 | Express、Responses API、结构化输出 |
+| 数据 | Prisma、PostgreSQL、pgvector |
+| 视频生成 | Ark / Seedance |
+| 视频合成 | Remotion、FFmpeg |
+| 桌面端 | Electron |
+
+## 项目结构
+
+| 路径 | 说明 |
+| --- | --- |
+| `backend/` | Director、Planner、素材理解、生成与渲染、创作记忆和知识库 |
+| `fonted/` | 对话式创作工作区、可编辑时间线、素材与历史状态界面 |
+| `shared/` | 前后端共享协议、时间线类型与校验逻辑 |
+| `remotion/` | 视频 Composition 与程序化渲染组件 |
+| `desktop/` | Electron 本地启动器 |
 
 ## 快速开始
 
-### 1. 安装依赖
+### 安装
 
 ```powershell
 npm.cmd install
@@ -74,40 +58,22 @@ npm.cmd --prefix remotion install
 npm.cmd --prefix backend run build:shared
 ```
 
-本地真实渲染还需要可用的 FFmpeg，以及 Remotion 可使用的 Chrome/Chromium。
+复制并填写环境变量：
 
-### 2. 配置环境变量
+- `backend/.env.example` → `backend/.env`
+- `fonted/.env.example` → `fonted/.env`
 
-参考：
+真实模型调用需要配置 Ark / Seedance 凭证。本地渲染需要 FFmpeg，以及 Remotion 可用的 Chrome 或 Chromium。
 
-- `backend/.env.example`
-- `fonted/.env.example`
-
-真实模型调用至少需要在 `backend/.env` 配置 Ark/Seedance 密钥。需要让外部生成服务读取本地上传图片时，还应配置公网可达素材地址或 TOS 发布器。不要提交真实密钥。
-
-### 3. 启动桌面开发模式
+### 桌面开发模式
 
 ```powershell
 npm.cmd run desktop:dev
 ```
 
-桌面模式默认启动：
+桌面模式使用本地持久化，不要求预先启动 PostgreSQL 或 Redis。
 
-- Backend：`http://127.0.0.1:3001`
-- Frontend：`http://127.0.0.1:5173`
-
-该模式使用本地持久化实现，不要求先启动 PostgreSQL、Redis 或独立 Worker。
-
-仅检查启动：
-
-```powershell
-$env:DPL304_DESKTOP_SMOKE_MS='8000'
-npm.cmd run desktop:dev
-```
-
-### 4. 服务器式开发
-
-需要 PostgreSQL 持久化时，先确保 Docker Desktop 已启动。首次配置执行：
+### PostgreSQL 开发模式
 
 ```powershell
 docker compose up -d --wait
@@ -116,124 +82,24 @@ npm.cmd --prefix backend run db:deploy
 npm.cmd --prefix backend run db:seed
 ```
 
-`docker compose up -d --wait` 与 `script/docker/db-up.ps1` 启动的是同一组 PostgreSQL、Redis 服务，直接执行 Docker 命令不受 PowerShell 脚本策略影响。如需使用脚本且出现“禁止运行脚本”，只对当前终端临时放行后再启动：
+分别启动后端和前端：
 
 ```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-.\script\docker\db-up.ps1
-```
-
-日常启动使用两个终端。终端一启动数据库和后端：
-
-```powershell
-docker compose up -d --wait
-npm.cmd --prefix backend run db:deploy
 npm.cmd --prefix backend run dev
-```
-
-`db:deploy` 已无待执行迁移时会直接返回；保留这一步可避免拉取新代码后遗漏数据库迁移。终端二启动前端：
-
-```powershell
 npm.cmd --prefix fonted run dev
 ```
 
-拉取新代码后，仅按实际变更补充执行：
+`db:seed` 用于空数据库初始化，也可在版本化 Seed 更新后重复执行；人工审核、修改或撤销的数据不会被覆盖。
 
-- 对应目录的 `package.json` 或 lockfile 变化：在该目录重新执行 `npm.cmd install`，例如 `npm.cmd --prefix backend install`
-- Prisma schema 或 Prisma Client 版本变化：`npm.cmd --prefix backend run db:generate`
-- 新增数据库迁移：`npm.cmd --prefix backend run db:deploy`
-
-关闭前后端时分别在对应终端按 `Ctrl+C`；停止数据库容器并保留数据：
+停止数据库服务并保留数据：
 
 ```powershell
 docker compose down
 ```
 
-该命令不带 `-v`，会保留 PostgreSQL 和 Redis 数据卷；`script/docker/db-down.ps1` 是相同行为的可选包装。
+当前 `X-User-Id` 仅用于本地开发身份隔离，不是生产级鉴权；不要将开发服务直接暴露到公网。
 
-## 创作偏好与知识数据库
+## 说明
 
-偏好和通用创作知识在运行时分别存入 `creative_memories` 与 `creative_knowledge`，业务检索只读取数据库；启用 hybrid 模式后，以 pgvector 精确余弦检索与 BM25 融合排序，当前数据量不建立近似索引。版本化初始化数据位于 `backend/prisma/data`：当前包含 144 条隔离合成画像偏好和 120 条知识候选，用于数据库容量、状态和检索评测，不冒充真实用户表达或人工审核结果。知识候选经管理员明确采纳后才参与 Planner；初始化按稳定条目 ID 更新和清理未审核数据，不覆盖人工修改、人工审核或已撤销记录。
-
-新建或重建的空数据库首次需要执行；以后 `backend/prisma/data` 中的 Seed 版本发生变化时也可重复执行：
-
-```powershell
-npm.cmd --prefix backend run db:seed
-```
-
-重复执行会按稳定条目 ID 同步版本化候选，不覆盖人工审核、人工修改或已撤销记录。
-
-数据库和后端启动后，可在项目根目录检查服务与当前正式数据：
-
-```powershell
-docker compose ps
-Invoke-RestMethod http://localhost:3001/health
-
-$userId = Read-Host '请输入前端当前使用的 VITE_USER_ID（未配置时输入 1）'
-$headers = @{ 'X-User-Id' = [string]$userId }
-(Invoke-RestMethod 'http://localhost:3001/api/creative-memories?scopeType=user&status=active&limit=1' -Headers $headers).total
-(Invoke-RestMethod 'http://localhost:3001/api/creative-knowledge?status=active&limit=1' -Headers $headers).total
-```
-
-进入“创作偏好”页面时，前端会立即读取偏好和通用创作知识；两处同时提示请求失败时，先确认 `docker compose ps` 中数据库健康且 `/health` 可访问。数据卷仍在但容器未运行时，页面无法读取数据，不代表数据库记录已被删除。上述数量用于核对当前前端用户和业务状态，不能单独判断数据库是否为空；知识 Seed 默认进入待审核状态，所以未采纳时 active 数量为 `0` 是正常结果，不应因此重复 Seed。以 `db:seed` 的成功输出和管理页面中的待审核记录确认导入结果，采纳后知识才会出现在“已采纳”列表并参与正式检索。
-
-桌面本地数据库导入：
-
-```powershell
-$env:DPL304_LOCAL_MODE='true'
-$env:DPL304_LOCAL_DATA_DIR="$env:APPDATA\bytedance-dpl304-desktop\backend"
-npm.cmd --prefix backend run db:seed
-```
-
-管理界面支持偏好与知识的分页查询、搜索、编辑和删除。手动新增的通用方法先进入待审核状态；全局采纳、撤销及已采纳内容管理必须由后端配置 `CREATIVE_KNOWLEDGE_ADMIN_TOKEN`，管理员凭证只在当前管理页面会话中输入，不写入前端构建配置。修改已采纳知识会自动退回待审核并废止旧证据，防止改写后的内容继续沿用原审核结论。PostgreSQL 也可使用 `npm.cmd --prefix backend run db:studio` 检查原始记录。当前 `X-User-Id` 仍是本地开发身份边界，并非生产级账号鉴权；上线公网前仍需接入真实账号认证。
-
-## 关键环境配置
-
-```env
-# Director / 图片和样例理解
-ARK_API_KEY=...
-VIDEO_UNDERSTANDING_MODEL=doubao-seed-2-0-lite-260428
-
-# AI 视频生成
-V2_VIDEO_GENERATION_PROVIDER=ark-seedance
-V2_VIDEO_GENERATION_API_KEY=...
-V2_VIDEO_GENERATION_MODEL=doubao-seedance-1-5-pro-251215
-
-# Remotion / FFmpeg
-# FFMPEG_BIN=C:\path\to\ffmpeg.exe
-# REMOTION_BROWSER_EXECUTABLE=C:\path\to\chrome.exe
-```
-
-素材发布和其他运行配置示例见 `backend/.env.example`。
-
-## Trace 与运行产物
-
-默认 Trace 位于：
-
-```text
-backend/tmp/v2-traces/
-  sessions/<workspace>/operations/<operation>/
-  tasks/<taskId>/
-```
-
-常见可清理产物：
-
-- `fonted/dist/`
-- `backend/tmp/`
-- `backend/uploads/`
-- `backend/renders/`
-- `backend/v2-renders/`
-- `remotion/public/render-lab-cache/`
-
-不要直接删除 `shared/**/*.js`、`shared/**/*.d.ts` 及其 map；后端 NodeNext 运行时会消费这些生成文件。需要更新时运行：
-
-```powershell
-npm.cmd --prefix backend run build:shared
-```
-
-## 已知边界
-
-- 当前只复用未变化的 AI 镜头，Remotion 最终 MP4 仍完整重新合成；分段渲染缓存尚未进入生产。
-- 局部修订当前仍由完整候选方案、服务端作用域合并和完整 revision 保存完成；`revision fragment` 尚未实施。
-- Provider 已进入提交中或状态未知时，系统会让当前 Run 失败并停止交付，但不能虚假承诺第三方任务已经停止。
-- 后台 Worker、跨进程租约恢复和严格远程取消仍是后续能力。
+- 用户偏好与通用创作知识分别持久化管理，只有启用的偏好和已采纳的知识参与规划。
+- 本地运行数据、上传素材、Trace、评测文件和临时构建产物不会提交到仓库；`shared/` 中供后端 NodeNext 使用的 JavaScript、类型声明和 source map 除外。

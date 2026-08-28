@@ -129,16 +129,6 @@ export const V2_AGENT_SKILLS: readonly V2AgentSkillManifest[] = [
     sourcePath: path.join(repoRoot, 'official-skills', 'skills', 'remotion-render', 'SKILL.md'), status: 'available',
     card: 'Remotion 官方渲染交付参考；只读，固定 V2 渲染器仍禁止自定义组件。', stage: 'delivery', allowedTools: [], loadLevel: 'controlled_reference',
   },
-  {
-    id: 'official.remotion-markup', version: 'repository', source: 'official_remotion',
-    sourcePath: path.join(repoRoot, 'official-skills', 'skills', 'remotion-markup', 'SKILL.md'), status: 'disabled',
-    card: '固定渲染器维护参考，不进入导演可选目录。', stage: 'maintenance', allowedTools: [], loadLevel: 'maintainer_only',
-  },
-  {
-    id: 'official.remotion-best-practices', version: 'repository', source: 'official_remotion',
-    sourcePath: path.join(repoRoot, 'official-skills', 'skills', 'remotion-best-practices', 'SKILL.md'), status: 'disabled',
-    card: '固定渲染器维护参考，不进入导演可选目录。', stage: 'maintenance', allowedTools: [], loadLevel: 'maintainer_only',
-  },
 ]
 
 export function listV2AgentSkillCards() {
