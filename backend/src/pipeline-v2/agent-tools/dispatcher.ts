@@ -153,6 +153,7 @@ function canvas(aspectRatio: DirectorContext['slots']['aspectRatio']) {
 function plannerInput(input: {
   taskId: string
   prompt: string
+  originalUserPrompt?: string
   context: DirectorContext
   workspace: DirectorWorkspaceState
   authorization?: V2AgentToolAuthorizationGrant
@@ -160,10 +161,12 @@ function plannerInput(input: {
   recalledCreativeMemories?: string[]
   recalledCreativeKnowledge?: string[]
   availableComponents?: RenderComponentSummary[]
+  toolArguments?: Record<string, unknown>
 }): V2PlannerInput {
   return {
     taskId: input.taskId,
     prompt: input.prompt,
+    originalUserPrompt: input.originalUserPrompt,
     creationMode: creationMode(input.context),
     referenceVideoPath: input.context.sampleVideo?.url,
     sampleUnderstanding: input.context.sampleVideo?.sampleUnderstanding,
@@ -204,9 +207,28 @@ function plannerInput(input: {
     agentToolContext: {
       callId: input.stage.toolRequest.callId,
       toolId: input.stage.toolRequest.toolId,
-      arguments: input.stage.toolRequest.arguments,
+      arguments: input.toolArguments ?? input.stage.toolRequest.arguments,
     },
     availableComponents: input.availableComponents,
+  }
+}
+
+export function resolveV2PlannerRequestContext(input: {
+  toolId: string
+  userPrompt: string
+  requestInstruction?: string
+  toolArguments: Record<string, unknown>
+  hasRevisionGroup: boolean
+}) {
+  const hasOriginalPrompt = Boolean(input.userPrompt.trim())
+  const useOriginalPrompt = hasOriginalPrompt
+    && (input.toolId === 'timeline.plan' || input.hasRevisionGroup)
+  return {
+    prompt: useOriginalPrompt ? input.userPrompt : input.requestInstruction ?? input.userPrompt,
+    originalUserPrompt: input.userPrompt,
+    toolArguments: input.toolId === 'timeline.plan' && hasOriginalPrompt
+      ? { ...input.toolArguments, instruction: input.userPrompt }
+      : input.toolArguments,
   }
 }
 
@@ -504,9 +526,17 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
         }]
       : [])
     const availableComponents = [...promotedComponents, ...authorizedDraftComponents]
+    const plannerRequest = resolveV2PlannerRequestContext({
+      toolId: request.toolId,
+      userPrompt: input.prompt,
+      requestInstruction: input.requestInstruction,
+      toolArguments: input.stage.toolRequest.arguments,
+      hasRevisionGroup: Boolean(input.revisionGroup),
+    })
     let plan = plannerInput({
       taskId: `v2_tool_${Date.now()}_${randomUUID().slice(0, 8)}`,
-      prompt: input.revisionGroup ? input.prompt : input.requestInstruction ?? input.prompt,
+      prompt: plannerRequest.prompt,
+      originalUserPrompt: plannerRequest.originalUserPrompt,
       context: input.context,
       workspace: input.workspace,
       authorization: input.authorization,
@@ -514,6 +544,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       recalledCreativeMemories: input.recalledCreativeMemories,
       recalledCreativeKnowledge: input.recalledCreativeKnowledge,
       availableComponents,
+      toolArguments: plannerRequest.toolArguments,
     })
     if (existing && input.workspace.draftId && input.workspace.baseRevision) {
       plan = {

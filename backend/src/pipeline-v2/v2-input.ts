@@ -49,6 +49,8 @@ export interface V2AgentToolContext {
 export interface V2PlannerInput {
   taskId: string
   prompt: string
+  /** Original turn text used only to preserve the user's output language during scoped revisions. */
+  originalUserPrompt?: string
   creationMode?: 'sample_replicate' | 'material_brief' | 'text_to_video'
   mainVideoPath?: string
   inputImageUrl?: string

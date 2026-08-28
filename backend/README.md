@@ -53,13 +53,49 @@ The desktop launcher sets this mode automatically.
 
 ## Server Mode
 
-Use this mode when developing against PostgreSQL:
+Use this mode when developing against PostgreSQL. Start the Docker services from the repository root first:
 
 ```powershell
-npm.cmd install
-npm.cmd run db:generate
-npm.cmd run db:deploy
-npm.cmd run dev
+docker compose up -d --wait
+```
+
+This starts the same PostgreSQL and Redis services as `script/docker/db-up.ps1` without depending on the PowerShell script policy. If you prefer the wrapper script and PowerShell blocks it, allow scripts only for the current terminal:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+.\script\docker\db-up.ps1
+```
+
+Run once after installation or Prisma schema changes:
+
+```powershell
+npm.cmd --prefix backend install
+npm.cmd --prefix backend run db:generate
+npm.cmd --prefix backend run db:deploy
+```
+
+For daily backend development:
+
+```powershell
+npm.cmd --prefix backend run db:deploy
+npm.cmd --prefix backend run dev
+```
+
+`db:deploy` is safe to repeat and returns without changing data when all migrations are already applied. Run `npm.cmd --prefix backend run db:seed` for a new or rebuilt empty database, and repeat it when the versioned Seed data changes. Stable IDs update Seed candidates without overwriting manually reviewed, edited, or revoked records. Seed knowledge remains pending until it is reviewed.
+
+Verify the server-mode dependencies before debugging application requests:
+
+```powershell
+docker compose ps
+Invoke-RestMethod http://localhost:3001/health
+```
+
+Both Compose services should be healthy. A preserved Docker volume does not make its data queryable while the PostgreSQL container or backend is stopped.
+
+Stop the database services without deleting their named volumes:
+
+```powershell
+docker compose down
 ```
 
 ## Key APIs

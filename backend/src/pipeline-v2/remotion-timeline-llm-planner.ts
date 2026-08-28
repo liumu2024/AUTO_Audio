@@ -598,7 +598,7 @@ export function buildV2TimelinePlannerPrompt(
     '- Do not use product-marketing labels such as demo, selling point, proof, or CTA unless the user/materials are clearly product or marketing oriented.',
     '- Choose user-facing scene wording from the detected content domain instead of a fixed template. Examples: product can use 展示/卖点/转化; narrative can use 起因/推进/转折/结尾; landscape/music can use 氛围/节奏/视觉重点; education can use 问题/解释/示例/总结.',
     '- If the content domain is unclear, use neutral structure labels such as 开篇引入、内容推进、重点展开、衔接过渡、结尾收束.',
-    '- Scene title, subtitle, body, and overlay text should be concise Chinese when the user prompt is Chinese.',
+    '- All user-visible plan text must use the same primary language as user_prompt. This includes creative_brief.direction, image-reference facts and intended use, sample_methods, scene creative_intent title/description/material_label, scene card copy, overlay text, material job prompts shown in the plan, and notes. Keep protocol ids and enum values unchanged.',
     '- For user_video, ai_video, and image_motion scenes, do not use title, subtitle, or body as visible copy. Put the shot explanation in creative_intent { title, description, material_label }; only overlays[].text is visible in the finished video.',
     '- For remotion_card, caption_scene, and data_viz scenes, title, subtitle, and body are intentional on-screen card copy. Do not put internal filenames or planning prose there.',
     '- Scene creative_intent should tell a normal user what appears in the shot, which material is used, how it moves, and how it connects to the next shot.',
@@ -784,6 +784,9 @@ export function buildV2TimelineRevisionPlannerPrompt(
     '- 只能使用权威素材目录和组件目录中的 ID。不得填写 planning_gaps、执行回执、input_image_url 或虚假 fulfilled 状态。',
     '- 只实现本轮明确要求。授权目标之外的镜头、字幕、时间、转场、素材和创作事实必须保持不变。',
     '- Fragment 返回 creative_brief 时，applied_preferences 只能包含本轮实际采用的 recalled_user_preferences 原句。',
+    ...(input.originalUserPrompt?.trim()
+      ? ['- 面向用户的可见文本必须跟随“用户原始输入”的主要语言；该输入仅用于可见文本的语言判断，不扩大修订范围。']
+      : []),
     '',
     '本轮 Scope 规则',
     ...scopeRules,
@@ -806,6 +809,9 @@ export function buildV2TimelineRevisionPlannerPrompt(
     '',
     '当前用户要求',
     input.prompt,
+    ...(input.originalUserPrompt?.trim()
+      ? ['', '用户原始输入（仅作可见文本语言依据）', input.originalUserPrompt.trim()]
+      : []),
     '',
     '当前有效项目要求',
     JSON.stringify(activeRequirements),

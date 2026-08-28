@@ -84,12 +84,15 @@ export function buildV2TimelineRevisionIntent(input: {
           : []
   const display = targetDisplay(typedScope, targetIds, input.baseSpec)
   const target = display.length ? display.join('；') : '全片'
+  const expectedImpact = typedScope === 'structure'
+    ? `将按“${input.userRequest.trim()}”重组上述 ${display.length || targetIds.length} 个镜头，并${input.arguments.durationMode === 'resize_timeline' ? '同步调整目标范围及后续时间' : '保持目标范围总时长'}`
+    : `将调整 ${target} 的${IMPACT[typedScope]}`
   return {
     callId: input.callId,
     originalRequest: input.userRequest,
     scope: typedScope,
     targetDisplay: display,
-    expectedImpact: `将调整 ${target} 的${IMPACT[typedScope]}`,
+    expectedImpact,
     protectedBoundary: BOUNDARY[typedScope],
   }
 }

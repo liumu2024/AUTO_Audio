@@ -4,6 +4,7 @@ import type { DirectorAgentStreamEvent } from '@shared/types/director-stream'
 import type { DirectorConversationRuntime } from '@shared/lib/director-understanding'
 import type { DirectorContext } from '@shared/types/director-context'
 import type { RemotionTimelineSpecV1 } from '@shared/types/remotion-timeline-spec.v1'
+import { streamDirectorEventsWithReplay } from '@/lib/director-stream-replay'
 
 export interface UploadResult {
   url: string
@@ -296,11 +297,6 @@ const DIRECTOR_REPLAY_TIMEOUT_MS = 5 * 60_000
 
 function idempotentRequestSignal(): AbortSignal {
   return AbortSignal.timeout(IDEMPOTENT_HTTP_TIMEOUT_MS)
-}
-
-function directorRequestSignal(signal: AbortSignal | undefined, remainingMs: number): AbortSignal {
-  const timeout = AbortSignal.timeout(Math.max(1, Math.min(IDEMPOTENT_HTTP_TIMEOUT_MS, remainingMs)))
-  return signal ? AbortSignal.any([signal, timeout]) : timeout
 }
 
 async function idempotentJsonRequest<T>(input: {
@@ -616,65 +612,23 @@ export async function streamDirectorChat(
   onEvent: (event: DirectorAgentStreamEvent) => void,
   signal?: AbortSignal,
 ) {
-  const MAX_DIRECTOR_REPLAY_POLLS = 300
-  const deadline = Date.now() + DIRECTOR_REPLAY_TIMEOUT_MS
-  const sendDirectorTurn = () => fetch(`${env.apiBase}/api/director/chat`, {
-    method: 'POST',
-    signal: directorRequestSignal(signal, deadline - Date.now()),
-    headers: {
-      'Content-Type': 'application/json',
-      'X-User-Id': String(env.userId),
-    },
-    body: JSON.stringify(payload),
+  return streamDirectorEventsWithReplay({
+    payload,
+    signal,
+    onEvent,
+    connectTimeoutMs: IDEMPOTENT_HTTP_TIMEOUT_MS,
+    replayTimeoutMs: DIRECTOR_REPLAY_TIMEOUT_MS,
+    pollDelayMs: 1_000,
+    send: (body, requestSignal) => fetch(`${env.apiBase}/api/director/chat`, {
+      method: 'POST',
+      signal: requestSignal,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': String(env.userId),
+      },
+      body: JSON.stringify(body),
+    }),
   })
-
-  for (let attempt = 0; attempt < MAX_DIRECTOR_REPLAY_POLLS; attempt += 1) {
-    if (Date.now() >= deadline) break
-    let res: Response
-    try {
-      res = await sendDirectorTurn()
-    } catch (error) {
-      if (signal?.aborted || attempt === MAX_DIRECTOR_REPLAY_POLLS - 1) throw error
-      await new Promise((resolve) => setTimeout(resolve, 1_000))
-      continue
-    }
-    if (!res.ok) {
-      throw new Error('对话服务暂时不可用，请稍后重试。')
-    }
-
-    let turnReceiptRunning = false
-    let finalResultSeen = false
-    let doneSeen = false
-    if (res.body) {
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const chunks = buffer.split('\n\n')
-        buffer = chunks.pop() ?? ''
-        for (const chunk of chunks) {
-          const line = chunk.split('\n').find((item) => item.startsWith('data: '))
-          if (!line) continue
-          const json = line.slice('data: '.length).trim()
-          if (!json) continue
-          const event = JSON.parse(json) as DirectorAgentStreamEvent
-          if (event.type === 'turn_receipt' && event.status === 'running') turnReceiptRunning = true
-          if (event.type === 'assistant_reply' || event.type === 'workspace_session' || event.type === 'error') {
-            finalResultSeen = true
-          }
-          if (event.type === 'done') doneSeen = true
-          onEvent(event)
-        }
-      }
-    }
-    if (doneSeen && (!turnReceiptRunning || finalResultSeen)) return
-    if (signal?.aborted) throw signal.reason
-    await new Promise((resolve) => setTimeout(resolve, 1_000))
-  }
-  throw new Error('这轮处理仍在继续，请稍后再查看结果。')
 }
 
 export async function getDirectorWorkspaceSession(workspaceSessionId: string) {

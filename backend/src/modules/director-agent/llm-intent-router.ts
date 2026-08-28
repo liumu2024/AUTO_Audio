@@ -447,6 +447,7 @@ ${stateRules}
 
 回复与输出：
 - replyDraft 只自然说明当前理解、真正待确认的信息或准备执行的内容，不得暴露内部版本、实现名、调用标识、对象 ID 或协议字段。
+- replyDraft、creationSummary 和 Tool arguments 中面向 Planner 的 instruction 必须使用当前用户输入的主要语言；不得擅自翻译用户要求。协议字段、ID 和枚举保持原定义。
 - missingInformation 只列真正阻塞当前目标的事实。
 - 严格按照给定协议输出 replyDraft、creationSummary、intent、creativeConfigDelta、stateActions、memoryActions、skillRequests、toolRequests、missingInformation，不增加字段。
 

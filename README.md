@@ -107,25 +107,75 @@ npm.cmd run desktop:dev
 
 ### 4. 服务器式开发
 
-需要 PostgreSQL 持久化时：
+需要 PostgreSQL 持久化时，先确保 Docker Desktop 已启动。首次配置执行：
 
 ```powershell
-.\script\docker\db-up.ps1
+docker compose up -d --wait
 npm.cmd --prefix backend run db:generate
 npm.cmd --prefix backend run db:deploy
+npm.cmd --prefix backend run db:seed
+```
+
+`docker compose up -d --wait` 与 `script/docker/db-up.ps1` 启动的是同一组 PostgreSQL、Redis 服务，直接执行 Docker 命令不受 PowerShell 脚本策略影响。如需使用脚本且出现“禁止运行脚本”，只对当前终端临时放行后再启动：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+.\script\docker\db-up.ps1
+```
+
+日常启动使用两个终端。终端一启动数据库和后端：
+
+```powershell
+docker compose up -d --wait
+npm.cmd --prefix backend run db:deploy
 npm.cmd --prefix backend run dev
+```
+
+`db:deploy` 已无待执行迁移时会直接返回；保留这一步可避免拉取新代码后遗漏数据库迁移。终端二启动前端：
+
+```powershell
 npm.cmd --prefix fonted run dev
 ```
+
+拉取新代码后，仅按实际变更补充执行：
+
+- 对应目录的 `package.json` 或 lockfile 变化：在该目录重新执行 `npm.cmd install`，例如 `npm.cmd --prefix backend install`
+- Prisma schema 或 Prisma Client 版本变化：`npm.cmd --prefix backend run db:generate`
+- 新增数据库迁移：`npm.cmd --prefix backend run db:deploy`
+
+关闭前后端时分别在对应终端按 `Ctrl+C`；停止数据库容器并保留数据：
+
+```powershell
+docker compose down
+```
+
+该命令不带 `-v`，会保留 PostgreSQL 和 Redis 数据卷；`script/docker/db-down.ps1` 是相同行为的可选包装。
 
 ## 创作偏好与知识数据库
 
 偏好和通用创作知识在运行时分别存入 `creative_memories` 与 `creative_knowledge`，业务检索只读取数据库；启用 hybrid 模式后，以 pgvector 精确余弦检索与 BM25 融合排序，当前数据量不建立近似索引。版本化初始化数据位于 `backend/prisma/data`：当前包含 144 条隔离合成画像偏好和 120 条知识候选，用于数据库容量、状态和检索评测，不冒充真实用户表达或人工审核结果。知识候选经管理员明确采纳后才参与 Planner；初始化按稳定条目 ID 更新和清理未审核数据，不覆盖人工修改、人工审核或已撤销记录。
 
-PostgreSQL 模式在完成 `db:deploy` 后导入：
+新建或重建的空数据库首次需要执行；以后 `backend/prisma/data` 中的 Seed 版本发生变化时也可重复执行：
 
 ```powershell
 npm.cmd --prefix backend run db:seed
 ```
+
+重复执行会按稳定条目 ID 同步版本化候选，不覆盖人工审核、人工修改或已撤销记录。
+
+数据库和后端启动后，可在项目根目录检查服务与当前正式数据：
+
+```powershell
+docker compose ps
+Invoke-RestMethod http://localhost:3001/health
+
+$userId = Read-Host '请输入前端当前使用的 VITE_USER_ID（未配置时输入 1）'
+$headers = @{ 'X-User-Id' = [string]$userId }
+(Invoke-RestMethod 'http://localhost:3001/api/creative-memories?scopeType=user&status=active&limit=1' -Headers $headers).total
+(Invoke-RestMethod 'http://localhost:3001/api/creative-knowledge?status=active&limit=1' -Headers $headers).total
+```
+
+进入“创作偏好”页面时，前端会立即读取偏好和通用创作知识；两处同时提示请求失败时，先确认 `docker compose ps` 中数据库健康且 `/health` 可访问。数据卷仍在但容器未运行时，页面无法读取数据，不代表数据库记录已被删除。上述数量用于核对当前前端用户和业务状态，不能单独判断数据库是否为空；知识 Seed 默认进入待审核状态，所以未采纳时 active 数量为 `0` 是正常结果，不应因此重复 Seed。以 `db:seed` 的成功输出和管理页面中的待审核记录确认导入结果，采纳后知识才会出现在“已采纳”列表并参与正式检索。
 
 桌面本地数据库导入：
 

@@ -92,7 +92,7 @@ export const GeneratedPlayer = forwardRef<HTMLVideoElement, GeneratedPlayerProps
               <V2PlanReview
                 active={active}
                 scenes={scenes}
-                appliedPreferences={presentation?.appliedPreferences ?? []}
+                creativeBrief={presentation?.creativeBrief}
                 onSelect={(scene) => {
                   selectClip(`v2-scene-${scene.id}`)
                   onSeek(scene.startSec)
@@ -112,12 +112,12 @@ export const GeneratedPlayer = forwardRef<HTMLVideoElement, GeneratedPlayerProps
 function V2PlanReview({
   active,
   scenes,
-  appliedPreferences,
+  creativeBrief,
   onSelect,
 }: {
   active?: V2PlanScenePresentation
   scenes: V2PlanScenePresentation[]
-  appliedPreferences: string[]
+  creativeBrief?: ReturnType<typeof buildV2PlanPresentation>['creativeBrief']
   onSelect: (scene: V2PlanScenePresentation) => void
 }) {
   if (!active) {
@@ -131,6 +131,37 @@ function V2PlanReview({
   return (
     <div className="grid min-h-0 flex-1 gap-4 overflow-hidden rounded-lg bg-zinc-950/80 p-4 lg:grid-cols-[minmax(0,1fr)_220px]">
       <div className="min-h-0 space-y-4 overflow-y-auto pr-1">
+        {creativeBrief ? (
+          <PlanFactSection title="创作总纲">
+            <p className="text-sm leading-6 text-zinc-300">{creativeBrief.direction}</p>
+            {creativeBrief.imageReferences.length ? (
+              <div className="mt-2 space-y-2">
+                {creativeBrief.imageReferences.map((reference, index) => (
+                  <div key={`${reference.intendedUse}-${index}`} className="rounded-md border border-zinc-800 bg-zinc-900/60 p-2 text-xs text-zinc-400">
+                    <div>素材用途：{reference.intendedUse}</div>
+                    <div className="mt-1">观察要点：{reference.observedFacts.join('；')}</div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {creativeBrief.sampleMethods.length ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {creativeBrief.sampleMethods.map((method) => <FactBadge key={method}>样例方法：{method}</FactBadge>)}
+              </div>
+            ) : null}
+            {creativeBrief.appliedPreferences.length ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {creativeBrief.appliedPreferences.map((preference) => <FactBadge key={preference}>采用偏好：{preference}</FactBadge>)}
+              </div>
+            ) : null}
+            {creativeBrief.planningGaps.length ? (
+              <div className="mt-2 space-y-1 text-xs text-amber-300/80">
+                {creativeBrief.planningGaps.map((gap) => <div key={gap}>待完善：{gap}</div>)}
+              </div>
+            ) : null}
+          </PlanFactSection>
+        ) : null}
+
         <section>
           <div className="flex flex-wrap items-center gap-2">
             <h4 className="text-base font-semibold text-zinc-100">{active.title}</h4>
@@ -142,14 +173,6 @@ function V2PlanReview({
             {active.description ?? '该镜头尚未填写创作说明。'}
           </p>
         </section>
-
-        {appliedPreferences.length ? (
-          <PlanFactSection title="本次采用的历史偏好">
-            <div className="flex flex-wrap gap-1.5">
-              {appliedPreferences.map((preference) => <FactBadge key={preference}>{preference}</FactBadge>)}
-            </div>
-          </PlanFactSection>
-        ) : null}
 
         <PlanFactSection title="视觉呈现">
           <div className="grid gap-2 text-xs text-zinc-300 sm:grid-cols-2">

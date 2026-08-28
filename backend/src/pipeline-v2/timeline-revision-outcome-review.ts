@@ -700,6 +700,9 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
           duration_mode: input.revisionDurationMode,
           scene_id: input.revisionSceneId,
           scene_ids: input.revisionSceneIds,
+          scene_ids_semantics: input.revisionScope === 'structure'
+            ? 'base_contiguous_range_to_replace'
+            : undefined,
           overlay_ids: input.revisionOverlayIds,
           transition_ids: input.revisionTransitionIds,
         }
@@ -723,6 +726,9 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
     '',
     '通用判断',
     '- 使用语义判断，不使用固定关键词命中。必要的范围内改写不算越界，范围外字段变化才算 unrelated_change。',
+    ...(input.revisionScope === 'structure'
+      ? ['- structure 的 scene_ids 表示基础方案中允许整体替换的连续范围，不是候选方案的镜头 ID 白名单。候选可以在该范围内新增、删除或重新编号镜头；只有改变范围外对象或越过保留锚点才算越界。']
+      : []),
     '- 可见文字必须是观众文案；技术说明、文件名、内部 ID、布局约束和规划指令不得成为字幕，除非用户明确要求逐字展示。',
     ...(visibleTextRiskApplies
       ? ['- 用户要求重写或创作字幕时，旧字幕允许被替换；不要因为基础方案存在旧文案就要求逐字保留。布局、行数和位置要求应检查结构化字段，不把约束文字本身当字幕。']

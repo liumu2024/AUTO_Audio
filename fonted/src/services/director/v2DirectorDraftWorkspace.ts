@@ -74,7 +74,13 @@ export interface V2PlanPresentation {
   durationSec: number
   width: number
   height: number
-  appliedPreferences: string[]
+  creativeBrief?: {
+    direction: string
+    imageReferences: Array<{ observedFacts: string[]; intendedUse: string }>
+    sampleMethods: string[]
+    appliedPreferences: string[]
+    planningGaps: string[]
+  }
   scenes: V2PlanScenePresentation[]
 }
 
@@ -208,7 +214,18 @@ export function buildV2PlanPresentation(
     durationSec: spec.canvas.duration_sec,
     width: spec.canvas.width,
     height: spec.canvas.height,
-    appliedPreferences: spec.creative_brief?.applied_preferences ?? [],
+    creativeBrief: spec.creative_brief
+      ? {
+          direction: spec.creative_brief.direction,
+          imageReferences: spec.creative_brief.image_references.map((reference) => ({
+            observedFacts: reference.observed_facts,
+            intendedUse: reference.intended_use,
+          })),
+          sampleMethods: spec.creative_brief.sample_methods,
+          appliedPreferences: spec.creative_brief.applied_preferences,
+          planningGaps: (spec.creative_brief.planning_gaps ?? []).map((gap) => gap.message),
+        }
+      : undefined,
     scenes,
   }
 }

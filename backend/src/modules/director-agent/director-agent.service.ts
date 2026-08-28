@@ -177,6 +177,12 @@ function intentForWorkspace(input: {
   return 'chat'
 }
 
+function usesChineseAsPrimaryLanguage(value: string) {
+  const hanCount = [...value.matchAll(/[\p{Script=Han}]/gu)].length
+  const latinCount = [...value.matchAll(/[\p{Script=Latin}]/gu)].length
+  return hanCount > 0 && hanCount * 2 >= latinCount
+}
+
 function stateDiff(before: DirectorWorkspaceState, after: DirectorWorkspaceState) {
   const changed: string[] = []
   for (const key of ['draftId', 'baseRevision', 'selectedItemId', 'pendingQuestion', 'pendingTimelineRevisions', 'pendingTimelineRevisionConfirmation', 'pendingTimelinePlanConfirmation', 'responseId'] as const) {
@@ -195,16 +201,29 @@ function creativeSummary(input: {
   config: DirectorEffectiveCreativeConfig
   requirements: DirectorWorkspaceState['confirmedRequirements']
 }): DirectorCreativeSummary {
+  const usesChinese = usesChineseAsPrimaryLanguage(input.prompt)
+  const normalizedPrompt = input.prompt.trim().toLocaleLowerCase()
+  const followsPromptLanguage = (value?: string, allowExplicitFragment = false) => {
+    const normalizedValue = value?.trim().toLocaleLowerCase()
+    if (!normalizedValue) return false
+    if (!normalizedPrompt) return true
+    const usesChineseValue = usesChineseAsPrimaryLanguage(normalizedValue)
+    return usesChinese === usesChineseValue
+      || (allowExplicitFragment && normalizedPrompt.includes(normalizedValue))
+  }
+  const modelGoal = input.modelSummary?.goal.trim()
   return {
-    goal: input.modelSummary?.goal.trim() || input.prompt.trim(),
-    audience: input.modelSummary?.audience?.trim() || undefined,
+    goal: followsPromptLanguage(modelGoal) ? modelGoal! : input.prompt.trim(),
+    audience: followsPromptLanguage(input.modelSummary?.audience, true)
+      ? input.modelSummary?.audience?.trim()
+      : undefined,
     aspectRatio: input.config.aspectRatio,
     durationSec: input.config.durationSec,
     styleIntensity: input.config.styleIntensity,
     mustKeep: input.requirements
       .filter((item) => item.status === 'active')
       .map((item) => item.statement),
-    openQuestions: input.modelSummary?.openQuestions ?? [],
+    openQuestions: (input.modelSummary?.openQuestions ?? []).filter((question) => followsPromptLanguage(question)),
   }
 }
 
@@ -1457,8 +1476,14 @@ export async function* streamDirectorAgentChat(
   const toolConfirmation = shouldReportToolOutcome
     ? toolOutcomeConfirmation(toolResults, actionReceipts)
     : ''
-  const modelAssistantMessage = awaitsRevisionConfirmation
-    ? `修改范围已解析并保存，尚未执行。请先核对修改目标与保护边界，再选择确认执行或取消。${requestedTools.some((request) => request.toolId === 'timeline.render') ? '正式渲染不包含在本次修改确认中，修改完成后仍需单独确认导出。' : ''}`
+  const modelAssistantMessage = awaitsPlanConfirmation
+    ? usesChineseAsPrimaryLanguage(input.prompt)
+      ? '开始生成方案前，请先核对创作摘要。确认后我再生成可编辑方案。'
+      : routed.result.assistantMessage
+    : awaitsRevisionConfirmation
+    ? usesChineseAsPrimaryLanguage(input.prompt)
+      ? `修改范围已解析并保存，尚未执行。请先核对修改目标与保护边界，再选择确认执行或取消。${requestedTools.some((request) => request.toolId === 'timeline.render') ? '正式渲染不包含在本次修改确认中，修改完成后仍需单独确认导出。' : ''}`
+      : `The requested changes are saved as a proposal and have not been applied. Review the targets and protected boundaries, then confirm or cancel.${requestedTools.some((request) => request.toolId === 'timeline.render') ? ' Export is not included in this confirmation and still requires separate approval after the changes are applied.' : ''}`
     : shouldReportToolOutcome
     ? toolConfirmation
     : routed.result.assistantMessage

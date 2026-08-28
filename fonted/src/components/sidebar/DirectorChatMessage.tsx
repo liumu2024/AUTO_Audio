@@ -21,6 +21,12 @@ const TYPE_ICON = {
   audio: Music2,
 } as const
 
+const STYLE_INTENSITY_LABEL: Record<string, string> = {
+  light: '低',
+  medium: '中',
+  strong: '高',
+}
+
 function revisionScopeLabel(scope: DirectorTimelineRevisionIntent['scope']) {
   return {
     subtitle: '字幕',
@@ -213,7 +219,7 @@ export function DirectorChatMessageBubble({
               <p><span className="text-zinc-500">受众：</span>{message.creationSummary.audience ?? '尚未说明'}</p>
               <p><span className="text-zinc-500">画幅：</span>{message.creationSummary.aspectRatio ?? '按当前设置'}</p>
               <p><span className="text-zinc-500">时长：</span>{message.creationSummary.durationSec ? `${message.creationSummary.durationSec} 秒` : '按当前设置'}</p>
-              <p><span className="text-zinc-500">风格强度：</span>{message.creationSummary.styleIntensity ?? '按当前设置'}</p>
+              <p><span className="text-zinc-500">风格强度：</span>{STYLE_INTENSITY_LABEL[message.creationSummary.styleIntensity ?? ''] ?? '按当前设置'}</p>
               <p><span className="text-zinc-500">必须保留：</span>{message.creationSummary.mustKeep.join('；') || '无额外保留项'}</p>
               {message.creationSummary.openQuestions.length ? (
                 <p><span className="text-zinc-500">待确认：</span>{message.creationSummary.openQuestions.join('；')}</p>
