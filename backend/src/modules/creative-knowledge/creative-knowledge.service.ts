@@ -16,6 +16,7 @@ export interface CreativeKnowledgeSampleSource {
   type: 'sample'
   seedId?: string
   taskId: string
+  contentHash?: string
   sampleName?: string
   methodIds: string[]
   evidenceRanges: V2SampleEvidenceRange[]
@@ -48,11 +49,19 @@ export interface CreativeKnowledgeReviewSource {
   reviewedAt: string
 }
 
+export interface CreativeKnowledgeEvidenceSource {
+  type: 'evidence'
+  policyVersion: 'creative_learning_evidence.v1'
+  observationCount: number
+  activatedAt: string
+}
+
 export type CreativeKnowledgeSource = CreativeKnowledgeSampleSource
   | CreativeKnowledgeCatalogSource
   | CreativeKnowledgeManualSource
   | CreativeKnowledgeManualRevisionSource
   | CreativeKnowledgeReviewSource
+  | CreativeKnowledgeEvidenceSource
 
 export interface CreativeKnowledgeRecord {
   id: string
@@ -165,11 +174,23 @@ function sources(value: unknown): CreativeKnowledgeSource[] {
       && typeof value.reviewedAt === 'string') {
       return [{ type: 'review', reviewerId: value.reviewerId, reviewedAt: value.reviewedAt }]
     }
+    if (value.type === 'evidence'
+      && value.policyVersion === 'creative_learning_evidence.v1'
+      && Number.isInteger(value.observationCount)
+      && typeof value.activatedAt === 'string') {
+      return [{
+        type: 'evidence',
+        policyVersion: 'creative_learning_evidence.v1',
+        observationCount: Number(value.observationCount),
+        activatedAt: value.activatedAt,
+      }]
+    }
     if (typeof value.taskId !== 'string') return []
     return [{
       type: 'sample',
       ...(typeof value.seedId === 'string' ? { seedId: value.seedId } : {}),
       taskId: value.taskId,
+      ...(typeof value.contentHash === 'string' ? { contentHash: value.contentHash } : {}),
       ...(typeof value.sampleName === 'string' ? { sampleName: value.sampleName } : {}),
       methodIds: Array.isArray(value.methodIds)
         ? value.methodIds.filter((id): id is string => typeof id === 'string')
@@ -209,10 +230,11 @@ function mergeSource(existing: CreativeKnowledgeSource[], source: CreativeKnowle
 
 function knowledgeSourceKey(source: CreativeKnowledgeSource): string {
   if ((source.type === 'sample' || source.type === 'catalog') && source.seedId) return `seed:${source.seedId}`
-  if (source.type === 'sample') return `sample:${source.taskId}`
+  if (source.type === 'sample') return `sample:${source.contentHash ?? source.taskId}`
   if (source.type === 'catalog' || source.type === 'manual') return `${source.type}:${source.sourceId}`
   if (source.type === 'manual_revision') return 'manual_revision:current'
-  return 'review:current'
+  if (source.type === 'review') return 'review:current'
+  return 'evidence:current'
 }
 
 export interface CreativeKnowledgeCandidateUpsert {
@@ -303,6 +325,53 @@ export async function createCreativeKnowledgeCandidate(input: {
   source: CreativeKnowledgeSource
 }): Promise<CreativeKnowledgeRecord> {
   return (await upsertCreativeKnowledgeCandidate({ ...input, mergeExistingSource: true })).knowledge
+}
+
+export async function mergeCreativeKnowledgeSource(input: {
+  id: string
+  source: CreativeKnowledgeSource
+}): Promise<CreativeKnowledgeRecord> {
+  return serializeKnowledgeWrite(async () => {
+    const current = await knowledgeStore().findFirst({ where: { id: input.id } })
+    if (!current) throw new Error('Creative knowledge not found during source merge.')
+    await knowledgeStore().updateMany({
+      where: { id: input.id },
+      data: { sourcesJson: mergeSource(sources(current.sourcesJson), input.source) },
+    })
+    const updated = await knowledgeStore().findFirst({ where: { id: input.id } })
+    if (!updated) throw new Error('Creative knowledge disappeared after source merge.')
+    return record(updated)
+  })
+}
+
+export async function activateCreativeKnowledgeFromEvidence(input: {
+  id: string
+  observationCount: number
+}): Promise<CreativeKnowledgeRecord> {
+  if (!Number.isInteger(input.observationCount) || input.observationCount < 2) {
+    throw new Error('Creative knowledge requires at least two independent observations for activation.')
+  }
+  return serializeKnowledgeWrite(async () => {
+    const current = await knowledgeStore().findFirst({ where: { id: input.id } })
+    if (!current) throw new Error('Creative knowledge not found during evidence activation.')
+    if (current.status === 'revoked') return record(current)
+    await knowledgeStore().updateMany({
+      where: { id: input.id },
+      data: {
+        status: 'active',
+        revokedAt: null,
+        sourcesJson: mergeSource(sources(current.sourcesJson), {
+          type: 'evidence',
+          policyVersion: 'creative_learning_evidence.v1',
+          observationCount: input.observationCount,
+          activatedAt: new Date().toISOString(),
+        }),
+      },
+    })
+    const updated = await knowledgeStore().findFirst({ where: { id: input.id } })
+    if (!updated) throw new Error('Creative knowledge disappeared after evidence activation.')
+    return record(updated)
+  })
 }
 
 export async function createCreativeKnowledgeCandidatesFromSample(input: {

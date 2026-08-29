@@ -556,7 +556,7 @@ async function prepareDirectorImageInputs(
   })
 }
 
-async function callResponsesApi(input: {
+export async function callResponsesApi(input: {
   promptText: string
   imageInputs?: ArkResponsesImageInput[]
   previousResponseId?: string
