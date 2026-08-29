@@ -587,7 +587,7 @@ export async function searchCreativeKnowledge(input: {
     && (!input.createdByUserId || item.createdByUserId === input.createdByUserId))
   const eligible = statusEligible.filter((item) => item.status !== 'active'
     || !requireReviewed
-    || sources(item.sourcesJson).some((source) => source.type === 'review'))
+    || sources(item.sourcesJson).some((source) => source.type === 'review' || source.type === 'evidence'))
   const eligibleIds = new Set(eligible.map((item) => item.id))
   const reviewFilteredIds = new Set(statusEligible
     .filter((item) => !eligibleIds.has(item.id))

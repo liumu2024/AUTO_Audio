@@ -285,14 +285,6 @@ export function compactDirectorContextForPrompt(input: DirectorPromptInput) {
     statement: item.memory.statement,
     sourceExcerpt: item.memory.sourceExcerpt,
   }))
-  const candidateMemories = (input.retrievedCreativeMemories?.candidate ?? []).map((item) => ({
-    id: item.memory.id,
-    scopeType: item.memory.scopeType,
-    draftId: item.memory.draftId,
-    statement: item.memory.statement,
-    sourceExcerpt: item.memory.sourceExcerpt,
-  }))
-
   return withoutEmptyPromptValues({
     turn: {
       currentTurnId: input.currentTurnId,
@@ -341,10 +333,7 @@ export function compactDirectorContextForPrompt(input: DirectorPromptInput) {
       })),
     },
     requirements: (input.confirmedRequirements ?? []).filter((item) => item.status === 'active'),
-    memories: {
-      active: activeMemories,
-      candidate: candidateMemories,
-    },
+    memories: { active: activeMemories },
     conversationSummary: input.context.conversationSummary,
     renderedComponents: input.promotedComponents ?? [],
   })!
