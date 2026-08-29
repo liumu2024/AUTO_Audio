@@ -162,6 +162,8 @@ export async function rankHybridCreativeTextRows<T>(input: {
   const consensusRankWindow = Math.min(candidateLimit, Math.max(input.limit * 2, input.limit + 1))
   const consensusRrfMinimum = 2 / (rrfConstant + Math.max(1, consensusRankWindow))
   const singleRouteRrfMinimum = 1 / (rrfConstant + Math.max(1, input.limit))
+  const minimumSemanticSimilarity = 0.58
+  const semanticOnlyMinimumSimilarity = 0.65
   const hasStrongLexicalEvidence = (terms: string[]) => {
     const unique = [...new Set(terms)]
     return unique.length >= 2 || unique.some((term) => {
@@ -182,11 +184,11 @@ export async function rankHybridCreativeTextRows<T>(input: {
     const recalledBySemanticOnly = lexicalRank === undefined && semanticRank !== undefined
     const accepted = recalledByBoth
       ? rrfScore >= consensusRrfMinimum
-        && (item.similarity >= 0.58 || strongLexicalEvidence)
+        && (item.similarity >= minimumSemanticSimilarity || strongLexicalEvidence)
       : recalledByLexicalOnly
         ? rrfScore >= singleRouteRrfMinimum && strongLexicalEvidence
         : recalledBySemanticOnly
-          ? rrfScore >= singleRouteRrfMinimum && item.similarity >= 0.58
+          ? rrfScore >= singleRouteRrfMinimum && item.similarity >= semanticOnlyMinimumSimilarity
           : false
     return {
       row: item.row,
