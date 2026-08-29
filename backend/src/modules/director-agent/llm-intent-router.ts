@@ -62,34 +62,6 @@ const StateActionSchema = z.object({
   kind: z.literal('requirements.update'),
   operations: z.array(RequirementOperationSchema).min(1).max(20),
 }).strict()
-const MemoryActionEvidenceFields = {
-  ref: z.string().trim().min(1).max(80),
-  sourceTurnIds: z.array(z.string().trim().min(1).max(200)).min(1).max(20),
-  sourceExcerpt: z.string().trim().min(1).max(1_000).optional(),
-} as const
-const MemoryActionSchema = z.discriminatedUnion('operation', [
-  z.object({
-    ...MemoryActionEvidenceFields,
-    operation: z.literal('add'),
-    scopeType: z.enum(['user', 'draft']),
-    statement: z.string().trim().min(1).max(500),
-    status: z.enum(['active', 'candidate']),
-    origin: z.enum(['explicit', 'inferred']),
-  }).strict(),
-  z.object({
-    ...MemoryActionEvidenceFields,
-    operation: z.literal('replace'),
-    targetMemoryId: z.string().trim().min(1),
-    statement: z.string().trim().min(1).max(500),
-    status: z.enum(['active', 'candidate']),
-    origin: z.enum(['explicit', 'inferred']),
-  }).strict(),
-  z.object({
-    ...MemoryActionEvidenceFields,
-    operation: z.literal('revoke'),
-    targetMemoryId: z.string().trim().min(1),
-  }).strict(),
-])
 const ToolRequestSchema = z.object({
   ref: z.string().trim().min(1).max(80),
   toolId: z.string().trim().min(1),
@@ -108,7 +80,6 @@ const DecisionFields = {
   }).strict().optional(),
   creativeConfigDelta: CreativeConfigDeltaSchema.default({}),
   stateActions: z.array(StateActionSchema).max(1).default([]),
-  memoryActions: z.array(MemoryActionSchema).max(20).default([]),
   skillRequests: z.array(z.object({ skillId: z.string().trim().min(1), purpose: z.string().trim().min(1) }).strict()).default([]),
   missingInformation: z.array(z.string().trim().min(1).max(500)).max(20).default([]),
 } as const
@@ -126,7 +97,6 @@ const LlmIntentResultSchema = z.discriminatedUnion('intent', [
 ]).superRefine((decision, context) => {
   const refs = [
     ...decision.stateActions.map((action) => action.ref),
-    ...decision.memoryActions.map((action) => action.ref),
     ...decision.toolRequests.map((request) => request.ref),
   ]
   const duplicate = refs.find((ref, index) => refs.indexOf(ref) !== index)
@@ -136,16 +106,6 @@ const LlmIntentResultSchema = z.discriminatedUnion('intent', [
       message: `globally unique action ref required: ${duplicate}`,
       path: ['ref'],
     })
-  }
-  const memoryRefs = new Set(decision.memoryActions.map((action) => action.ref))
-  for (const [index, request] of decision.toolRequests.entries()) {
-    if (request.dependsOn.some((ref) => memoryRefs.has(ref))) {
-      context.addIssue({
-        code: 'custom',
-        message: 'memory actions cannot be execution dependencies',
-        path: ['toolRequests', index, 'dependsOn'],
-      })
-    }
   }
 })
 
@@ -188,7 +148,6 @@ const DirectorFinalReplyJsonSchema = z.toJSONSchema(DirectorFinalReplySchema, {
 
 type LlmIntentResult = z.infer<typeof LlmIntentResultSchema>
 export type DirectorStateAction = z.infer<typeof StateActionSchema>
-export type DirectorMemoryAction = z.infer<typeof MemoryActionSchema>
 
 export interface LlmIntentRouterOutput {
   source: 'llm' | 'llm_unstructured_safe_reply' | 'context_fallback'
@@ -210,7 +169,6 @@ export interface LlmIntentRouterOutput {
   }
   conversationIntent?: z.infer<typeof CanonicalIntentSchema>
   stateActions: DirectorStateAction[]
-  memoryActions: DirectorMemoryAction[]
   missingInformation: string[]
 }
 
@@ -424,7 +382,7 @@ export function buildDirectorModelPrompt(input: DirectorPromptInput) {
     ? []
     : listV2AgentSkillCards().map(({ id, card }) => ({ id, card }))
   const interactionRule = readOnlySurface
-    ? '本轮是创作咨询或普通对话：使用 chat 自然回答；不得创建提案、修改状态或沉淀偏好，stateActions、memoryActions、skillRequests 和 toolRequests 都返回空数组。'
+    ? '本轮是创作咨询或普通对话：使用 chat 自然回答；不得创建提案或修改状态，stateActions、skillRequests 和 toolRequests 都返回空数组。'
     : '本轮没有只读限制；仍须根据当前用户原话判断是否获得创建、修改或执行授权。'
 
   return `你是视频创作平台的导演决策智能体，专门负责理解用户创作意图、维护已确认要求，并把本轮目标规划为讨论、澄清、方案创建、局部修改或成片交付。你只决定本轮意图、作用范围、依赖和 Tool 计划；具体时间线内容由 Planner 生成，执行结果以服务端真实回执为准。
@@ -436,7 +394,7 @@ export function buildDirectorModelPrompt(input: DirectorPromptInput) {
 - intent 只使用 chat、create、revise、execute、clarify。讨论、建议、评价、假设和只读问答使用 chat，不请求 Tool。
 - 只有当前输入明确授权创建、修订或执行时才请求 Tool。交付操作使用 execute；用户明确要求渲染、导出、提交或生成成片即构成本轮授权，服务端仍会做最终权限校验。
 - 目标和 ID 只能来自服务端提供的事实；不得编造样例、素材、草稿、版本、项目、用户或时间线对象 ID。
-- replyDraft 不得宣称要求、记忆或执行动作已成功保存或完成；最终结果以服务端真实回执为准。
+- replyDraft 不得宣称要求或执行动作已成功保存或完成；最终结果以服务端真实回执为准。
 - toolRequests 必须完整覆盖用户明确要求且实际受影响的范围，不得遗漏，也不得增加用户未要求的修改。
 
 通用判断：
@@ -449,17 +407,13 @@ export function buildDirectorModelPrompt(input: DirectorPromptInput) {
 
 ${stateRules}
 
-要求、偏好与记忆：
+当前项目要求：
 - 当前项目要求使用 requirements.update。replace/revoke 只能引用 requirements 中的 active id，并填写 targetRequirementId。
-- 稳定跨项目偏好使用 user + active；仅当前草稿适用的偏好使用 draft + active；不确定或推断性偏好使用 candidate。单次内容设定、实现方式和修改操作不是长期偏好。
-- requirements 与 memoryActions 不得保存相同 statement。一句话同时表达两者时，只把更抽象、可复用的偏好沉淀为记忆；项目对象、具体镜头操作和文案留在当前要求或 sourceExcerpt。
-- memoryActions 的 sourceExcerpt 必须逐字来自当前用户输入；add/replace 的引文应直接表达可跨任务复用的创作倾向，revoke 的引文应直接表达本轮撤销要求。“我想做某个视频”“本次包含某些内容”属于当前任务，不是用户偏好。
-- memories 只是召回候选，不是已确认要求；样例中提取的导演方法属于创作知识，也不是个人偏好。记忆的 replace/revoke 只能引用 memories 中的 id，且每项必须引用 currentTurnId。
-- 例如：“我一直喜欢更搞笑、反差更强的风格”可记为 user + active；“把这个视频改得搞笑”是当前项目要求；“第一段改成推镜头”只是当前操作；“我好像更喜欢松弛的风格，但还不确定”可记为 candidate。
+- memories 只用于理解用户可能延续的偏好，不是已确认的当前项目要求；偏好沉淀由独立学习链路处理，本轮不要输出偏好操作。
 
 动作、依赖与技能：
-- stateActions、memoryActions 和 toolRequests 的 ref 在本轮必须全局唯一。
-- 只有存在真实先后关系时才填写 dependsOn；独立动作使用空数组，memoryActions 不能作为 Tool 依赖。
+- stateActions 和 toolRequests 的 ref 在本轮必须全局唯一。
+- 只有存在真实先后关系时才填写 dependsOn；独立动作使用空数组。
 - toolRequest.skillId 从该 Tool 允许的技能中选择；skillRequests 只补充额外技能上下文。Tool 参数严格符合 inputSchema，不得增加字段。
 - 对滤镜、合成、动画和转场，先按效果语义复用匹配的内置实现或 renderedComponents；确实没有可用实现时才使用 render.author。若同轮应用新组件，对应方案动作必须依赖组件创建结果。
 
@@ -467,7 +421,7 @@ ${stateRules}
 - replyDraft 只自然说明当前理解、真正待确认的信息或准备执行的内容，不得暴露内部版本、实现名、调用标识、对象 ID 或协议字段。
 - replyDraft、creationSummary 和 Tool arguments 中面向 Planner 的 instruction 必须使用当前用户输入的主要语言；不得擅自翻译用户要求。协议字段、ID 和枚举保持原定义。
 - missingInformation 只列真正阻塞当前目标的事实。
-- 严格按照给定协议输出 replyDraft、creationSummary、intent、creativeConfigDelta、stateActions、memoryActions、skillRequests、toolRequests、missingInformation，不增加字段。
+- 严格按照给定协议输出 replyDraft、creationSummary、intent、creativeConfigDelta、stateActions、skillRequests、toolRequests、missingInformation，不增加字段。
 
 精简技能卡（SKILL_CARDS_JSON）：
 ${JSON.stringify(skillCards)}
@@ -741,7 +695,6 @@ function decisionForSurface(
     creationSummary: undefined,
     creativeConfigDelta: {},
     stateActions: [],
-    memoryActions: [],
     skillRequests: [],
     toolRequests: [],
   }
@@ -881,7 +834,6 @@ export function buildDirectorContextFallback(input: {
     fallbackReason: input.reason,
     publicThoughts: ['这一轮没有得到可靠的执行判断；已保留当前问题和方案，也没有开始修改或导出。'],
     stateActions: [],
-    memoryActions: [],
     missingInformation: [],
   }
 }
@@ -913,7 +865,6 @@ function safeUnstructuredLlmReply(input: {
     },
     publicThoughts: ['导演模型给出了自由回复；因未返回执行协议，本轮只作为讨论处理。'],
     stateActions: [],
-    memoryActions: [],
     missingInformation: [],
   }
 }
@@ -1001,7 +952,6 @@ export async function routeDirectorIntentWithLlm(input: {
           modelOutputText: text, modelResponseAudit: audit,
           conversationIntent: workspaceIntentFor(repaired),
           stateActions: repaired.stateActions,
-          memoryActions: repaired.memoryActions,
           missingInformation: repaired.missingInformation,
           structuredOutput: response.structuredOutput,
           imageInputWarnings,
@@ -1044,7 +994,6 @@ export async function routeDirectorIntentWithLlm(input: {
       modelResponseAudit: audit,
       conversationIntent: workspaceIntentFor(parsed),
       stateActions: parsed.stateActions,
-      memoryActions: parsed.memoryActions,
       missingInformation: parsed.missingInformation,
       structuredOutput: response.structuredOutput,
       imageInputWarnings,

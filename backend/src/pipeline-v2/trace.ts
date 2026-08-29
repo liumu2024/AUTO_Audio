@@ -42,7 +42,7 @@ const compactTraceFiles = [
   /^sample-understanding-input\.json$/,
   /^audio-visual-hints\.json$/,
   /^sample-understanding\.json$/,
-  /^creative-knowledge-candidates\.json$/,
+  /^creative-learning\.json$/,
   /^timeline-material-resolution\.json$/,
   /^delivery-readiness\.json$/,
   /^timeline-standardized-assets\.json$/,

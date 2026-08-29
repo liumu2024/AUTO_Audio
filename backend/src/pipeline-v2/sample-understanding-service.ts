@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 
 import {
@@ -6,7 +8,7 @@ import {
   type V2SampleUnderstandingResult,
 } from '../../../shared/types/v2-sample-understanding.js'
 import { extractStructuredJsonCandidate } from '../modules/agent-tools/structured-json-tool.js'
-import { createCreativeKnowledgeCandidatesFromSample } from '../modules/creative-knowledge/creative-knowledge.service.js'
+import { learnCreativeKnowledgeFromSample } from '../modules/creative-learning/creative-learning.service.js'
 import { env } from '../config/env.js'
 import { extractAudioVisualUnderstandingHints } from './audio-visual-feature-extractor.js'
 import { resolveVideoInput } from './resolve-video-input.js'
@@ -90,6 +92,12 @@ function finiteNumber(value: unknown, fallback: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
+}
+
+async function sha256File(filePath: string) {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(filePath)) hash.update(chunk)
+  return `sha256:${hash.digest('hex')}`
 }
 
 function heuristicUnderstanding(input: {
@@ -381,10 +389,14 @@ async function maybeDeleteFile(fileId: string): Promise<void> {
   if (response && !response.ok) console.warn(`Failed to delete sample-understanding file ${fileId}: HTTP ${response.status}`)
 }
 
-export async function analyzeV2Sample(input: V2SampleAnalyzeInput): Promise<V2SampleAnalyzeResult> {
+export async function analyzeV2Sample(
+  input: V2SampleAnalyzeInput,
+  dependencies: { learnKnowledge?: typeof learnCreativeKnowledgeFromSample } = {},
+): Promise<V2SampleAnalyzeResult> {
   const trace = createV2TraceWriter({ taskId: input.taskId, sessionId: input.traceContext?.sessionId, operationId: input.traceContext?.operationId })
   await trace.writeJson('01-input', 'sample-understanding-input.json', input)
   const video = await resolveVideoInput(input.sampleVideoPath)
+  const sourceContentHash = await sha256File(video.localPath)
   const hints = await extractAudioVisualUnderstandingHints(video)
   await trace.writeJson('02-sample-understanding', 'audio-visual-hints.json', hints)
   const fallback = heuristicUnderstanding({ taskId: input.taskId, video, hints })
@@ -421,16 +433,26 @@ export async function analyzeV2Sample(input: V2SampleAnalyzeInput): Promise<V2Sa
   await trace.writeJson('02-sample-understanding', 'sample-understanding.json', understanding)
   if (input.userId) {
     try {
-      const candidates = await createCreativeKnowledgeCandidatesFromSample({
+      const methods = new Map(understanding.method_observations.map((method) => [method.id, method]))
+      const learning = await (dependencies.learnKnowledge ?? learnCreativeKnowledgeFromSample)({
         userId: input.userId,
-        understanding,
+        taskId: understanding.task_id,
+        sampleName: understanding.sample.name,
+        sourceContentHash,
+        items: understanding.transferable_knowledge.flatMap((item) => {
+          const methodIds = [...new Set(item.evidence_method_ids)].filter((id) => methods.has(id))
+          if (!methodIds.length) return []
+          return [{
+            statement: item.statement,
+            applicability: item.applicability,
+            methodIds,
+            evidenceRanges: methodIds.flatMap((id) => methods.get(id)?.evidence_ranges ?? []),
+          }]
+        }),
       })
-      await trace.writeJson('02-sample-understanding', 'creative-knowledge-candidates.json', {
-        knowledge_ids: candidates.map((item) => item.id),
-        count: candidates.length,
-      })
+      await trace.writeJson('02-sample-understanding', 'creative-learning.json', learning)
     } catch (error) {
-      await trace.writeJson('02-sample-understanding', 'creative-knowledge-candidates-error.json', {
+      await trace.writeJson('02-sample-understanding', 'creative-learning-error.json', {
         message: error instanceof Error ? error.message : String(error),
       })
     }

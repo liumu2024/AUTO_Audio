@@ -30,12 +30,13 @@ import {
   type LlmIntentRouterOutput,
 } from './llm-intent-router.js'
 import {
-  applyCreativeMemoryActions,
   searchCreativeMemories,
-  type CreativeMemoryActionReceipt,
 } from '../creative-memory/creative-memory.service.js'
-import { normalizeCreativeText } from '../creative-memory/creative-text-retrieval.js'
 import { searchCreativeKnowledge } from '../creative-knowledge/creative-knowledge.service.js'
+import {
+  learnCreativePreferencesFromUserTurn,
+  type CreativePreferenceLearningReceipt,
+} from '../creative-learning/creative-learning.service.js'
 import {
   appendDirectorWorkspaceTurn,
   applyDirectorRequirementChange,
@@ -362,51 +363,12 @@ function traceRequirementChanges(changes: RequirementChanges) {
 
 interface DirectorActionReceipt {
   ref: string
-  kind: 'requirements.update' | 'memory.update' | 'tool.call'
+  kind: 'requirements.update' | 'tool.call'
   status: 'succeeded' | 'failed' | 'skipped'
   reason?: string
   callId?: string
   toolId?: string
   dependsOn: string[]
-}
-
-function creativeMemoryConfirmation(
-  receipts: CreativeMemoryActionReceipt[],
-  actions: Array<{ ref: string; status?: 'active' | 'candidate' }>,
-) {
-  if (!receipts.length) return ''
-  const memoryErrorLabels: Record<string, string> = {
-    'Draft-scoped creative memory requires draftId.': '草稿级偏好需要先关联当前草稿。',
-    'Creative memory action must cite the current source turn.': '记忆动作缺少本轮引用，已拒绝。',
-    'Creative memory target was not recalled in this turn.': '目标偏好不在本轮召回中，已拒绝。',
-    'Creative memory target belongs to another draft.': '目标偏好属于其他草稿，已拒绝。',
-    'Creative memory target is missing or inactive.': '目标偏好不存在或已失效。',
-    'Creative memory statement must contain 1-500 characters.': '偏好内容需要 1-500 字。',
-    'Creative memory sourceExcerpt must quote the current user input verbatim.': '偏好操作没有引用本轮用户原话，已拒绝。',
-    'Creative memory sourceExcerpt does not support the replacement statement.': '新的偏好内容与本轮用户原话不一致，已拒绝。',
-    'Creative memory sourceExcerpt must directly express the revoke request.': '本轮原话没有明确要求撤销该偏好，因此没有撤销。',
-  }
-  const active = receipts.filter((receipt) =>
-    receipt.status === 'succeeded' && receipt.effectiveStatus === 'active').length
-  const candidates = receipts.filter((receipt) =>
-    receipt.status === 'succeeded' && receipt.effectiveStatus === 'candidate').length
-  const duplicates = receipts.filter((receipt) =>
-    receipt.status === 'skipped' && receipt.reason === 'duplicate_of_requirement').length
-  const taskOnly = receipts.filter((receipt) =>
-    receipt.status === 'skipped' && receipt.reason === 'not_explicit_long_term_preference').length
-  const mismatches = receipts.filter((receipt) =>
-    receipt.status === 'skipped' && receipt.reason === 'memory_evidence_mismatch').length
-  const failed = receipts.filter((receipt) => receipt.status === 'failed')
-  return [
-    active ? `我已经保存了 ${active} 条创作偏好，你可以在“创作偏好”中查看或撤销` : '',
-    candidates ? `另有 ${candidates} 条暂时作为候选观察，不会直接影响创作` : '',
-    duplicates ? `${duplicates} 条内容已经是当前项目要求，因此没有重复保存为长期偏好` : '',
-    taskOnly ? `${taskOnly} 条内容只描述本次任务，因此没有保存为长期偏好` : '',
-    mismatches ? `${mismatches} 条偏好抽象与用户原话不一致，因此没有保存` : '',
-    failed.length
-      ? `${failed.length} 条偏好没有保存成功：${failed.map((item) => memoryErrorLabels[item.reason ?? ''] ?? '创作偏好暂时无法更新，请稍后重试。').join('；')}`
-      : '',
-  ].filter(Boolean).join('；')
 }
 
 function effectiveV2CreationMode(context: DirectorAgentChatRequest['context']) {
@@ -423,6 +385,7 @@ export async function* streamDirectorAgentChat(
     dispatchTool?: typeof dispatchV2AgentTool
     saveWorkspace?: typeof workspaceSessions.save
     composeFinalReply?: typeof composeDirectorFinalReply
+    learnPreferences?: typeof learnCreativePreferencesFromUserTurn
   } = {},
 ): AsyncGenerator<DirectorAgentStreamEvent> {
   const id = normalizeDirectorWorkspaceId(input.workspaceSessionId)
@@ -738,7 +701,6 @@ export async function* streamDirectorAgentChat(
           : '已读取服务端保存的创作摘要；本轮不重新解释创作目标。'],
         conversationIntent: confirmedRevisionProposal?.intent ?? 'create',
         stateActions: [],
-        memoryActions: [],
         missingInformation: [],
       }
     : await routeDirectorIntentWithLlm({
@@ -806,36 +768,26 @@ export async function* streamDirectorAgentChat(
         dependsOn: [],
       }]
     : []
-  const memoryActionReceipts = await applyCreativeMemoryActions({
-    userId,
-    workspaceSessionId: id,
-    currentTurnId: turnOperationId,
-    currentUserText: input.prompt,
-    currentDraftId: workspaceState.draftId,
-    recalledMemoryIds: new Set([
-      ...creativeMemoryRetrieval.active.map((item) => item.memory.id),
-      ...creativeMemoryRetrieval.candidate.map((item) => item.memory.id),
-    ]),
-    actions: routed.memoryActions,
-    requirementStatements: [...new Map([
-      ...workspaceState.confirmedRequirements
-        .filter((item) => item.status === 'active')
-        .map((item) => item.statement),
-      ...(requirementResult.changes.added ?? []).map((item) => item.statement),
-      ...(requirementResult.changes.replaced ?? []).map((item) => item.current.statement),
-    ].map((statement) => [normalizeCreativeText(statement), statement])).values()],
-  })
-  actionReceipts.push(...memoryActionReceipts.map((receipt) => ({
-    ref: receipt.ref,
-    kind: 'memory.update' as const,
-    // A duplicate project requirement is intentionally not persisted as
-    // memory, but it is a handled no-op rather than a failed dependency.
-    status: receipt.status === 'skipped' && receipt.reason === 'duplicate_of_requirement'
-      ? 'succeeded'
-      : receipt.status,
-    reason: receipt.reason,
-    dependsOn: [],
-  })))
+  const creativeLearningPromise: Promise<CreativePreferenceLearningReceipt> = confirmedProposal
+    ? Promise.resolve({ status: 'skipped', changes: [], errors: [] })
+    : (dependencies.learnPreferences ?? learnCreativePreferencesFromUserTurn)({
+        userId,
+        workspaceSessionId: id,
+        turnId: turnOperationId,
+        userText: input.prompt,
+        currentDraftId: workspaceState.draftId,
+        requirementStatements: workspaceState.confirmedRequirements
+          .filter((item) => item.status === 'active')
+          .map((item) => item.statement),
+        recalledMemories: [
+          ...creativeMemoryRetrieval.active.map((item) => item.memory),
+          ...creativeMemoryRetrieval.candidate.map((item) => item.memory),
+        ],
+      }).catch((error) => ({
+        status: 'failed',
+        changes: [],
+        errors: [error instanceof Error ? error.message : String(error)],
+      }))
   const resolvedStateActionRefs = stateAction && requirementResult.ok ? [stateAction.ref] : []
 
   const unresovedAction = directorActionFromIntentResult({
@@ -1530,7 +1482,6 @@ export async function* streamDirectorAgentChat(
     : requirementResult.ok
       ? requirementConfirmation(requirementResult.changes)
       : '本轮要求变更未通过校验，因此没有保存这些要求。'
-  const memoryMessage = creativeMemoryConfirmation(memoryActionReceipts, routed.memoryActions)
   const baseAssistantMessage = stateAction
     ? toolResults.length > 0
       ? [requirementMessage, modelAssistantMessage]
@@ -1538,58 +1489,33 @@ export async function* streamDirectorAgentChat(
           .map((message) => message.replace(/[。！!？?]+$/u, ''))
           .join('。')
       : requirementMessage
-    : memoryActionReceipts.length > 0
-      && toolResults.length === 0
-      && hasUnsupportedRequirementPersistenceClaim(modelAssistantMessage)
+    : toolResults.length === 0 && hasUnsupportedRequirementPersistenceClaim(modelAssistantMessage)
       ? stripUnsupportedPersistenceClaims(modelAssistantMessage)
-      : toolResults.length === 0
-      && memoryActionReceipts.every((receipt) => receipt.status !== 'succeeded')
-      && hasUnsupportedRequirementPersistenceClaim(modelAssistantMessage)
-      ? '本轮没有产生可验证的要求变更，因此未将其标记为已保存。'
+        || '我理解了你的意思，可以继续按这个方向讨论。'
       : modelAssistantMessage
-  const nonReceiptAssistantMessage = memoryMessage
-    ? [memoryMessage, baseAssistantMessage]
-        .filter(Boolean)
-        .map((message) => message.replace(/[。！!；;]+$/u, ''))
-        .join('。')
-    : baseAssistantMessage
   const finalReplyFacts = actionReceipts.map((receipt) => {
-    const memoryReceipt = receipt.kind === 'memory.update'
-      ? memoryActionReceipts.find((item) => item.ref === receipt.ref)
-      : undefined
     const toolResult = receipt.kind === 'tool.call'
       ? toolResults.find((item) => item.callId === receipt.callId)
       : undefined
     const summary = receipt.kind === 'requirements.update'
       ? requirementResult.ok ? requirementMessage : '本轮创作要求没有保存，因为内容未通过校验。'
-      : receipt.kind === 'memory.update' && memoryReceipt
-        ? creativeMemoryConfirmation(
-            [memoryReceipt],
-            routed.memoryActions.filter((item) => item.ref === receipt.ref),
-          )
-        : toolResult
+      : toolResult
           ? toolOutcomeConfirmation([toolResult], [receipt])
           : receipt.status === 'skipped'
             ? '这项处理没有继续，当前方案保持不变。'
             : '这项处理没有返回可确认的结果。'
     return {
       ref: receipt.ref,
-      status: memoryReceipt?.status ?? receipt.status,
+      status: receipt.status,
       summary: userFacingExecutionText(summary),
     }
   })
-  const receiptFallbackTail = !stateAction
-    && toolResults.length === 0
-    && memoryActionReceipts.length > 0
-    && hasUnsupportedRequirementPersistenceClaim(modelAssistantMessage)
-    ? stripUnsupportedPersistenceClaims(modelAssistantMessage)
-    : ''
   const fallbackAssistantMessage = !awaitsRevisionConfirmation && finalReplyFacts.length > 0
-    ? [...finalReplyFacts.map((fact) => fact.summary), receiptFallbackTail]
+    ? finalReplyFacts.map((fact) => fact.summary)
         .map((message) => message.replace(/[。！!？?]+$/u, ''))
         .filter(Boolean)
         .join('。')
-    : nonReceiptAssistantMessage
+    : baseAssistantMessage
   let finalReply: DirectorFinalReplyResult = {
     message: fallbackAssistantMessage,
     source: 'fallback',
@@ -1630,6 +1556,7 @@ export async function* streamDirectorAgentChat(
       : 'discussion',
   })
   workspaceState = compactDirectorWorkspaceTurns(workspaceState)
+  const creativeLearning = await creativeLearningPromise
   let saved
   try {
     saved = await (dependencies.saveWorkspace ?? workspaceSessions.save)({
@@ -1674,8 +1601,7 @@ export async function* streamDirectorAgentChat(
       audit: creativeMemoryRetrieval.audit,
       error: creativeMemoryRetrievalError ?? null,
     },
-    creative_memory_requests: routed.memoryActions,
-    creative_memory_changes: memoryActionReceipts,
+    creative_learning: creativeLearning,
     creative_knowledge_retrieval: {
       selected: creativeKnowledgeRetrieval.items,
       audit: creativeKnowledgeRetrieval.audit,

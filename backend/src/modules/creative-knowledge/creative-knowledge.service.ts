@@ -2,7 +2,6 @@ import { createHash, randomUUID } from 'node:crypto'
 
 import type {
   V2SampleEvidenceRange,
-  V2SampleUnderstandingResult,
 } from '../../../../shared/types/v2-sample-understanding.js'
 import { prisma } from '../../shared/prisma.service.js'
 import {
@@ -372,32 +371,6 @@ export async function activateCreativeKnowledgeFromEvidence(input: {
     if (!updated) throw new Error('Creative knowledge disappeared after evidence activation.')
     return record(updated)
   })
-}
-
-export async function createCreativeKnowledgeCandidatesFromSample(input: {
-  userId: number
-  understanding: V2SampleUnderstandingResult
-}): Promise<CreativeKnowledgeRecord[]> {
-  const methods = new Map(input.understanding.method_observations.map((method) => [method.id, method]))
-  const created: CreativeKnowledgeRecord[] = []
-  for (const item of input.understanding.transferable_knowledge) {
-    const methodIds = [...new Set(item.evidence_method_ids)].filter((id) => methods.has(id))
-    if (!methodIds.length) continue
-    const evidenceRanges = methodIds.flatMap((id) => methods.get(id)?.evidence_ranges ?? [])
-    created.push(await createCreativeKnowledgeCandidate({
-      userId: input.userId,
-      statement: item.statement,
-      applicability: item.applicability,
-      source: {
-        type: 'sample',
-        taskId: input.understanding.task_id,
-        ...(input.understanding.sample.name ? { sampleName: input.understanding.sample.name } : {}),
-        methodIds,
-        evidenceRanges,
-      },
-    }))
-  }
-  return created
 }
 
 export async function createManualCreativeKnowledgeCandidate(input: {
