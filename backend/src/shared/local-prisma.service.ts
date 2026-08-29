@@ -87,6 +87,40 @@ interface LocalCreativeKnowledge {
   revokedAt: string | null
 }
 
+interface LocalCreativeMemoryObservation {
+  id: string
+  userId: number
+  memoryId: string
+  scopeType: 'user' | 'draft'
+  draftId: string | null
+  sourceWorkspaceSessionId: string
+  sourceTurnId: string
+  sourceFingerprint: string
+  observationKey: string
+  kind: 'explicit_preference' | 'behavioral_signal' | 'revocation'
+  statement: string
+  polarity: 'prefer' | 'avoid'
+  sourceExcerpt: string
+  confidence: number | null
+  createdAt: string
+}
+
+interface LocalCreativeKnowledgeObservation {
+  id: string
+  knowledgeId: string
+  createdByUserId: number | null
+  sourceType: 'sample' | 'catalog' | 'manual'
+  sourceId: string
+  sourceContentHash: string | null
+  sourceFingerprint: string
+  observationKey: string
+  statement: string
+  applicability: string
+  evidenceJson: unknown
+  confidence: number | null
+  createdAt: string
+}
+
 interface LocalV2IdempotencyReceipt {
   id: string
   userId: number
@@ -113,6 +147,8 @@ interface LocalDbState {
   v2TimelineRenderRuns: LocalV2TimelineRenderRun[]
   creativeMemories: LocalCreativeMemory[]
   creativeKnowledge: LocalCreativeKnowledge[]
+  creativeMemoryObservations: LocalCreativeMemoryObservation[]
+  creativeKnowledgeObservations: LocalCreativeKnowledgeObservation[]
   v2IdempotencyReceipts: LocalV2IdempotencyReceipt[]
 }
 
@@ -144,6 +180,8 @@ function defaultState(): LocalDbState {
     v2TimelineRenderRuns: [],
     creativeMemories: [],
     creativeKnowledge: [],
+    creativeMemoryObservations: [],
+    creativeKnowledgeObservations: [],
     v2IdempotencyReceipts: [],
   }
 }
@@ -183,6 +221,8 @@ function loadState(): LocalDbState {
       semanticKey: memory.semanticKey || localMemorySemanticKey(memory.statement),
     })),
     creativeKnowledge: saved.creativeKnowledge ?? [],
+    creativeMemoryObservations: saved.creativeMemoryObservations ?? [],
+    creativeKnowledgeObservations: saved.creativeKnowledgeObservations ?? [],
     v2IdempotencyReceipts: saved.v2IdempotencyReceipts ?? [],
   }
 }
@@ -254,6 +294,15 @@ function creativeKnowledgeOut(knowledge: LocalCreativeKnowledge): Record<string,
     createdAt: new Date(knowledge.createdAt),
     updatedAt: new Date(knowledge.updatedAt),
     revokedAt: ensureDate(knowledge.revokedAt),
+  }
+}
+
+function creativeObservationOut(
+  observation: LocalCreativeMemoryObservation | LocalCreativeKnowledgeObservation,
+): Record<string, unknown> {
+  return {
+    ...clone(observation),
+    createdAt: new Date(observation.createdAt),
   }
 }
 
@@ -551,12 +600,19 @@ function makeLocalPrisma() {
         }),
       deleteMany: async (args: { where: Record<string, unknown> }) =>
         write(() => {
+          const deletedIds = new Set(state.creativeMemories
+            .filter((memory) => Object.entries(args.where).every(
+              ([key, value]) => memory[key as keyof LocalCreativeMemory] === value,
+            ))
+            .map((memory) => memory.id))
           const before = state.creativeMemories.length
           state.creativeMemories = state.creativeMemories.filter((memory) =>
             !Object.entries(args.where).every(
               ([key, value]) => memory[key as keyof LocalCreativeMemory] === value,
             ),
           )
+          state.creativeMemoryObservations = state.creativeMemoryObservations
+            .filter((observation) => !deletedIds.has(observation.memoryId))
           return { count: before - state.creativeMemories.length }
         }),
     },
@@ -638,14 +694,118 @@ function makeLocalPrisma() {
         return { count }
       }),
       deleteMany: async (args: { where: Record<string, unknown> }) => write(() => {
+        const deletedIds = new Set(state.creativeKnowledge
+          .filter((knowledge) => Object.entries(args.where).every(
+            ([key, value]) => knowledge[key as keyof LocalCreativeKnowledge] === value,
+          ))
+          .map((knowledge) => knowledge.id))
         const before = state.creativeKnowledge.length
         state.creativeKnowledge = state.creativeKnowledge.filter((knowledge) =>
           !Object.entries(args.where).every(
             ([key, value]) => knowledge[key as keyof LocalCreativeKnowledge] === value,
           ),
         )
+        state.creativeKnowledgeObservations = state.creativeKnowledgeObservations
+          .filter((observation) => !deletedIds.has(observation.knowledgeId))
         return { count: before - state.creativeKnowledge.length }
       }),
+    },
+    creativeMemoryObservation: {
+      create: async (args: { data: Partial<LocalCreativeMemoryObservation> }) => write(() => {
+        const userId = Number(args.data.userId)
+        const sourceFingerprint = String(args.data.sourceFingerprint)
+        const observationKey = String(args.data.observationKey)
+        if (state.creativeMemoryObservations.some((item) => item.userId === userId
+          && item.sourceFingerprint === sourceFingerprint && item.observationKey === observationKey)) {
+          throw new Error('Creative memory observation already exists')
+        }
+        const observation: LocalCreativeMemoryObservation = {
+          id: String(args.data.id),
+          userId,
+          memoryId: String(args.data.memoryId),
+          scopeType: args.data.scopeType === 'draft' ? 'draft' : 'user',
+          draftId: args.data.draftId == null ? null : String(args.data.draftId),
+          sourceWorkspaceSessionId: String(args.data.sourceWorkspaceSessionId),
+          sourceTurnId: String(args.data.sourceTurnId),
+          sourceFingerprint,
+          observationKey,
+          kind: args.data.kind as LocalCreativeMemoryObservation['kind'],
+          statement: String(args.data.statement),
+          polarity: args.data.polarity === 'avoid' ? 'avoid' : 'prefer',
+          sourceExcerpt: String(args.data.sourceExcerpt),
+          confidence: args.data.confidence == null ? null : Number(args.data.confidence),
+          createdAt: new Date().toISOString(),
+        }
+        state.creativeMemoryObservations.push(observation)
+        return creativeObservationOut(observation)
+      }),
+      findFirst: async (args: { where?: Record<string, unknown> }) => {
+        const observation = state.creativeMemoryObservations.find((item) =>
+          Object.entries(args.where ?? {}).every(
+            ([key, value]) => item[key as keyof LocalCreativeMemoryObservation] === value,
+          ))
+        return observation ? creativeObservationOut(observation) : null
+      },
+      findMany: async (args: {
+        where?: Record<string, unknown>
+        orderBy?: Record<string, 'asc' | 'desc'>
+      }) => {
+        const rows = state.creativeMemoryObservations.filter((item) =>
+          Object.entries(args.where ?? {}).every(
+            ([key, value]) => item[key as keyof LocalCreativeMemoryObservation] === value,
+          ))
+        const [field, direction] = Object.entries(args.orderBy ?? {})[0] ?? []
+        if (field) rows.sort((left, right) => String(left[field as keyof LocalCreativeMemoryObservation] ?? '')
+          .localeCompare(String(right[field as keyof LocalCreativeMemoryObservation] ?? '')) * (direction === 'asc' ? 1 : -1))
+        return rows.map(creativeObservationOut)
+      },
+    },
+    creativeKnowledgeObservation: {
+      create: async (args: { data: Partial<LocalCreativeKnowledgeObservation> }) => write(() => {
+        const sourceFingerprint = String(args.data.sourceFingerprint)
+        const observationKey = String(args.data.observationKey)
+        if (state.creativeKnowledgeObservations.some((item) => item.sourceFingerprint === sourceFingerprint
+          && item.observationKey === observationKey)) {
+          throw new Error('Creative knowledge observation already exists')
+        }
+        const observation: LocalCreativeKnowledgeObservation = {
+          id: String(args.data.id),
+          knowledgeId: String(args.data.knowledgeId),
+          createdByUserId: args.data.createdByUserId == null ? null : Number(args.data.createdByUserId),
+          sourceType: args.data.sourceType as LocalCreativeKnowledgeObservation['sourceType'],
+          sourceId: String(args.data.sourceId),
+          sourceContentHash: args.data.sourceContentHash == null ? null : String(args.data.sourceContentHash),
+          sourceFingerprint,
+          observationKey,
+          statement: String(args.data.statement),
+          applicability: String(args.data.applicability),
+          evidenceJson: args.data.evidenceJson ?? null,
+          confidence: args.data.confidence == null ? null : Number(args.data.confidence),
+          createdAt: new Date().toISOString(),
+        }
+        state.creativeKnowledgeObservations.push(observation)
+        return creativeObservationOut(observation)
+      }),
+      findFirst: async (args: { where?: Record<string, unknown> }) => {
+        const observation = state.creativeKnowledgeObservations.find((item) =>
+          Object.entries(args.where ?? {}).every(
+            ([key, value]) => item[key as keyof LocalCreativeKnowledgeObservation] === value,
+          ))
+        return observation ? creativeObservationOut(observation) : null
+      },
+      findMany: async (args: {
+        where?: Record<string, unknown>
+        orderBy?: Record<string, 'asc' | 'desc'>
+      }) => {
+        const rows = state.creativeKnowledgeObservations.filter((item) =>
+          Object.entries(args.where ?? {}).every(
+            ([key, value]) => item[key as keyof LocalCreativeKnowledgeObservation] === value,
+          ))
+        const [field, direction] = Object.entries(args.orderBy ?? {})[0] ?? []
+        if (field) rows.sort((left, right) => String(left[field as keyof LocalCreativeKnowledgeObservation] ?? '')
+          .localeCompare(String(right[field as keyof LocalCreativeKnowledgeObservation] ?? '')) * (direction === 'asc' ? 1 : -1))
+        return rows.map(creativeObservationOut)
+      },
     },
     v2IdempotencyReceipt: {
       create: async (args: { data: Partial<LocalV2IdempotencyReceipt> }) =>

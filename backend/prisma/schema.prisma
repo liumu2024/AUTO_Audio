@@ -20,6 +20,7 @@ model User {
 
   v2TimelineDrafts V2TimelineDraft[]
   creativeMemories CreativeMemory[]
+  creativeMemoryObservations CreativeMemoryObservation[]
   idempotencyReceipts V2IdempotencyReceipt[]
 
   @@map("users")
@@ -109,11 +110,38 @@ model CreativeMemory {
 
   user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   draft V2TimelineDraft? @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  observations CreativeMemoryObservation[]
 
   @@index([userId, status])
   @@index([draftId, status])
   @@unique([userId, scopeKey, semanticKey])
   @@map("creative_memories")
+}
+
+model CreativeMemoryObservation {
+  id                       String   @id
+  userId                   Int      @map("user_id")
+  memoryId                 String   @map("memory_id")
+  scopeType                String   @map("scope_type")
+  draftId                  String?  @map("draft_id")
+  sourceWorkspaceSessionId String   @map("source_workspace_session_id")
+  sourceTurnId             String   @map("source_turn_id")
+  sourceFingerprint        String   @map("source_fingerprint")
+  observationKey           String   @map("observation_key")
+  kind                     String
+  statement                String
+  polarity                 String
+  sourceExcerpt            String   @map("source_excerpt")
+  confidence               Float?
+  createdAt                DateTime @default(now()) @map("created_at")
+
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  memory CreativeMemory @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sourceFingerprint, observationKey])
+  @@index([memoryId, createdAt])
+  @@index([userId, createdAt])
+  @@map("creative_memory_observations")
 }
 
 model CreativeKnowledge {
@@ -128,8 +156,32 @@ model CreativeKnowledge {
   updatedAt       DateTime  @updatedAt @map("updated_at")
   revokedAt       DateTime? @map("revoked_at")
 
+  observations CreativeKnowledgeObservation[]
+
   @@index([status, updatedAt])
   @@map("creative_knowledge")
+}
+
+model CreativeKnowledgeObservation {
+  id                String   @id
+  knowledgeId       String   @map("knowledge_id")
+  createdByUserId   Int?     @map("created_by_user_id")
+  sourceType        String   @map("source_type")
+  sourceId          String   @map("source_id")
+  sourceContentHash String?  @map("source_content_hash")
+  sourceFingerprint String   @map("source_fingerprint")
+  observationKey    String   @map("observation_key")
+  statement         String
+  applicability     String
+  evidenceJson      Json     @map("evidence_json")
+  confidence        Float?
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  knowledge CreativeKnowledge @relation(fields: [knowledgeId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceFingerprint, observationKey])
+  @@index([knowledgeId, createdAt])
+  @@map("creative_knowledge_observations")
 }
 
 model CreativeRetrievalEmbedding {
