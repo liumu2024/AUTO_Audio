@@ -715,25 +715,6 @@ export async function* streamDirectorAgentChat(
   })
   let creativeKnowledgeRetrieval = { items: [], audit: [] } as Awaited<ReturnType<typeof searchCreativeKnowledge>>
   let creativeKnowledgeRetrievalError: string | undefined
-  if (!confirmedRevisionProposal && !confirmedPlanProposal) {
-    try {
-      creativeKnowledgeRetrieval = await searchCreativeKnowledge({ query: input.prompt })
-    } catch (error) {
-      creativeKnowledgeRetrievalError = error instanceof Error ? error.message : String(error)
-    }
-  }
-  await trace.writeJson('00-director-turn', 'creative-knowledge-retrieval.json', {
-    query: input.prompt,
-    selected: creativeKnowledgeRetrieval.items.map((item) => ({
-      id: item.knowledge.id,
-      statement: item.knowledge.statement,
-      applicability: item.knowledge.applicability,
-      score: item.score,
-      rank: item.rank,
-    })),
-    audit: creativeKnowledgeRetrieval.audit,
-    error: creativeKnowledgeRetrievalError ?? null,
-  })
   const confirmedProposal = confirmedRevisionProposal ?? confirmedPlanProposal
   const routed: LlmIntentRouterOutput = confirmedProposal
     ? {
@@ -918,6 +899,28 @@ export async function* streamDirectorAgentChat(
     },
   })
   const requestedTools = executionPlan.toolRequests
+  const shouldRetrieveCreativeKnowledge = !confirmedProposal
+    && executionPlan.stages.some(({ toolRequest }) =>
+      toolRequest.toolId === 'timeline.plan' || toolRequest.toolId === 'timeline.patch')
+  if (shouldRetrieveCreativeKnowledge) {
+    try {
+      creativeKnowledgeRetrieval = await searchCreativeKnowledge({ query: input.prompt })
+    } catch (error) {
+      creativeKnowledgeRetrievalError = error instanceof Error ? error.message : String(error)
+    }
+    await trace.writeJson('00-director-turn', 'creative-knowledge-retrieval.json', {
+      query: input.prompt,
+      selected: creativeKnowledgeRetrieval.items.map((item) => ({
+        id: item.knowledge.id,
+        statement: item.knowledge.statement,
+        applicability: item.knowledge.applicability,
+        score: item.score,
+        rank: item.rank,
+      })),
+      audit: creativeKnowledgeRetrieval.audit,
+      error: creativeKnowledgeRetrievalError ?? null,
+    })
+  }
   const revisionIntents = requestedTools.flatMap((request): DirectorTimelineRevisionIntent[] => {
     if (request.toolId !== 'timeline.patch') return []
     const confirmed = confirmedRevisionProposal?.revisionIntents.find((item) => item.callId === request.callId)

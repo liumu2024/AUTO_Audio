@@ -131,9 +131,10 @@ export async function rankHybridCreativeTextRows<T>(input: {
   limit: number
   minimumScore?: number
 }) {
+  const candidateLimit = Math.min(input.rows.length, Math.max(input.limit * 3, input.limit + 1))
   const lexical = rankCreativeTextRows({
     ...input,
-    limit: Math.min(20, input.rows.length),
+    limit: candidateLimit,
   })
   if (!input.rows.length) return lexical
 
@@ -153,32 +154,48 @@ export async function rankHybridCreativeTextRows<T>(input: {
   )
 
   const lexicalById = new Map(lexical.audit.map((item) => [input.id(item.row), item]))
-  const topLexicalScore = lexical.audit[0]?.score ?? 0
-  const topSemanticScore = semantic[0]?.similarity ?? 0
+  const lexicalRanks = new Map(lexical.items.map((item) => [input.id(item.row), item.rank]))
+  const semanticRanks = new Map(semantic.slice(0, candidateLimit)
+    .map((item, index) => [input.id(item.row), index + 1]))
+  const rrfConstant = 60
+  const maximumRrfScore = 2 / (rrfConstant + 1)
+  const consensusRankWindow = Math.min(candidateLimit, Math.max(input.limit * 2, input.limit + 1))
+  const consensusRrfMinimum = 2 / (rrfConstant + Math.max(1, consensusRankWindow))
+  const singleRouteRrfMinimum = 1 / (rrfConstant + Math.max(1, input.limit))
+  const hasStrongLexicalEvidence = (terms: string[]) => {
+    const unique = [...new Set(terms)]
+    return unique.length >= 2 || unique.some((term) => {
+      const hanLength = term.match(/[\p{Script=Han}]/gu)?.length ?? 0
+      return hanLength >= 4 || (/^[a-z0-9]+$/i.test(term) && term.length >= 3)
+    })
+  }
   const eligible = semantic.map((item) => {
     const id = input.id(item.row)
-    const lexicalItem = lexicalById.get(id)
-    const minimumLexicalScore = input.minimumScore ?? 1.5
-    const semanticFloor = Math.max(0.58, topSemanticScore - 0.15)
-    const lexicalEligible = (lexicalItem?.score ?? 0) >= minimumLexicalScore
-      && ((lexicalItem?.score ?? 0) >= topLexicalScore * 0.30
-        || (lexicalItem?.matchedTerms.length ?? 0) >= 2)
-    const semanticEligible = item.similarity >= semanticFloor
-      && ((lexicalItem?.matchedTerms.length ?? 0) > 0
-        || (item.similarity === topSemanticScore && topSemanticScore >= 0.65))
-    const lexicalScore = topLexicalScore > 0 ? (lexicalItem?.score ?? 0) / topLexicalScore : 0
-    const semanticScore = topSemanticScore > semanticFloor
-      ? Math.max(0, (item.similarity - semanticFloor) / (topSemanticScore - semanticFloor))
-      : Number(item.similarity === topSemanticScore)
-    const score = Math.max(semanticScore, lexicalScore) + Math.min(semanticScore, lexicalScore) * 0.05
+    const lexicalRank = lexicalRanks.get(id)
+    const semanticRank = semanticRanks.get(id)
+    const rrfScore = (lexicalRank ? 1 / (rrfConstant + lexicalRank) : 0)
+      + (semanticRank ? 1 / (rrfConstant + semanticRank) : 0)
+    const matchedTerms = lexicalById.get(id)?.matchedTerms ?? []
+    const strongLexicalEvidence = hasStrongLexicalEvidence(matchedTerms)
+    const recalledByBoth = lexicalRank !== undefined && semanticRank !== undefined
+    const recalledByLexicalOnly = lexicalRank !== undefined && semanticRank === undefined
+    const recalledBySemanticOnly = lexicalRank === undefined && semanticRank !== undefined
+    const accepted = recalledByBoth
+      ? rrfScore >= consensusRrfMinimum
+        && (item.similarity >= 0.58 || strongLexicalEvidence)
+      : recalledByLexicalOnly
+        ? rrfScore >= singleRouteRrfMinimum && strongLexicalEvidence
+        : recalledBySemanticOnly
+          ? rrfScore >= singleRouteRrfMinimum && item.similarity >= 0.58
+          : false
     return {
       row: item.row,
-      score,
+      score: rrfScore / maximumRrfScore,
       similarity: item.similarity,
-      matchedTerms: lexicalItem?.matchedTerms ?? [],
-      eligible: lexicalEligible || semanticEligible,
+      matchedTerms,
+      accepted,
     }
-  }).filter((item) => item.eligible)
+  }).filter((item) => item.accepted)
     .sort((left, right) => right.score - left.score
       || right.similarity - left.similarity
       || input.updatedAt(right.row).getTime() - input.updatedAt(left.row).getTime()
