@@ -151,21 +151,7 @@ export async function createCreativeMemory(input: {
   const reuseExisting = async (existing: DbMemory) => {
     let current = existing
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      if (input.preserveExistingStatus) {
-        await memories().updateMany({
-          where: { id: current.id, userId: input.userId },
-          data: {
-            statement,
-            origin: input.origin,
-            sourceWorkspaceSessionId: input.sourceWorkspaceSessionId?.trim() || null,
-            sourceTurnIdsJson: (input.sourceTurnIds ?? []).slice(0, 20),
-            sourceExcerpt: input.sourceExcerpt?.trim().slice(0, 1_000) || null,
-          },
-        })
-        const refreshed = await memories().findFirst({ where: { id: current.id, userId: input.userId } })
-        if (!refreshed) throw new Error('Creative memory disappeared after metadata refresh.')
-        return record(refreshed)
-      }
+      if (input.preserveExistingStatus) return record(current)
       const needsPromotion = current.status === 'revoked'
         || (current.status === 'candidate' && input.status === 'active')
       if (!needsPromotion) return record(current)
@@ -313,7 +299,11 @@ export async function updateCreativeMemory(input: {
   }
   if (input.status !== undefined) {
     data.status = input.status
-    data.revokedAt = input.status === 'revoked' ? new Date() : null
+    data.revokedAt = input.status === 'revoked'
+      ? new Date()
+      : input.status === 'active'
+        ? null
+        : current.revokedAt
   }
   if (!Object.keys(data).length) return record(current)
   const changed = await memories().updateMany({
@@ -330,6 +320,66 @@ export async function updateCreativeMemory(input: {
   }
   const updated = await memories().findFirst({ where: { id: input.id, userId: input.userId } })
   if (!updated) throw new Error('Creative memory disappeared after update.')
+  return record(updated)
+}
+
+export async function replaceActiveCreativeMemory(input: {
+  userId: number
+  previousId: string
+  nextId: string
+  previousStatus: CreativeMemoryStatus
+  nextStatus: CreativeMemoryStatus
+}): Promise<CreativeMemoryRecord> {
+  if (input.previousId === input.nextId) throw new Error('Creative memory replacement requires two records.')
+
+  const apply = async (store: CreativeMemoryDelegate) => {
+    const activated = await store.updateMany({
+      where: { id: input.nextId, userId: input.userId, status: input.nextStatus },
+      data: { status: 'active', revokedAt: null },
+    })
+    if (activated.count !== 1) throw new Error('Replacement preference changed before activation.')
+    const revoked = await store.updateMany({
+      where: { id: input.previousId, userId: input.userId, status: input.previousStatus },
+      data: { status: 'revoked', revokedAt: new Date() },
+    })
+    if (revoked.count !== 1) throw new Error('Previous preference changed before replacement.')
+  }
+
+  if (process.env.DPL304_LOCAL_MODE === 'true') {
+    const store = memories()
+    const nextBefore = await store.findFirst({
+      where: { id: input.nextId, userId: input.userId, status: input.nextStatus },
+    })
+    if (!nextBefore) throw new Error('Replacement preference changed before activation.')
+    const activated = await store.updateMany({
+      where: { id: input.nextId, userId: input.userId, status: input.nextStatus },
+      data: { status: 'active', revokedAt: null },
+    })
+    if (activated.count !== 1) throw new Error('Replacement preference changed before activation.')
+    try {
+      const revoked = await store.updateMany({
+        where: { id: input.previousId, userId: input.userId, status: input.previousStatus },
+        data: { status: 'revoked', revokedAt: new Date() },
+      })
+      if (revoked.count !== 1) throw new Error('Previous preference changed before replacement.')
+    } catch (error) {
+      await store.updateMany({
+        where: { id: input.nextId, userId: input.userId, status: 'active' },
+        data: {
+          status: input.nextStatus,
+          revokedAt: nextBefore.revokedAt,
+        },
+      })
+      throw error
+    }
+  } else {
+    await prisma.$transaction(async (transaction) => {
+      await apply((transaction as unknown as { creativeMemory: CreativeMemoryDelegate }).creativeMemory)
+    })
+  }
+
+  const updated = await memories().findFirst({ where: { id: input.nextId, userId: input.userId } })
+  if (!updated) throw new Error('Replacement preference disappeared after activation.')
   return record(updated)
 }
 

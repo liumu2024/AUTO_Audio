@@ -17,6 +17,7 @@ import {
 import {
   createCreativeMemory,
   listCreativeMemories,
+  replaceActiveCreativeMemory,
   searchCreativeMemories,
   updateCreativeMemory,
   type CreativeMemoryRecord,
@@ -107,6 +108,8 @@ export interface CreativeKnowledgeLearningReceipt {
 }
 
 const RELATION_CONFIDENCE_THRESHOLD = 0.9
+const MIN_OBSERVATION_CONFIDENCE = 0.6
+const DIRECT_ACTIVATION_CONFIDENCE = 0.9
 const MIN_INDEPENDENT_PREFERENCE_WORKSPACES = 2
 const MIN_INDEPENDENT_KNOWLEDGE_SOURCES = 2
 
@@ -121,7 +124,7 @@ async function defaultObserveUserTurn(input: Parameters<NonNullable<CreativeLear
       '你负责从用户本轮原话中识别可长期复用的创作偏好证据，不负责回复用户、修改项目要求或创建视频方案。',
       '只提取用户明确表达的长期偏好，或可作为候选观察的弱偏好信号。单次项目对象、故事内容、镜头操作、交付参数和当前实现要求不是长期偏好。',
       'statement 使用简洁、原子化、可跨任务复用的规范表达；一句话包含多个独立偏好时拆开。不要把人物、地点、题材内容或本次任务目标混入 statement，除非它明确限定偏好的适用题材。',
-      'sourceExcerpt 必须逐字截取自本轮 userText，但 statement 可以进行语义归纳。',
+      'sourceExcerpt 必须逐字截取自本轮 userText，且单独阅读时必须支持 statement 的对象、方向和适用条件；statement 可以进行语义归纳。',
       '用户明确说明长期、以后、一贯偏好时使用 explicit_preference；仅表达本次感觉、可能倾向或尚不确定时使用 behavioral_signal；明确撤销已有偏好时使用 revocation，并且只能引用 recalledMemories 中的 targetMemoryId。',
       '当前项目要求与偏好同时出现时，只提取其中可跨任务复用的偏好部分。没有可靠偏好证据时返回空 observations。',
       `userText=${JSON.stringify(input.userText)}`,
@@ -234,6 +237,9 @@ export async function learnCreativePreferencesFromUserTurn(input: {
     for (const observation of decision.observations) {
       try {
         const sourceExcerpt = sourceExcerptFromUserText(input.userText, observation.sourceExcerpt)
+        if (observation.confidence < MIN_OBSERVATION_CONFIDENCE) {
+          throw new Error('Creative preference observation confidence is too low to persist.')
+        }
         if (observation.scopeType === 'draft' && !input.currentDraftId) {
           throw new Error('Draft-scoped preference observation requires a current draft.')
         }
@@ -248,6 +254,9 @@ export async function learnCreativePreferencesFromUserTurn(input: {
           input.currentDraftId,
         )
         if (observation.kind === 'revocation') {
+          if (observation.confidence < DIRECT_ACTIVATION_CONFIDENCE) {
+            throw new Error('Creative memory revocation confidence is too low.')
+          }
           const target = scopeCandidates.find((item) => item.id === observation.targetMemoryId
             && recalled?.some((candidate) => candidate.id === item.id))
           if (!target) throw new Error('Creative memory revocation target was not recalled in this turn.')
@@ -276,6 +285,14 @@ export async function learnCreativePreferencesFromUserTurn(input: {
 
         const exact = scopeCandidates.find((item) =>
           normalizeCreativeText(item.statement) === normalizeCreativeText(observation.statement))
+        if (exact) {
+          const priorEvidence = await listCreativeMemoryObservations({ memoryId: exact.id })
+          const priorPolarity = [...priorEvidence].reverse()
+            .find((item) => item.kind !== 'revocation')?.polarity
+          if (priorPolarity && priorPolarity !== observation.polarity) {
+            throw new Error('Creative preference polarity conflicts with the identical stored statement.')
+          }
+        }
         const related = exact ? undefined : await searchCreativeMemories({
           userId: input.userId,
           draftId: input.currentDraftId,
@@ -298,9 +315,6 @@ export async function learnCreativePreferencesFromUserTurn(input: {
           ? candidates.find((item) => item.id === judged.targetId)
           : undefined
         const relation = trustedTarget && judged.relation !== 'unrelated' ? judged.relation : 'unrelated'
-        const initialStatus = observation.kind === 'explicit_preference' && relation !== 'contradictory'
-          ? 'active'
-          : 'candidate'
         const memory = relation === 'equivalent' && trustedTarget
           ? trustedTarget
           : await createCreativeMemory({
@@ -308,11 +322,12 @@ export async function learnCreativePreferencesFromUserTurn(input: {
               scopeType: observation.scopeType,
               draftId: observation.scopeType === 'draft' ? input.currentDraftId : undefined,
               statement: observation.statement,
-              status: initialStatus,
+              status: 'candidate',
               origin: observation.kind === 'explicit_preference' ? 'explicit' : 'inferred',
               sourceWorkspaceSessionId: input.workspaceSessionId,
               sourceTurnIds: [input.turnId],
               sourceExcerpt,
+              preserveExistingStatus: true,
             })
         const recorded = await recordCreativeMemoryObservation({
           userId: input.userId,
@@ -328,17 +343,67 @@ export async function learnCreativePreferencesFromUserTurn(input: {
           confidence: observation.confidence,
         })
         const evidence = await listCreativeMemoryObservations({ memoryId: memory.id })
-        const independentWorkspaces = new Set(evidence
+        const revokedAt = memory.revokedAt ? Date.parse(memory.revokedAt) : undefined
+        const currentEvidence = revokedAt === undefined
+          ? evidence
+          : evidence.filter((item) => Date.parse(item.createdAt) > revokedAt)
+        const independentWorkspaces = new Set(currentEvidence
           .filter((item) => item.kind !== 'revocation')
           .map((item) => item.sourceWorkspaceSessionId)).size
-        if (relation === 'contradictory' && trustedTarget) {
-          await updateCreativeMemory({ userId: input.userId, id: trustedTarget.id, status: 'revoked' })
-        }
-        const shouldPromote = observation.kind === 'explicit_preference'
+        const shouldPromote = (observation.kind === 'explicit_preference'
+            && observation.confidence >= DIRECT_ACTIVATION_CONFIDENCE)
           || independentWorkspaces >= MIN_INDEPENDENT_PREFERENCE_WORKSPACES
-        const effective = shouldPromote && memory.status !== 'active'
-          ? await updateCreativeMemory({ userId: input.userId, id: memory.id, status: 'active' })
-          : memory
+        let contradictedActive = relation === 'contradictory' && trustedTarget?.status === 'active'
+          ? trustedTarget
+          : undefined
+        if (shouldPromote && !contradictedActive && trustedTarget?.status === 'candidate') {
+          const promotionRetrieval = related ?? await searchCreativeMemories({
+            userId: input.userId,
+            draftId: input.currentDraftId,
+            query: observation.statement,
+          })
+          const activeCandidates = eligibleMemoryCandidates(
+            promotionRetrieval.active.map((item) => item.memory),
+            observation.scopeType,
+            input.currentDraftId,
+          ).filter((item) => item.id !== memory.id)
+          if (activeCandidates.length) {
+            const conflict = MemoryRelationSchema.parse(
+              await (dependencies.judgeMemoryRelation ?? defaultJudgeMemoryRelation)(
+                observation,
+                activeCandidates.map(({ id, statement, scopeType, status }) => ({ id, statement, scopeType, status })),
+              ),
+            )
+            contradictedActive = conflict.relation === 'contradictory'
+              && conflict.confidence >= RELATION_CONFIDENCE_THRESHOLD
+              ? activeCandidates.find((item) => item.id === conflict.targetId)
+              : undefined
+          }
+        }
+        let effective = memory
+        if (shouldPromote && contradictedActive && memory.status !== 'active') {
+          effective = await replaceActiveCreativeMemory({
+            userId: input.userId,
+            previousId: contradictedActive.id,
+            nextId: memory.id,
+            previousStatus: contradictedActive.status,
+            nextStatus: memory.status,
+          })
+        } else if (shouldPromote && memory.status !== 'active') {
+          effective = await updateCreativeMemory({
+            userId: input.userId,
+            id: memory.id,
+            status: 'active',
+            expectedStatus: memory.status,
+          })
+        } else if (memory.status === 'revoked' && currentEvidence.length > 0) {
+          effective = await updateCreativeMemory({
+            userId: input.userId,
+            id: memory.id,
+            status: 'candidate',
+            expectedStatus: 'revoked',
+          })
+        }
         changes.push({
           memoryId: effective.id,
           relation: relation === 'unrelated' ? 'created' : relation,
@@ -417,7 +482,7 @@ export async function learnCreativeKnowledgeFromSample(input: {
         applicability: item.applicability,
         evidence: { methodIds: item.methodIds, ranges: item.evidenceRanges },
       })
-      if (equivalent && recorded.created) await mergeCreativeKnowledgeSource({ id: knowledge.id, source })
+      if (equivalent) await mergeCreativeKnowledgeSource({ id: knowledge.id, source })
       const evidence = await listCreativeKnowledgeObservations({ knowledgeId: knowledge.id })
       const independentSources = new Set(evidence.map((observation) => observation.sourceFingerprint)).size
       const effective = independentSources >= MIN_INDEPENDENT_KNOWLEDGE_SOURCES

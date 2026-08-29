@@ -462,9 +462,14 @@ function makeLocalPrisma() {
           state.v2TimelineRenderRuns = state.v2TimelineRenderRuns.filter(
             (run) => !deletedIds.has(run.draftId),
           )
+          const deletedMemoryIds = new Set(state.creativeMemories
+            .filter((memory) => memory.draftId && deletedIds.has(memory.draftId))
+            .map((memory) => memory.id))
           state.creativeMemories = state.creativeMemories.filter(
             (memory) => !memory.draftId || !deletedIds.has(memory.draftId),
           )
+          state.creativeMemoryObservations = state.creativeMemoryObservations
+            .filter((observation) => !deletedMemoryIds.has(observation.memoryId))
           state.v2IdempotencyReceipts = state.v2IdempotencyReceipts.filter(
             (receipt) => receipt.draftId === null || !deletedIds.has(receipt.draftId),
           )
@@ -713,6 +718,10 @@ function makeLocalPrisma() {
     creativeMemoryObservation: {
       create: async (args: { data: Partial<LocalCreativeMemoryObservation> }) => write(() => {
         const userId = Number(args.data.userId)
+        const memoryId = String(args.data.memoryId)
+        if (!state.creativeMemories.some((item) => item.id === memoryId && item.userId === userId)) {
+          throw new Error('Creative memory observation target does not exist')
+        }
         const sourceFingerprint = String(args.data.sourceFingerprint)
         const observationKey = String(args.data.observationKey)
         if (state.creativeMemoryObservations.some((item) => item.userId === userId
@@ -722,7 +731,7 @@ function makeLocalPrisma() {
         const observation: LocalCreativeMemoryObservation = {
           id: String(args.data.id),
           userId,
-          memoryId: String(args.data.memoryId),
+          memoryId,
           scopeType: args.data.scopeType === 'draft' ? 'draft' : 'user',
           draftId: args.data.draftId == null ? null : String(args.data.draftId),
           sourceWorkspaceSessionId: String(args.data.sourceWorkspaceSessionId),
@@ -762,6 +771,10 @@ function makeLocalPrisma() {
     },
     creativeKnowledgeObservation: {
       create: async (args: { data: Partial<LocalCreativeKnowledgeObservation> }) => write(() => {
+        const knowledgeId = String(args.data.knowledgeId)
+        if (!state.creativeKnowledge.some((item) => item.id === knowledgeId)) {
+          throw new Error('Creative knowledge observation target does not exist')
+        }
         const sourceFingerprint = String(args.data.sourceFingerprint)
         const observationKey = String(args.data.observationKey)
         if (state.creativeKnowledgeObservations.some((item) => item.sourceFingerprint === sourceFingerprint
@@ -770,7 +783,7 @@ function makeLocalPrisma() {
         }
         const observation: LocalCreativeKnowledgeObservation = {
           id: String(args.data.id),
-          knowledgeId: String(args.data.knowledgeId),
+          knowledgeId,
           createdByUserId: args.data.createdByUserId == null ? null : Number(args.data.createdByUserId),
           sourceType: args.data.sourceType as LocalCreativeKnowledgeObservation['sourceType'],
           sourceId: String(args.data.sourceId),

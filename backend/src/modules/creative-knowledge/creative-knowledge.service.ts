@@ -127,8 +127,15 @@ async function serializeKnowledgeWrite<T>(operation: () => Promise<T>): Promise<
   return next
 }
 
-function semanticKey(statement: string): string {
+function legacySemanticKey(statement: string): string {
   return createHash('md5').update(normalizeCreativeText(statement)).digest('hex')
+}
+
+function semanticKey(statement: string, applicability: string): string {
+  return createHash('md5').update([
+    normalizeCreativeText(statement),
+    normalizeCreativeText(applicability),
+  ].join('\u001f')).digest('hex')
 }
 
 function requiredText(value: string, label: string): string {
@@ -259,7 +266,7 @@ async function upsertCreativeKnowledgeCandidate(input: {
 }): Promise<CreativeKnowledgeCandidateUpsert> {
   const statement = requiredText(input.statement, 'Creative knowledge statement')
   const applicability = requiredText(input.applicability, 'Creative knowledge applicability')
-  const key = semanticKey(statement)
+  const key = semanticKey(statement, applicability)
   return serializeKnowledgeWrite(async () => {
     const reuse = async (existing: DbKnowledge): Promise<CreativeKnowledgeCandidateUpsert> => {
       const existingSources = sources(existing.sourcesJson)
@@ -291,7 +298,14 @@ async function upsertCreativeKnowledgeCandidate(input: {
       if (!updated) throw new Error('Creative knowledge disappeared after source merge.')
       return { knowledge: record(updated), created: false, sourceMerged: true }
     }
-    const existing = await knowledgeStore().findFirst({ where: { semanticKey: key } })
+    const existingWithCurrentKey = await knowledgeStore().findFirst({ where: { semanticKey: key } })
+    const legacy = existingWithCurrentKey ? null : await knowledgeStore().findFirst({
+      where: { semanticKey: legacySemanticKey(statement) },
+    })
+    const existing = existingWithCurrentKey ?? (legacy
+      && normalizeCreativeText(legacy.applicability) === normalizeCreativeText(applicability)
+      ? legacy
+      : null)
     if (existing) return reuse(existing)
     try {
       return {
@@ -435,7 +449,7 @@ export async function synchronizeIsolatedSeedCreativeKnowledgeCandidate(input: {
     if (protectedRecord) return record(current)
     const statement = requiredText(input.statement, 'Creative knowledge statement')
     const applicability = requiredText(input.applicability, 'Creative knowledge applicability')
-    const key = semanticKey(statement)
+    const key = semanticKey(statement, applicability)
     const collision = await knowledgeStore().findFirst({ where: { semanticKey: key } })
     if (collision && collision.id !== current.id) {
       await knowledgeStore().deleteMany({ where: { id: current.id, createdByUserId: input.userId } })
@@ -527,10 +541,10 @@ export async function updateCreativeKnowledge(input: {
     const data: Record<string, unknown> = {}
     if (statement !== current.statement) {
       data.statement = statement
-      data.semanticKey = semanticKey(statement)
     }
     if (applicability !== current.applicability) data.applicability = applicability
     if (contentChanged) {
+      data.semanticKey = semanticKey(statement, applicability)
       const seedId = sources(current.sourcesJson).flatMap((source) => (
         (source.type === 'sample' || source.type === 'catalog') && source.seedId ? [source.seedId] : []
       ))[0]
