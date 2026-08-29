@@ -159,9 +159,12 @@ export async function rankHybridCreativeTextRows<T>(input: {
     .map((item, index) => [input.id(item.row), index + 1]))
   const rrfConstant = 60
   const maximumRrfScore = 2 / (rrfConstant + 1)
-  const consensusRankWindow = Math.min(candidateLimit, Math.max(input.limit * 2, input.limit + 1))
+  const consensusRankWindow = Math.min(candidateLimit, Math.max(Math.ceil(input.limit * 1.5), input.limit + 1))
   const consensusRrfMinimum = 2 / (rrfConstant + Math.max(1, consensusRankWindow))
   const singleRouteRrfMinimum = 1 / (rrfConstant + Math.max(1, input.limit))
+  const lexicalMinimumScore = input.minimumScore ?? 1.5
+  const strongLexicalMinimumScore = Math.max(3, lexicalMinimumScore)
+  const dualRouteMinimumSimilarity = 0.55
   const minimumSemanticSimilarity = 0.58
   const semanticOnlyMinimumSimilarity = 0.65
   const hasStrongLexicalEvidence = (terms: string[]) => {
@@ -177,16 +180,21 @@ export async function rankHybridCreativeTextRows<T>(input: {
     const semanticRank = semanticRanks.get(id)
     const rrfScore = (lexicalRank ? 1 / (rrfConstant + lexicalRank) : 0)
       + (semanticRank ? 1 / (rrfConstant + semanticRank) : 0)
-    const matchedTerms = lexicalById.get(id)?.matchedTerms ?? []
+    const lexicalItem = lexicalById.get(id)
+    const matchedTerms = lexicalItem?.matchedTerms ?? []
     const strongLexicalEvidence = hasStrongLexicalEvidence(matchedTerms)
     const recalledByBoth = lexicalRank !== undefined && semanticRank !== undefined
     const recalledByLexicalOnly = lexicalRank !== undefined && semanticRank === undefined
     const recalledBySemanticOnly = lexicalRank === undefined && semanticRank !== undefined
     const accepted = recalledByBoth
       ? rrfScore >= consensusRrfMinimum
+        && (lexicalItem?.score ?? 0) >= lexicalMinimumScore
+        && item.similarity >= dualRouteMinimumSimilarity
         && (item.similarity >= minimumSemanticSimilarity || strongLexicalEvidence)
       : recalledByLexicalOnly
-        ? rrfScore >= singleRouteRrfMinimum && strongLexicalEvidence
+        ? rrfScore >= singleRouteRrfMinimum
+          && (lexicalItem?.score ?? 0) >= strongLexicalMinimumScore
+          && strongLexicalEvidence
         : recalledBySemanticOnly
           ? rrfScore >= singleRouteRrfMinimum && item.similarity >= semanticOnlyMinimumSimilarity
           : false
