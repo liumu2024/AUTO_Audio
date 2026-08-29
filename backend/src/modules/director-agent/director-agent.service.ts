@@ -183,6 +183,25 @@ function usesChineseAsPrimaryLanguage(value: string) {
   return hanCount > 0 && hanCount * 2 >= latinCount
 }
 
+function proposalReply(input: {
+  userPrompt: string
+  modelMessage: string
+  kind: 'creation' | 'revision'
+}) {
+  if (!input.userPrompt.trim()
+    || usesChineseAsPrimaryLanguage(input.userPrompt) === usesChineseAsPrimaryLanguage(input.modelMessage)) {
+    return input.modelMessage
+  }
+  if (usesChineseAsPrimaryLanguage(input.userPrompt)) {
+    return input.kind === 'creation'
+      ? '我先把你的目标整理成了下面这份创作摘要。你确认无误后，我再生成完整方案。'
+      : '我把这次需要调整的内容整理在下面了。你确认无误后，我再应用到当前方案。'
+  }
+  return input.kind === 'creation'
+    ? 'I summarized your goal below. Please confirm it before I generate the full plan.'
+    : 'I summarized the requested changes below. Please confirm them before I update the current plan.'
+}
+
 function stateDiff(before: DirectorWorkspaceState, after: DirectorWorkspaceState) {
   const changed: string[] = []
   for (const key of ['draftId', 'baseRevision', 'selectedItemId', 'pendingQuestion', 'pendingTimelineRevisions', 'pendingTimelineRevisionConfirmation', 'pendingTimelinePlanConfirmation', 'responseId'] as const) {
@@ -363,6 +382,9 @@ function creativeMemoryConfirmation(
     'Creative memory target belongs to another draft.': '目标偏好属于其他草稿，已拒绝。',
     'Creative memory target is missing or inactive.': '目标偏好不存在或已失效。',
     'Creative memory statement must contain 1-500 characters.': '偏好内容需要 1-500 字。',
+    'Creative memory sourceExcerpt must quote the current user input verbatim.': '偏好操作没有引用本轮用户原话，已拒绝。',
+    'Creative memory sourceExcerpt does not support the replacement statement.': '新的偏好内容与本轮用户原话不一致，已拒绝。',
+    'Creative memory sourceExcerpt must directly express the revoke request.': '本轮原话没有明确要求撤销该偏好，因此没有撤销。',
   }
   const active = receipts.filter((receipt) =>
     receipt.status === 'succeeded' && receipt.effectiveStatus === 'active').length
@@ -370,11 +392,17 @@ function creativeMemoryConfirmation(
     receipt.status === 'succeeded' && receipt.effectiveStatus === 'candidate').length
   const duplicates = receipts.filter((receipt) =>
     receipt.status === 'skipped' && receipt.reason === 'duplicate_of_requirement').length
+  const taskOnly = receipts.filter((receipt) =>
+    receipt.status === 'skipped' && receipt.reason === 'not_explicit_long_term_preference').length
+  const mismatches = receipts.filter((receipt) =>
+    receipt.status === 'skipped' && receipt.reason === 'memory_evidence_mismatch').length
   const failed = receipts.filter((receipt) => receipt.status === 'failed')
   return [
     active ? `我已经保存了 ${active} 条创作偏好，你可以在“创作偏好”中查看或撤销` : '',
     candidates ? `另有 ${candidates} 条暂时作为候选观察，不会直接影响创作` : '',
     duplicates ? `${duplicates} 条内容已经是当前项目要求，因此没有重复保存为长期偏好` : '',
+    taskOnly ? `${taskOnly} 条内容只描述本次任务，因此没有保存为长期偏好` : '',
+    mismatches ? `${mismatches} 条偏好抽象与用户原话不一致，因此没有保存` : '',
     failed.length
       ? `${failed.length} 条偏好没有保存成功：${failed.map((item) => memoryErrorLabels[item.reason ?? ''] ?? '创作偏好暂时无法更新，请稍后重试。').join('；')}`
       : '',
@@ -734,6 +762,7 @@ export async function* streamDirectorAgentChat(
       }
     : await routeDirectorIntentWithLlm({
     ...input,
+    surfaceMode: surface.mode,
     runtime: effectiveRuntime,
     currentTurnMaterialIds: workspaceState.recentVisualMaterialIds,
     timelineSpec: persistedTimelineRevision?.spec,
@@ -820,7 +849,9 @@ export async function* streamDirectorAgentChat(
     kind: 'memory.update' as const,
     // A duplicate project requirement is intentionally not persisted as
     // memory, but it is a handled no-op rather than a failed dependency.
-    status: receipt.status === 'skipped' ? 'succeeded' : receipt.status,
+    status: receipt.status === 'skipped' && receipt.reason === 'duplicate_of_requirement'
+      ? 'succeeded'
+      : receipt.status,
     reason: receipt.reason,
     dependsOn: [],
   })))
@@ -1477,13 +1508,17 @@ export async function* streamDirectorAgentChat(
     ? toolOutcomeConfirmation(toolResults, actionReceipts)
     : ''
   const modelAssistantMessage = awaitsPlanConfirmation
-    ? usesChineseAsPrimaryLanguage(input.prompt)
-      ? '开始生成方案前，请先核对创作摘要。确认后我再生成可编辑方案。'
-      : routed.result.assistantMessage
+    ? proposalReply({
+        userPrompt: input.prompt,
+        modelMessage: routed.result.assistantMessage,
+        kind: 'creation',
+      })
     : awaitsRevisionConfirmation
-    ? usesChineseAsPrimaryLanguage(input.prompt)
-      ? `修改范围已解析并保存，尚未执行。请先核对修改目标与保护边界，再选择确认执行或取消。${requestedTools.some((request) => request.toolId === 'timeline.render') ? '正式渲染不包含在本次修改确认中，修改完成后仍需单独确认导出。' : ''}`
-      : `The requested changes are saved as a proposal and have not been applied. Review the targets and protected boundaries, then confirm or cancel.${requestedTools.some((request) => request.toolId === 'timeline.render') ? ' Export is not included in this confirmation and still requires separate approval after the changes are applied.' : ''}`
+    ? proposalReply({
+        userPrompt: input.prompt,
+        modelMessage: routed.result.assistantMessage,
+        kind: 'revision',
+      })
     : shouldReportToolOutcome
     ? toolConfirmation
     : routed.result.assistantMessage

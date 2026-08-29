@@ -7,6 +7,7 @@ import {
 import {
   assertValidRemotionTimelineSpec,
   validateRemotionTimelineSpec,
+  type RemotionTimelineValidationIssue,
 } from '../../../shared/lib/remotion-timeline-validator.js'
 import { normalizeV2TimelineTextOwnership } from '../../../shared/lib/remotion-timeline-text-ownership.js'
 import {
@@ -282,6 +283,30 @@ function revisionGroupFragmentJsonSchema(input: V2RemotionTimelinePlannerInput):
   return { type: 'object', required, additionalProperties: false, properties }
 }
 
+function initialTimelineJsonSchema(input: V2RemotionTimelinePlannerInput): PlannerJsonSchema {
+  const schema = TimelineJsonSchema as unknown as PlannerJsonSchema & {
+    properties: Record<string, unknown>
+  }
+  const creativeBrief = schema.properties.creative_brief as Record<string, unknown>
+  const creativeBriefProperties = creativeBrief.properties as Record<string, unknown>
+  const allowedPreferences = [...new Set(input.planningContext?.recalledCreativeMemories ?? [])]
+  return {
+    ...schema,
+    properties: {
+      ...schema.properties,
+      creative_brief: {
+        ...creativeBrief,
+        properties: {
+          ...creativeBriefProperties,
+          applied_preferences: allowedPreferences.length
+            ? { type: 'array', items: { type: 'string', enum: allowedPreferences }, uniqueItems: true }
+            : { type: 'array', items: { type: 'string' }, maxItems: 0 },
+        },
+      },
+    },
+  }
+}
+
 function plannerOutputContract(input: V2RemotionTimelinePlannerInput): PlannerOutputContract {
   if (input.revisionBaseSpec && input.revisionGroup) return {
     kind: 'fragment',
@@ -305,8 +330,26 @@ function plannerOutputContract(input: V2RemotionTimelinePlannerInput): PlannerOu
         kind: 'timeline',
         schemaVersion: REMOTION_TIMELINE_SPEC_SCHEMA_VERSION,
         schemaName: 'remotion_timeline_spec_v1',
-        schema: TimelineJsonSchema as unknown as PlannerJsonSchema,
+        schema: initialTimelineJsonSchema(input),
       }
+}
+
+function sanitizeInitialTimeline(
+  input: V2RemotionTimelinePlannerInput,
+  spec: RemotionTimelineSpecV1,
+): RemotionTimelineSpecV1 {
+  if (!spec.creative_brief) return spec
+  const allowedPreferences = new Set(input.planningContext?.recalledCreativeMemories ?? [])
+  const appliedPreferences = spec.creative_brief.applied_preferences.filter((statement) =>
+    allowedPreferences.has(statement))
+  if (appliedPreferences.length === spec.creative_brief.applied_preferences.length) return spec
+  return {
+    ...spec,
+    creative_brief: {
+      ...spec.creative_brief,
+      applied_preferences: appliedPreferences,
+    },
+  }
 }
 
 function sanitizeRevisionFragment(
@@ -707,6 +750,7 @@ export function buildV2TimelineRevisionPlannerPrompt(
   input: V2RemotionTimelinePlannerInput,
   visualInputReport?: V2TimelineVisualInputReport,
 ): string {
+  const creationMode = input.creationMode ?? 'text_to_video'
   const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
   const assetCatalog = [...authoritativePlannerAssets(input).values()].map((asset) => ({
     id: asset.id,
@@ -764,8 +808,8 @@ export function buildV2TimelineRevisionPlannerPrompt(
     existingComponentIds.has(component.id)
     || (transitionScopeApplies ? component.purpose === 'transition' : Boolean(mediaScopeApplies) && component.purpose === 'scene'))
   const hasComponentRule = relevantComponents.length > 0
-    && (existingComponentIds.size > 0 || Boolean(mediaScopeApplies) || Boolean(transitionScopeApplies)
-      || /组件|自定义|效果|动效|custom_render/i.test(input.prompt))
+    && (existingComponentIds.size > 0
+      || /组件|自定义|程序化|特殊效果|复杂动效|custom_render|component_id/i.test(input.prompt))
   const hasVisibleTextRule = input.revisionScope === 'subtitle'
     || input.revisionGroup?.items.some((item) => item.scope === 'subtitle')
     || hardRequirements.required_captions.length > 0
@@ -784,6 +828,10 @@ export function buildV2TimelineRevisionPlannerPrompt(
     '- 只能使用权威素材目录和组件目录中的 ID。不得填写 planning_gaps、执行回执、input_image_url 或虚假 fulfilled 状态。',
     '- 只实现本轮明确要求。授权目标之外的镜头、字幕、时间、转场、素材和创作事实必须保持不变。',
     '- Fragment 返回 creative_brief 时，applied_preferences 只能包含本轮实际采用的 recalled_user_preferences 原句。',
+    `- 当前创作模式：${creationMode}。用户未要求改变素材策略时必须继承现有方案。`,
+    ...(creationMode === 'text_to_video'
+      ? ['- text_to_video 没有用户视觉素材；需要真实动态画面的镜头继续使用 ai_video + generate_video，不得改成 request_user_material。']
+      : []),
     ...(input.originalUserPrompt?.trim()
       ? ['- 面向用户的可见文本必须跟随“用户原始输入”的主要语言；该输入仅用于可见文本的语言判断，不扩大修订范围。']
       : []),
@@ -1052,7 +1100,7 @@ function assertLlmMainSceneMaterialCoverage(input: V2RemotionTimelinePlannerInpu
   const missing = expected.filter((asset) => !mainSceneSrcs.has(asset.src))
   if (missing.length) {
     throw new Error(
-      `LLM timeline used only ${expected.length - missing.length}/${expected.length} user visual materials as main scenes; falling back to deterministic coverage.`,
+      `LLM timeline used only ${expected.length - missing.length}/${expected.length} user visual materials as main scenes.`,
     )
   }
 }
@@ -1066,27 +1114,65 @@ function authoritativePlannerAssets(input: V2RemotionTimelinePlannerInput) {
   )
 }
 
+type TimelineFieldRepairError = Error & { allowedRepairPaths: string[] }
+
+function timelineFieldRepairError(message: string, allowedRepairPaths: string[]): TimelineFieldRepairError {
+  return Object.assign(new Error(message), { allowedRepairPaths })
+}
+
+function assetReferenceRepairPaths(spec: RemotionTimelineSpecV1, assetId: string): string[] {
+  return [
+    ...spec.scenes.flatMap((scene, index) => scene.asset_id === assetId
+      ? [`scenes[${index}].asset_id`]
+      : []),
+    ...spec.overlays.flatMap((overlay, index) => overlay.asset_id === assetId
+      ? [`overlays[${index}].asset_id`]
+      : []),
+    ...(spec.audio ?? []).flatMap((clip, index) => clip.asset_id === assetId
+      ? [`audio[${index}].asset_id`]
+      : []),
+    ...spec.material_jobs.flatMap((job, index) => [
+      ...(job.input_asset_id === assetId ? [`material_jobs[${index}].input_asset_id`] : []),
+      ...(job.output_asset_id === assetId ? [`material_jobs[${index}].output_asset_id`] : []),
+      ...(job.fallback_asset_id === assetId ? [`material_jobs[${index}].fallback_asset_id`] : []),
+    ]),
+    ...(spec.creative_brief?.image_references ?? []).flatMap((reference, index) =>
+      reference.asset_id === assetId ? [`creative_brief.image_references[${index}].asset_id`] : []),
+  ]
+}
+
 async function bindAuthoritativePlannerAssets(
   input: V2RemotionTimelinePlannerInput,
   spec: RemotionTimelineSpecV1,
   options: { allowPersistedPlanningGaps?: boolean } = {},
 ): Promise<RemotionTimelineSpecV1> {
-  if (spec.material_jobs.some((job) => job.input_image_url)) {
-    throw new Error('input_image_url is reserved for historical persisted jobs; model output must use input_asset_id.')
+  const legacyImageJobIndex = spec.material_jobs.findIndex((job) => job.input_image_url)
+  if (legacyImageJobIndex >= 0) {
+    throw timelineFieldRepairError(
+      'input_image_url is reserved for historical persisted jobs; model output must use input_asset_id.',
+      [`material_jobs[${legacyImageJobIndex}].input_image_url`, `material_jobs[${legacyImageJobIndex}].input_asset_id`],
+    )
   }
   if (spec.creative_brief?.planning_gaps?.length && !options.allowPersistedPlanningGaps) {
-    throw new Error('planning_gaps are server-maintained and cannot be returned by the planner model.')
+    throw timelineFieldRepairError(
+      'planning_gaps are server-maintained and cannot be returned by the planner model.',
+      ['creative_brief.planning_gaps'],
+    )
   }
   const recalledPreferences = new Set([
     ...(input.planningContext?.recalledCreativeMemories ?? []),
     ...(input.revisionBaseSpec?.creative_brief?.applied_preferences ?? []),
   ])
-  for (const preference of spec.creative_brief?.applied_preferences ?? []) {
+  for (const [index, preference] of (spec.creative_brief?.applied_preferences ?? []).entries()) {
     if (!recalledPreferences.has(preference)) {
-      throw new Error('creative_brief applied preference was not recalled by the server.')
+      throw timelineFieldRepairError(
+        'creative_brief applied preference was not recalled by the server.',
+        ['creative_brief.applied_preferences.length', `creative_brief.applied_preferences[${index}]`],
+      )
     }
   }
   const authoritativeAssets = authoritativePlannerAssets(input)
+  const candidateAssets = [...spec.assets]
   const conditionedAssetIds = new Set(
     spec.material_jobs.flatMap((job) => job.input_asset_id ? [job.input_asset_id] : []),
   )
@@ -1096,37 +1182,63 @@ async function bindAuthoritativePlannerAssets(
 
   for (const assetId of conditionedAssetIds) {
     const authoritative = authoritativeAssets.get(assetId)
+    const jobPaths = spec.material_jobs.flatMap((job, index) => job.input_asset_id === assetId
+      ? [`material_jobs[${index}].input_asset_id`]
+      : [])
     if (!authoritative || authoritative.type !== 'image') {
-      throw new Error(`input_asset_id is not a server-owned image asset: ${assetId}`)
+      throw timelineFieldRepairError(
+        `input_asset_id is not a server-owned image asset: ${assetId}`,
+        [...jobPaths, ...assetReferenceRepairPaths(spec, assetId)],
+      )
     }
     if (!await resolveServerImageAccess(authoritative.src)) {
-      throw new Error(`input_asset_id does not reference an approved image source: ${assetId}`)
+      throw timelineFieldRepairError(
+        `input_asset_id does not reference an approved image source: ${assetId}`,
+        jobPaths,
+      )
     }
-    if (!spec.assets.some((asset) => asset.id === assetId)) {
-      throw new Error(`input_asset_id is missing from the candidate asset list: ${assetId}`)
-    }
+    if (!candidateAssets.some((asset) => asset.id === assetId)) candidateAssets.push(authoritative)
     const reference = imageReferences.get(assetId)
     if (!reference) {
-      throw new Error(`image-conditioned generation is missing creative_brief image facts for: ${assetId}`)
+      const nextIndex = spec.creative_brief?.image_references.length ?? 0
+      throw timelineFieldRepairError(
+        `image-conditioned generation is missing creative_brief image facts for: ${assetId}`,
+        ['creative_brief.image_references.length', `creative_brief.image_references[${nextIndex}]`],
+      )
     }
     if (!reference.observed_facts.some((fact) => fact.trim()) || !reference.intended_use.trim()) {
-      throw new Error(`image-conditioned generation has incomplete creative_brief image facts for: ${assetId}`)
+      const referenceIndex = spec.creative_brief!.image_references.findIndex((item) => item.asset_id === assetId)
+      throw timelineFieldRepairError(
+        `image-conditioned generation has incomplete creative_brief image facts for: ${assetId}`,
+        [
+          `creative_brief.image_references[${referenceIndex}].observed_facts`,
+          `creative_brief.image_references[${referenceIndex}].intended_use`,
+        ],
+      )
     }
   }
-  for (const reference of spec.creative_brief?.image_references ?? []) {
+  for (const [index, reference] of (spec.creative_brief?.image_references ?? []).entries()) {
     const authoritative = authoritativeAssets.get(reference.asset_id)
     if (!authoritative || authoritative.type !== 'image') {
-      throw new Error(`creative_brief image reference is not a server-owned image asset: ${reference.asset_id}`)
+      throw timelineFieldRepairError(
+        `creative_brief image reference is not a server-owned image asset: ${reference.asset_id}`,
+        [`creative_brief.image_references[${index}].asset_id`],
+      )
     }
+  }
+
+  const unauthorizedAssetIndex = candidateAssets.findIndex((asset) => !authoritativeAssets.has(asset.id))
+  if (unauthorizedAssetIndex >= 0) {
+    const assetId = candidateAssets[unauthorizedAssetIndex]!.id
+    throw timelineFieldRepairError(
+      `model returned an asset not owned by the server: ${assetId}`,
+      ['assets.length', `assets[${unauthorizedAssetIndex}]`, ...assetReferenceRepairPaths(spec, assetId)],
+    )
   }
 
   return {
     ...spec,
-    assets: spec.assets.map((asset) => {
-      const authoritative = authoritativeAssets.get(asset.id)
-      if (!authoritative) throw new Error(`model returned an asset not owned by the server: ${asset.id}`)
-      return { ...authoritative }
-    }),
+    assets: candidateAssets.map((asset) => ({ ...authoritativeAssets.get(asset.id)! })),
   }
 }
 
@@ -1269,11 +1381,15 @@ function timelineJsonSyntaxRepairPrompt(input: {
 function timelineFieldRepairPrompt(input: {
   invalidText: string
   error: string
+  allowedRepairPaths: string[]
   assets: Array<{ id: string; type: string }>
   outputContract: PlannerOutputContract
 }) {
   return [
     'Correct only the fields implicated by the validation error below.',
+    input.allowedRepairPaths.length > 0
+      ? `Only these JSON paths may change: ${JSON.stringify(input.allowedRepairPaths)}`
+      : 'This is a revision fragment; remain inside the fragment schema and its authorized revision scope.',
     'Use only server-provided asset IDs and remove or replace rejected references when the error requires it.',
     'A catalog id is the assets[].id itself, not an alias. Copy that id unchanged into assets[] and use the same id for input_asset_id.',
     'For ai_video, scene.asset_id must remain equal to its generate_video job output_asset_id. Never replace it with the input image id or add the unresolved output id to assets[].',
@@ -1286,6 +1402,88 @@ function timelineFieldRepairPrompt(input: {
     'Original final answer:',
     input.invalidText,
   ].join('\n')
+}
+
+function changedJsonPaths(before: unknown, after: unknown, path = ''): string[] {
+  if (Object.is(before, after)) return []
+  if (Array.isArray(before) && Array.isArray(after)) {
+    const changes = before.length === after.length ? [] : [`${path}.length`]
+    if (path === 'assets') {
+      const beforeIds = before.map((item) => item && typeof item === 'object'
+        ? (item as { id?: unknown }).id
+        : undefined)
+      const afterIds = after.map((item) => item && typeof item === 'object'
+        ? (item as { id?: unknown }).id
+        : undefined)
+      if (beforeIds.every((id): id is string => typeof id === 'string')
+        && afterIds.every((id): id is string => typeof id === 'string')
+        && new Set(beforeIds).size === beforeIds.length
+        && new Set(afterIds).size === afterIds.length) {
+        const afterById = new Map(afterIds.map((id, index) => [id, after[index]]))
+        const beforeIdSet = new Set(beforeIds)
+        beforeIds.forEach((id, index) => {
+          changes.push(...changedJsonPaths(before[index], afterById.get(id), `${path}[${index}]`))
+        })
+        afterIds.forEach((id, index) => {
+          if (!beforeIdSet.has(id)) changes.push(`${path}[${index}]`)
+        })
+        return changes
+      }
+    }
+    const count = Math.max(before.length, after.length)
+    for (let index = 0; index < count; index += 1) {
+      changes.push(...changedJsonPaths(before[index], after[index], `${path}[${index}]`))
+    }
+    return changes
+  }
+  if (before && after && typeof before === 'object' && typeof after === 'object') {
+    return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+      .flatMap((key) => changedJsonPaths(
+        (before as Record<string, unknown>)[key],
+        (after as Record<string, unknown>)[key],
+        path ? `${path}.${key}` : key,
+      ))
+  }
+  return [path]
+}
+
+function isRelatedRepairPath(changedPath: string, allowedPath: string) {
+  return changedPath === allowedPath
+    || changedPath.startsWith(`${allowedPath}.`)
+    || changedPath.startsWith(`${allowedPath}[`)
+    || allowedPath.startsWith(`${changedPath}.`)
+    || allowedPath.startsWith(`${changedPath}[`)
+}
+
+function validationIssueRepairPaths(issue: RemotionTimelineValidationIssue): string[] {
+  if (issue.severity !== 'error' || issue.path === '$') return []
+  if (/^overlays\[\d+\]$/.test(issue.path)
+    && /within its referenced scene time range|overlapping segments|crossfade overlap/i.test(issue.message)) {
+    return [`${issue.path}.start_sec`, `${issue.path}.end_sec`]
+  }
+  if (/^material_jobs\[\d+\]$/.test(issue.path)
+    && /use input_asset_id or legacy input_image_url/i.test(issue.message)) {
+    return [`${issue.path}.input_asset_id`, `${issue.path}.input_image_url`]
+  }
+  return [issue.path]
+}
+
+function preparationErrorRepairPaths(error: Error | undefined): string[] {
+  if (!error) return []
+  const paths = (error as Partial<TimelineFieldRepairError>).allowedRepairPaths
+  return Array.isArray(paths) && paths.every((path) => typeof path === 'string') ? paths : []
+}
+
+function assertInitialFieldRepairPreservesSemantics(
+  before: RemotionTimelineSpecV1,
+  after: RemotionTimelineSpecV1,
+  allowedRepairPaths: string[],
+) {
+  const unrelatedChanges = changedJsonPaths(before, after)
+    .filter((path) => !allowedRepairPaths.some((allowedPath) => isRelatedRepairPath(path, allowedPath)))
+  if (unrelatedChanges.length > 0) {
+    throw new Error('Timeline field repair changed unrelated timeline semantics.')
+  }
 }
 
 export async function runV2TimelineLlmPlanner(
@@ -1389,7 +1587,9 @@ export async function runV2TimelineLlmPlanner(
             availableAssets: [...authoritativePlannerAssets(input).values()],
           })
       : candidate as RemotionTimelineSpecV1
-    const normalized = normalizeV2TimelineTextOwnership(merged)
+    const normalized = normalizeV2TimelineTextOwnership(
+      revisionFragment ? merged : sanitizeInitialTimeline(input, merged),
+    )
     const repaired = repairV2LlmGeneratedMaterialPrompts(normalized)
     const scopedSpec = revisionFragment
       ? input.revisionGroup
@@ -1428,12 +1628,22 @@ export async function runV2TimelineLlmPlanner(
   } catch (error) {
     preparationError = error instanceof Error ? error : new Error(String(error))
   }
-  if ((preparationError || !preparedCandidate?.validation.ok) && !jsonRepair && options.allowJsonRepair !== false) {
+  const allowedRepairPaths = [
+    ...preparationErrorRepairPaths(preparationError),
+    ...(preparedCandidate?.validation.issues ?? []).flatMap(validationIssueRepairPaths),
+  ]
+  const canAttemptFieldRepair = outputContract.kind === 'fragment' || allowedRepairPaths.length > 0
+  if ((preparationError || !preparedCandidate?.validation.ok)
+    && canAttemptFieldRepair && !jsonRepair && options.allowJsonRepair !== false) {
+    const rejectedCandidate = extracted.candidate
     const error = preparationError?.message
-      ?? `LLM timeline spec field validation failed: ${JSON.stringify(preparedCandidate?.validation.issues)}`
+      ?? `LLM timeline spec field validation failed: ${JSON.stringify(
+        preparedCandidate?.validation.issues.filter((issue) => issue.severity === 'error'),
+      )}`
     const repairPrompt = timelineFieldRepairPrompt({
       invalidText: extractTextCandidate(rawResponse),
       error,
+      allowedRepairPaths: [...new Set(allowedRepairPaths)],
       assets: [...authoritativePlannerAssets(input).values()].map((asset) => ({
         id: asset.id,
         type: asset.type,
@@ -1454,6 +1664,13 @@ export async function runV2TimelineLlmPlanner(
           (value as { schema_version?: unknown }).schema_version === outputContract.schemaVersion,
       )
       if (extracted.candidate) {
+        if (outputContract.kind === 'timeline') {
+          assertInitialFieldRepairPreservesSemantics(
+            rejectedCandidate as RemotionTimelineSpecV1,
+            extracted.candidate as RemotionTimelineSpecV1,
+            allowedRepairPaths,
+          )
+        }
         preparedCandidate = await prepareCandidate(
           extracted.candidate as RemotionTimelineSpecV1 | V2TimelineRevisionFragment | V2TimelineRevisionGroupFragment,
         )

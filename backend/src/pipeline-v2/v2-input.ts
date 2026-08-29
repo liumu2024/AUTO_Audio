@@ -86,7 +86,6 @@ export interface V2PlannerInput {
   materials?: V2PlannerMaterialInput[]
   durationSec?: number
   plannerMode?: 'deterministic' | 'llm'
-  allowPlannerFallback?: boolean
   canvas?: {
     width?: number
     height?: number

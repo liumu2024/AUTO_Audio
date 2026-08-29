@@ -22,6 +22,7 @@ import type {
   DirectorWorkspaceState,
 } from '../../../../shared/types/director-workspace-session.js'
 import type { RemotionTimelineSpecV1 } from '../../../../shared/types/remotion-timeline-spec.v1.js'
+import type { DirectorSurfaceMode } from '../../../../shared/types/director-stream.js'
 import type { CreativeMemorySearchResult } from '../creative-memory/creative-memory.service.js'
 import {
   listPromotedComponents,
@@ -245,6 +246,7 @@ function summarizeCurrentTimeline(context: DirectorContext) {
 
 interface DirectorPromptInput {
   prompt: string
+  surfaceMode?: DirectorSurfaceMode
   currentTurnId?: string
   context: DirectorContext
   runtime: DirectorConversationRuntime
@@ -254,6 +256,13 @@ interface DirectorPromptInput {
   retrievedCreativeMemories?: CreativeMemorySearchResult
   promotedComponents?: RenderComponentSummary[]
   timelineSpec?: RemotionTimelineSpecV1
+}
+
+function isReadOnlySurface(mode?: DirectorSurfaceMode) {
+  return mode === 'creative_guide'
+    || mode === 'capability_intro'
+    || mode === 'help'
+    || mode === 'smalltalk'
 }
 
 function withoutEmptyPromptValues<T>(value: T): T | undefined {
@@ -277,7 +286,7 @@ function withoutEmptyPromptValues<T>(value: T): T | undefined {
 
 function toolCapabilitiesForPrompt(input: DirectorPromptInput) {
   const timelineSummary = summarizeCurrentTimeline(input.context)
-  return listV2AgentToolCards().map(({ effectiveMode: _effectiveMode, ...tool }) => {
+  const tools = listV2AgentToolCards().map(({ effectiveMode: _effectiveMode, ...tool }) => {
     const readiness = evaluateV2AgentToolReadiness({
       toolId: tool.id,
       context: input.context,
@@ -299,6 +308,7 @@ function toolCapabilitiesForPrompt(input: DirectorPromptInput) {
       ...(readiness.alternatives.length > 0 ? { alternatives: readiness.alternatives } : {}),
     }
   })
+  return isReadOnlySurface(input.surfaceMode) ? [] : tools
 }
 
 export function compactDirectorContextForPrompt(input: DirectorPromptInput) {
@@ -409,13 +419,20 @@ export function buildDirectorModelPrompt(input: DirectorPromptInput) {
 - 只有用户明确放弃某项失败修改并保留当前草稿时，才调用 timeline.pending.dismiss 并传入对应 callId。`
     : ''
   const stateRules = [creationRules, revisionRules, pendingRules].filter(Boolean).join('\n\n')
-  const skillCards = listV2AgentSkillCards().map(({ id, card }) => ({ id, card }))
+  const readOnlySurface = isReadOnlySurface(input.surfaceMode)
+  const skillCards = readOnlySurface
+    ? []
+    : listV2AgentSkillCards().map(({ id, card }) => ({ id, card }))
+  const interactionRule = readOnlySurface
+    ? '本轮是创作咨询或普通对话：使用 chat 自然回答；不得创建提案、修改状态或沉淀偏好，stateActions、memoryActions、skillRequests 和 toolRequests 都返回空数组。'
+    : '本轮没有只读限制；仍须根据当前用户原话判断是否获得创建、修改或执行授权。'
 
   return `你是视频创作平台的导演决策智能体，专门负责理解用户创作意图、维护已确认要求，并把本轮目标规划为讨论、澄清、方案创建、局部修改或成片交付。你只决定本轮意图、作用范围、依赖和 Tool 计划；具体时间线内容由 Planner 生成，执行结果以服务端真实回执为准。
 
 冲突处理顺序：当前用户输入 > 已确认要求 > 服务端权威事实 > 召回偏好与对话摘要。历史信息只用于理解指代和延续，不得在无关轮次主动触发动作；“暂时不要修改”等本轮控制不写入持久要求。
 
 最高优先级：
+- ${interactionRule}
 - intent 只使用 chat、create、revise、execute、clarify。讨论、建议、评价、假设和只读问答使用 chat，不请求 Tool。
 - 只有当前输入明确授权创建、修订或执行时才请求 Tool。交付操作使用 execute；用户明确要求渲染、导出、提交或生成成片即构成本轮授权，服务端仍会做最终权限校验。
 - 目标和 ID 只能来自服务端提供的事实；不得编造样例、素材、草稿、版本、项目、用户或时间线对象 ID。
@@ -436,6 +453,7 @@ ${stateRules}
 - 当前项目要求使用 requirements.update。replace/revoke 只能引用 requirements 中的 active id，并填写 targetRequirementId。
 - 稳定跨项目偏好使用 user + active；仅当前草稿适用的偏好使用 draft + active；不确定或推断性偏好使用 candidate。单次内容设定、实现方式和修改操作不是长期偏好。
 - requirements 与 memoryActions 不得保存相同 statement。一句话同时表达两者时，只把更抽象、可复用的偏好沉淀为记忆；项目对象、具体镜头操作和文案留在当前要求或 sourceExcerpt。
+- memoryActions 的 sourceExcerpt 必须逐字来自当前用户输入；add/replace 的引文应直接表达可跨任务复用的创作倾向，revoke 的引文应直接表达本轮撤销要求。“我想做某个视频”“本次包含某些内容”属于当前任务，不是用户偏好。
 - memories 只是召回候选，不是已确认要求；样例中提取的导演方法属于创作知识，也不是个人偏好。记忆的 replace/revoke 只能引用 memories 中的 id，且每项必须引用 currentTurnId。
 - 例如：“我一直喜欢更搞笑、反差更强的风格”可记为 user + active；“把这个视频改得搞笑”是当前项目要求；“第一段改成推镜头”只是当前操作；“我好像更喜欢松弛的风格，但还不确定”可记为 candidate。
 
@@ -712,6 +730,23 @@ function workspaceIntentFor(candidate: LlmIntentResult) {
   return candidate.intent
 }
 
+function decisionForSurface(
+  candidate: LlmIntentResult,
+  surfaceMode?: DirectorSurfaceMode,
+): LlmIntentResult {
+  if (!isReadOnlySurface(surfaceMode)) return candidate
+  return {
+    ...candidate,
+    intent: 'chat',
+    creationSummary: undefined,
+    creativeConfigDelta: {},
+    stateActions: [],
+    memoryActions: [],
+    skillRequests: [],
+    toolRequests: [],
+  }
+}
+
 function continuityWasRejected(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return /previous_response_id|previous response/i.test(message)
@@ -897,6 +932,7 @@ function directorJsonRepairPrompt(input: { invalidText: string; error: string })
 
 export async function routeDirectorIntentWithLlm(input: {
   prompt: string
+  surfaceMode?: DirectorSurfaceMode
   currentTurnId?: string
   currentTurnMaterialIds?: string[]
   context: DirectorContext
@@ -909,9 +945,11 @@ export async function routeDirectorIntentWithLlm(input: {
 }): Promise<LlmIntentRouterOutput> {
   const aspectRatio = input.context.effectiveCreativeConfig?.aspectRatio ?? input.context.slots.aspectRatio
   const [aspectWidth, aspectHeight] = aspectRatio.split(':').map(Number)
-  const promotedComponents = await listPromotedComponents(
-    input.timelineSpec?.canvas ?? { width: aspectWidth!, height: aspectHeight! },
-  )
+  const promotedComponents = isReadOnlySurface(input.surfaceMode)
+    ? []
+    : await listPromotedComponents(
+        input.timelineSpec?.canvas ?? { width: aspectWidth!, height: aspectHeight! },
+      )
   if (!env.directorAgentEnabled) {
     return buildDirectorContextFallback({
       ...input,
@@ -952,7 +990,10 @@ export async function routeDirectorIntentWithLlm(input: {
         const repairedResponse = await callResponsesApi({ promptText: repairPrompt, allowStructuredOutput: false })
         const repairedText = extractText(repairedResponse.raw)
         repairAudit = responseAudit(repairedResponse.raw, repairedText)
-        const repaired = parseDirectorModelDecision(repairedText)
+        const repaired = decisionForSurface(
+          parseDirectorModelDecision(repairedText),
+          input.surfaceMode,
+        )
         return {
           source: 'llm', modelCalled: true,
           result: toDirectorIntentResult(repaired, input.context, input.runtime),
@@ -992,6 +1033,7 @@ export async function routeDirectorIntentWithLlm(input: {
       }
     }
 
+    parsed = decisionForSurface(parsed, input.surfaceMode)
     return {
       source: 'llm',
       modelCalled: true,

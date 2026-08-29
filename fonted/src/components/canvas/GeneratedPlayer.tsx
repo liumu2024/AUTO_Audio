@@ -51,7 +51,7 @@ export const GeneratedPlayer = forwardRef<HTMLVideoElement, GeneratedPlayerProps
       scenes[0]
 
     return (
-      <div className="flex h-full min-h-0 min-w-0 flex-col gap-3">
+      <div className="flex h-full min-h-0 min-w-0 w-full flex-col gap-3">
         <h3 className="shrink-0 text-sm font-medium tracking-tight text-zinc-200">
           {outputUrl ? '视频成片' : '视频方案'}
         </h3>

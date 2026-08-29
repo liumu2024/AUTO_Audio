@@ -20,7 +20,6 @@ import {
 } from './remotion-timeline-material-resolver.js'
 import {
   buildDeterministicRemotionTimelineSpec,
-  buildV2PlanningGapTimelineSpec,
   type V2RemotionTimelinePlannerInput,
 } from './remotion-timeline-planner.js'
 import {
@@ -321,40 +320,7 @@ async function resolveTimelineSpec(input: {
             repair.responseAudit ?? { error: repair.error ?? null })
         }
       }
-      // A deterministic initial plan is not a valid substitute for an edit:
-      // it has no scoped relation to the saved base and could replace it.
-      if (input.plannerInput.revisionBaseSpec) throw error
-      const hasParsedSampleFacts = Boolean(input.plannerInput.sampleUnderstanding)
-      const hasUnparsedSample = Boolean(input.plannerInput.referenceVideoPath) && !hasParsedSampleFacts
-      const hasVisualMaterial = Boolean(
-        input.plannerInput.imageSrc
-        || input.plannerInput.inputImageUrl
-        || input.plannerInput.materials?.some((material) => material.type === 'image' || material.type === 'video'),
-      )
-      const requestsUnavailableVisualFallback = input.plannerInput.creationMode === 'material_brief'
-        || input.plannerInput.creationMode === 'sample_replicate'
-      const canFallbackDeterministically = hasParsedSampleFacts
-        || (!hasUnparsedSample && !hasVisualMaterial && !requestsUnavailableVisualFallback)
-      if (!canFallbackDeterministically) {
-        const area = input.plannerInput.creationMode === 'sample_replicate'
-          ? 'sample_transfer'
-          : hasVisualMaterial
-            ? 'image_understanding'
-            : 'scene_plan'
-        const spec = await bindComponentNames(buildV2PlanningGapTimelineSpec(input.plannerInput, [{
-          area,
-          message: `Planner could not produce a verified timeline: ${message}`,
-        }]))
-        await input.trace.writeJson('02-planning', 'timeline-planning-gap-spec.json', spec)
-        return { spec, plannerSource: 'llm_planning_gap' }
-      }
-      if (!input.plannerInput.allowPlannerFallback) throw error
-      const spec = await bindComponentNames(await buildTimelineSpec(input.plannerInput))
-      await input.trace.writeJson('02-planning', 'timeline-fallback-spec.json', spec)
-      return {
-        spec,
-        plannerSource: 'llm_fallback_deterministic',
-      }
+      throw error
     }
   }
 

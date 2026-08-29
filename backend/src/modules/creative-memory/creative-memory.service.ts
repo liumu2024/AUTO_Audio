@@ -10,6 +10,7 @@ import {
   longestSharedCreativeHanPhrase,
   normalizeCreativeText,
   rankConfiguredCreativeTextRows,
+  tokenizeCreativeText,
 } from './creative-text-retrieval.js'
 
 export type CreativeMemoryScope = 'user' | 'draft'
@@ -122,6 +123,77 @@ function duplicatesRequirement(statement: string, requirement: string): boolean 
     : normalizedRequirement
   const longer = shorter === normalizedStatement ? normalizedRequirement : normalizedStatement
   return longer.includes(shorter) && shorter.length / longer.length >= 0.75
+}
+
+function memoryEvidenceContent(value: string): string {
+  return normalizedText(value)
+    .replace(/^(?:(?:我|本人)(?:一直|向来|长期|平时|通常|以后|好像|可能|更)?|(?:一直|向来|长期|平时|通常|以后))(?:都|会|更)?(?:喜欢|偏好|倾向|钟爱|采用|使用|用|保持|不要|避免)/u, '')
+    .replace(/^(?:喜欢|偏好|倾向|钟爱|采用|使用|用|保持|避免)/u, '')
+    .replace(/^(?:i (?:always )?(?:like|prefer)|my (?:usual|long-term) preference(?: is)?|(?:from now on|going forward) (?:use|keep|avoid))/iu, '')
+    .trim()
+}
+
+function memoryStatementMatchesEvidence(statement: string, sourceExcerpt: string): boolean {
+  const statementContent = memoryEvidenceContent(statement)
+  const excerptContent = memoryEvidenceContent(sourceExcerpt)
+  if (!statementContent || !excerptContent) return false
+  const statementPolarity = preferencePolarity(statement)
+  const excerptPolarity = preferencePolarity(sourceExcerpt)
+  if (statementPolarity !== 'neutral' && excerptPolarity !== 'neutral'
+    && statementPolarity !== excerptPolarity) return false
+  if (reversesDirectionalBinding(statementContent, excerptContent)) return false
+  const shorterLength = Math.min([...statementContent].length, [...excerptContent].length)
+  if (shorterLength >= 2
+    && (statementContent.includes(excerptContent) || excerptContent.includes(statementContent))) return true
+  const statementHan = [...new Set(statementContent.match(/[\p{Script=Han}]/gu) ?? [])]
+  const excerptHan = new Set(excerptContent.match(/[\p{Script=Han}]/gu) ?? [])
+  if (statementHan.length >= 2) {
+    const characterCoverage = statementHan.filter((char) => excerptHan.has(char)).length / statementHan.length
+    const statementHanTokens = [...new Set(tokenizeCreativeText(statementContent))]
+      .filter((token) => /[\p{Script=Han}]/u.test(token))
+    const excerptTokens = new Set(tokenizeCreativeText(excerptContent))
+    const tokenCoverage = statementHanTokens.length > 0
+      ? statementHanTokens.filter((token) => excerptTokens.has(token)).length / statementHanTokens.length
+      : 0
+    return characterCoverage >= 0.8 && tokenCoverage >= 0.6
+  }
+  const statementTokens = [...new Set(tokenizeCreativeText(statementContent))]
+    .filter((token) => /^[a-z0-9]+$/i.test(token))
+  const excerptTokens = new Set(tokenizeCreativeText(excerptContent))
+  return statementTokens.length > 0
+    && statementTokens.filter((token) => excerptTokens.has(token)).length / statementTokens.length >= 0.8
+}
+
+function preferencePolarity(value: string): 'prefer' | 'avoid' | 'neutral' {
+  if (/不(?:太)?(?:喜欢|偏好|想|愿)|不是(?:很|太)?(?:喜欢|偏好|想要|愿意)|讨厌|避免|不要|拒绝|不再|别再|\b(?:dislike|hate|avoid|do not|don't|never)\b/iu.test(value)) return 'avoid'
+  if (/喜欢|偏好|倾向|钟爱|采用|使用|保持|\b(?:like|prefer|use|keep)\b/iu.test(value)) return 'prefer'
+  return 'neutral'
+}
+
+function reversesDirectionalBinding(statement: string, sourceExcerpt: string): boolean {
+  const opposites = new Map([
+    ['高', '低'], ['低', '高'], ['强', '弱'], ['弱', '强'],
+    ['快', '慢'], ['慢', '快'], ['冷', '暖'], ['暖', '冷'],
+    ['明', '暗'], ['暗', '明'], ['多', '少'], ['少', '多'],
+    ['长', '短'], ['短', '长'], ['大', '小'], ['小', '大'],
+  ])
+  for (const match of statement.matchAll(/([高低强弱快慢冷暖明暗多少长短大小])([\p{Script=Han}]{1,2})/gu)) {
+    const direction = match[1]!
+    const attribute = match[2]!
+    if (sourceExcerpt.includes(`${direction}${attribute}`)) continue
+    if (sourceExcerpt.includes(`${opposites.get(direction)}${attribute}`)) return true
+  }
+  return false
+}
+
+function expressesMemoryRevocation(value: string): boolean {
+  const normalized = normalizedText(value)
+  if (/别再(?:记|保留|沿用|使用|采用|用)|不再(?:记|保留|沿用|使用|采用|用)|不要(?:再)?(?:记|保留|沿用|使用|采用|用)|\b(?:stop remembering|no longer (?:remember|use|apply|keep)|don't (?:remember|use|apply|keep))\b/iu.test(normalized)) return true
+  const directVerb = /撤销|取消|删除|移除|清除|去掉|作废|忘掉|\b(?:forget|remove|delete|revoke)\b/iu
+  if (!directVerb.test(normalized)) return false
+  if (/(?:不希望|不想|不愿|不打算|没有打算|没有(?:要求|让你|叫你|请你)|不要|别|不必|无需).{0,5}(?:撤销|取消|删除|移除|清除|去掉|作废|忘掉)/u.test(normalized)) return false
+  if (/(?:为什么|为何|怎么会|是否|是不是|要不要|该不该|能不能|会不会|想了解|想知道|what if|what happens if|should i|can i).{0,16}(?:撤销|取消|删除|移除|清除|去掉|作废|忘掉|forget|remove|delete|revoke)/iu.test(normalized)) return false
+  return !/(?:撤销|取消|删除|移除|清除|去掉|作废|忘掉).{0,16}(?:(?:有什么|有何|会有).{0,6}(?:影响|后果|风险|问题)|(?:是否)?(?:合适|合理)吗|会怎么样|怎么办)/u.test(normalized)
 }
 
 function memoryScopeKey(scopeType: CreativeMemoryScope, draftId?: string): string {
@@ -593,26 +665,41 @@ async function applyCreativeMemoryAction(
     if (!action.sourceTurnIds.includes(input.currentTurnId)) {
       throw new Error('Creative memory action must cite the current source turn.')
     }
+    const sourceExcerpt = action.sourceExcerpt?.trim()
+    if (input.currentUserText !== undefined) {
+      if (!sourceExcerpt || !input.currentUserText.includes(sourceExcerpt)) {
+        throw new Error('Creative memory sourceExcerpt must quote the current user input verbatim.')
+      }
+    }
     if (action.operation === 'add') {
       const scopeType = action.scopeType ?? 'user'
       const statement = assertStatement(action.statement)
       const origin = action.origin ?? 'inferred'
-      const explicitlyTransferablePreference = scopeType === 'user'
+      const evidenceMatchesStatement = input.currentUserText === undefined
+        || memoryStatementMatchesEvidence(statement, sourceExcerpt ?? '')
+      const isExplicitUserPreference = scopeType === 'user'
         && origin === 'explicit'
-        && Boolean(action.sourceExcerpt
-          && input.currentUserText
-          && normalizedText(input.currentUserText).includes(normalizedText(action.sourceExcerpt))
-          && (
-            normalizedText(action.sourceExcerpt).includes(normalizedText(statement))
-            || normalizedText(statement).includes(normalizedText(action.sourceExcerpt))
-          )
-          && (
-          /(?:我|本人).{0,12}(?:喜欢|偏好|倾向|钟爱)|(?:一直|向来|长期|平时|通常|以后).{0,12}(?:喜欢|偏好|采用|保持)/u.test(action.sourceExcerpt)
-          || /\b(?:i (?:always )?(?:like|prefer)|my (?:usual|long[- ]term) preference)\b/iu.test(action.sourceExcerpt)
-          ))
+        && /(?:我|本人).{0,12}(?:喜欢|偏好|倾向|钟爱)|(?:一直|向来|长期|平时|通常|以后).{0,12}(?:喜欢|偏好|采用|使用|用|保持|不要|避免)|\b(?:i (?:always )?(?:like|prefer)|my (?:usual|long[- ]term) preference|(?:from now on|going forward).{0,24}(?:use|keep|avoid))\b/iu.test(sourceExcerpt ?? '')
+        && evidenceMatchesStatement
+      if (!evidenceMatchesStatement) {
+        return {
+          ref: action.ref,
+          operation: action.operation,
+          status: 'skipped',
+          reason: 'memory_evidence_mismatch',
+        }
+      }
       const duplicateOfRequirement = (input.requirementStatements ?? [])
         .some((requirement) => duplicatesRequirement(statement, requirement))
-      if (duplicateOfRequirement && !explicitlyTransferablePreference) {
+      if (input.currentUserText && scopeType === 'user' && origin === 'explicit' && !isExplicitUserPreference) {
+        return {
+          ref: action.ref,
+          operation: action.operation,
+          status: 'skipped',
+          reason: 'not_explicit_long_term_preference',
+        }
+      }
+      if (duplicateOfRequirement && !isExplicitUserPreference) {
         return {
           ref: action.ref,
           operation: action.operation,
@@ -658,6 +745,9 @@ async function applyCreativeMemoryAction(
       throw new Error('Creative memory target belongs to another draft.')
     }
     if (action.operation === 'revoke') {
+      if (input.currentUserText !== undefined && !expressesMemoryRevocation(sourceExcerpt ?? '')) {
+        throw new Error('Creative memory sourceExcerpt must directly express the revoke request.')
+      }
       await updateCreativeMemory({
         userId: input.userId,
         id: target.id,
@@ -667,6 +757,10 @@ async function applyCreativeMemoryAction(
       return { ref: action.ref, operation: action.operation, status: 'succeeded', memoryId: target.id }
     }
     const statement = assertStatement(action.statement)
+    if (input.currentUserText !== undefined
+      && !memoryStatementMatchesEvidence(statement, sourceExcerpt ?? '')) {
+      throw new Error('Creative memory sourceExcerpt does not support the replacement statement.')
+    }
     const changed = await memories().updateMany({
       where: { id: target.id, userId: input.userId, status: target.status },
       data: {

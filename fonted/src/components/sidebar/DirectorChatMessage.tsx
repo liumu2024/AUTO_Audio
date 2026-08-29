@@ -13,7 +13,6 @@ import {
 import { cn } from '@/lib/utils'
 import { useCreationStore, type InputAttachment } from '@/stores/creationStore'
 import type { DirectorChatMessage } from '@/stores/directorChatStore'
-import type { DirectorTimelineRevisionIntent } from '@shared/types/director-stream'
 
 const TYPE_ICON = {
   video: Film,
@@ -25,17 +24,6 @@ const STYLE_INTENSITY_LABEL: Record<string, string> = {
   light: '低',
   medium: '中',
   strong: '高',
-}
-
-function revisionScopeLabel(scope: DirectorTimelineRevisionIntent['scope']) {
-  return {
-    subtitle: '字幕',
-    scene: '镜头内容',
-    structure: '镜头结构',
-    visual_strategy: '画面呈现',
-    transition: '转场',
-    global: '全片方向',
-  }[scope] ?? '当前方案'
 }
 
 const REVISION_FEEDBACK_REASONS = [
@@ -180,11 +168,10 @@ export function DirectorChatMessageBubble({
 
           {message.revisionIntent && !message.revisionReceipt ? (
             <div className="mt-2 space-y-1.5 rounded-lg border border-violet-500/20 bg-black/20 p-2 text-[11px] text-zinc-300">
-              <p><span className="text-zinc-500">原始要求：</span>{message.revisionIntent.originalRequest}</p>
-              <p><span className="text-zinc-500">范围：</span>{revisionScopeLabel(message.revisionIntent.scope)}</p>
-              <p><span className="text-zinc-500">目标：</span>{message.revisionIntent.targetDisplay?.join('；') || '当前方案'}</p>
-              <p><span className="text-zinc-500">预计影响：</span>{message.revisionIntent.expectedImpact}</p>
-              <p><span className="text-zinc-500">保护边界：</span>{message.revisionIntent.protectedBoundary}</p>
+              <p><span className="text-zinc-500">你的要求：</span>{message.revisionIntent.originalRequest}</p>
+              <p><span className="text-zinc-500">涉及内容：</span>{message.revisionIntent.targetDisplay?.join('；') || '当前方案'}</p>
+              <p><span className="text-zinc-500">将会调整：</span>{message.revisionIntent.expectedImpact}</p>
+              <p><span className="text-zinc-500">其余内容：</span>{message.revisionIntent.protectedBoundary}</p>
               <div className="flex flex-wrap gap-1.5">
                 {message.revisionDecisionStatus === 'rejected' || message.revisionDecisionStatus === 'failed' ? (
                   <span className="rounded border border-zinc-600/30 px-2 py-1 text-zinc-400">
@@ -257,11 +244,10 @@ export function DirectorChatMessageBubble({
 
           {message.revisionReceipt ? (
             <div className="mt-2 space-y-1.5 rounded-lg border border-violet-500/20 bg-black/20 p-2 text-[11px] text-zinc-300">
-              <p><span className="text-zinc-500">原始要求：</span>{message.revisionReceipt.originalRequest}</p>
-              <p><span className="text-zinc-500">范围：</span>{revisionScopeLabel(message.revisionReceipt.scope)}</p>
-              <p><span className="text-zinc-500">目标：</span>{message.revisionReceipt.targetDisplay?.join('；') || '当前方案'}</p>
-              <p><span className="text-zinc-500">预计影响：</span>{message.revisionReceipt.expectedImpact}</p>
-              <p><span className="text-zinc-500">保护边界：</span>{message.revisionReceipt.protectedBoundary}</p>
+              <p><span className="text-zinc-500">你的要求：</span>{message.revisionReceipt.originalRequest}</p>
+              <p><span className="text-zinc-500">涉及内容：</span>{message.revisionReceipt.targetDisplay?.join('；') || '当前方案'}</p>
+              <p><span className="text-zinc-500">计划调整：</span>{message.revisionReceipt.expectedImpact}</p>
+              <p><span className="text-zinc-500">其余内容：</span>{message.revisionReceipt.protectedBoundary}</p>
               {message.revisionReceipt.actualDiff ? (
                 <details>
                   <summary className="cursor-pointer text-violet-200">实际变化</summary>

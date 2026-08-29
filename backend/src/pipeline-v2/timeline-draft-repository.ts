@@ -14,6 +14,7 @@ import { prisma } from '../shared/prisma.service.js'
 import { hydrateV2TimelineAssetIds } from './timeline-asset-id-hydration.js'
 
 export type V2StoredPlannerInput = V2PlannerInput & { imageSrc?: string }
+export type V2TimelineCreationMode = NonNullable<V2PlannerInput['creationMode']>
 
 export interface V2PendingTimelineRevision {
   callId: string
@@ -25,7 +26,7 @@ export interface V2TimelineDraftRecord {
   id: string
   userId: number
   revision: number
-  creationMode: string
+  creationMode: V2TimelineCreationMode
   plannerInput: V2StoredPlannerInput
   spec: RemotionTimelineSpecV1
   plannerSource?: string
@@ -41,11 +42,16 @@ export interface V2TimelineRevisionRecord {
   draftId: string
   revision: number
   kind: 'preview' | 'user_edit'
+  creationMode: V2TimelineCreationMode
   spec: RemotionTimelineSpecV1
   plannerSource?: string
   review?: unknown
   traceDir?: string
   createdAt: Date
+}
+
+function timelineCreationMode(value: unknown): V2TimelineCreationMode {
+  return value === 'sample_replicate' || value === 'material_brief' ? value : 'text_to_video'
 }
 
 export interface V2TimelineRenderRunRecord {
@@ -203,7 +209,7 @@ function draftFromRow(row: Record<string, unknown>): V2TimelineDraftRecord {
     id: String(row.id),
     userId: Number(row.userId),
     revision: Number(row.revision),
-    creationMode: plannerInput.creationMode ?? String(row.creationMode),
+    creationMode: plannerInput.creationMode ?? timelineCreationMode(row.creationMode),
     plannerInput,
     spec: hydrateStoredTimelineSpec(row.specJson as RemotionTimelineSpecV1, plannerInput),
     plannerSource: (row.plannerSource as string | null) ?? undefined,
@@ -226,12 +232,14 @@ function draftFromRow(row: Record<string, unknown>): V2TimelineDraftRecord {
 function revisionFromRow(
   row: Record<string, unknown>,
   plannerInput: V2StoredPlannerInput,
+  creationMode: unknown,
 ): V2TimelineRevisionRecord {
   return {
     id: String(row.id),
     draftId: String(row.draftId),
     revision: Number(row.revision),
     kind: row.kind as V2TimelineRevisionRecord['kind'],
+    creationMode: plannerInput.creationMode ?? timelineCreationMode(creationMode),
     spec: hydrateStoredTimelineSpec(row.specJson as RemotionTimelineSpecV1, plannerInput),
     plannerSource: (row.plannerSource as string | null) ?? undefined,
     review: row.reviewJson ?? undefined,
@@ -610,7 +618,11 @@ export function createV2TimelineDraftRepository(): V2TimelineDraftRepository {
         where: { draftId, revision },
       })
       return row
-        ? revisionFromRow(asRecord(row), draft.plannerInputJson as unknown as V2StoredPlannerInput)
+        ? revisionFromRow(
+            asRecord(row),
+            draft.plannerInputJson as unknown as V2StoredPlannerInput,
+            draft.creationMode,
+          )
         : null
     },
 

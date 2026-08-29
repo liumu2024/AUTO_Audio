@@ -534,7 +534,7 @@ export function DirectorChatPanel() {
                     )?.id
                   : undefined)
               const messageId = existingMessageId ?? addAssistantMessage({
-                content: '修改范围已解析，尚未执行。请核对后确认。',
+                content: '我已根据你的要求整理好这次修改，确认后再应用到当前方案。',
                 kind: 'revision',
                 status: 'done',
               })

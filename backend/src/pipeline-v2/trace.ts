@@ -17,10 +17,43 @@ export interface V2TraceContext {
   operationId: string
 }
 
+export type V2TraceMode = 'compact' | 'verbose'
+
 const appendQueues = new Map<string, Promise<void>>()
 
 function safePart(value: string): string {
   return value.replace(/[^a-zA-Z0-9_.-]/g, '_')
+}
+
+const compactTraceFiles = [
+  /^turn-input\.json$/,
+  /^creative-(?:memory|knowledge)-retrieval\.json$/,
+  /^model-call\.json$/,
+  /^skill-tool-execution-plan\.json$/,
+  /^tool-.+\.json$/,
+  /^turn-result\.json$/,
+  /^timeline-planner-input\.json$/,
+  /^planning-decision\.json$/,
+  /^timeline-revision-fragment\.json$/,
+  /^timeline-(?:outcome-review|outcome-correction-review)\.json$/,
+  /^timeline-(?:spec|validation|hard-requirement-check)\.json$/,
+  /^revision-(?:diff|preservation)\.json$/,
+  /^timeline-review\.json$/,
+  /^sample-understanding-input\.json$/,
+  /^audio-visual-hints\.json$/,
+  /^sample-understanding\.json$/,
+  /^creative-knowledge-candidates\.json$/,
+  /^timeline-material-resolution\.json$/,
+  /^delivery-readiness\.json$/,
+  /^timeline-standardized-assets\.json$/,
+  /^timeline-render-validation\.json$/,
+  /^timeline-render-result\.json$/,
+  /^timeline-evaluation\.json$/,
+]
+
+function shouldWriteCompactTrace(fileName: string): boolean {
+  return /(?:error|failure|repair|diagnostic)/i.test(fileName)
+    || compactTraceFiles.some((pattern) => pattern.test(fileName))
 }
 
 export function createV2TraceWriter(input: {
@@ -29,6 +62,7 @@ export function createV2TraceWriter(input: {
   cwd?: string
   sessionId?: string
   operationId?: string
+  mode?: V2TraceMode
 }): V2TraceWriter {
   const cwd = input.cwd ?? process.cwd()
   // A test process may set this once so every V2 trace it triggers shares one
@@ -40,14 +74,16 @@ export function createV2TraceWriter(input: {
     ? path.join(resolvedBaseDir, 'sessions', safePart(input.sessionId))
     : undefined
   const operationId = input.operationId ?? input.taskId
+  const mode = input.mode ?? (process.env.V2_TRACE_MODE === 'verbose' ? 'verbose' : 'compact')
   const rootDir = sessionRootDir
     ? path.join(sessionRootDir, 'operations', safePart(operationId))
     : path.join(resolvedBaseDir, 'tasks', safePart(input.taskId))
 
   async function write(stage: string, fileName: string, content: string): Promise<string> {
     const dir = path.join(rootDir, safePart(stage))
-    await mkdir(dir, { recursive: true })
     const filePath = path.join(dir, fileName)
+    if (mode === 'compact' && !shouldWriteCompactTrace(fileName)) return filePath
+    await mkdir(dir, { recursive: true })
     await writeFile(filePath, content, 'utf8')
     return filePath
   }

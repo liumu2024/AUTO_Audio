@@ -154,6 +154,7 @@ function plannerInput(input: {
   taskId: string
   prompt: string
   originalUserPrompt?: string
+  creationMode?: V2PlannerInput['creationMode']
   context: DirectorContext
   workspace: DirectorWorkspaceState
   authorization?: V2AgentToolAuthorizationGrant
@@ -167,7 +168,7 @@ function plannerInput(input: {
     taskId: input.taskId,
     prompt: input.prompt,
     originalUserPrompt: input.originalUserPrompt,
-    creationMode: creationMode(input.context),
+    creationMode: input.creationMode ?? creationMode(input.context),
     referenceVideoPath: input.context.sampleVideo?.url,
     sampleUnderstanding: input.context.sampleVideo?.sampleUnderstanding,
     conversationSummary: input.context.conversationSummary,
@@ -178,7 +179,6 @@ function plannerInput(input: {
     })),
     durationSec: input.context.effectiveCreativeConfig?.durationSec ?? input.context.userIntent.durationSec ?? input.context.slots.durationSec,
     plannerMode: 'llm',
-    allowPlannerFallback: !input.workspace.draftId,
     canvas: canvas(input.context.effectiveCreativeConfig?.aspectRatio ?? input.context.slots.aspectRatio),
     planningContext: {
       kind: input.workspace.draftId ? 'revision' : 'initial',
@@ -537,6 +537,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       taskId: `v2_tool_${Date.now()}_${randomUUID().slice(0, 8)}`,
       prompt: plannerRequest.prompt,
       originalUserPrompt: plannerRequest.originalUserPrompt,
+      creationMode: existing?.creationMode,
       context: input.context,
       workspace: input.workspace,
       authorization: input.authorization,
