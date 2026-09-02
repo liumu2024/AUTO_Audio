@@ -12,7 +12,7 @@ import {
 
 import { cn } from '@/lib/utils'
 import { useCreationStore, type InputAttachment } from '@/stores/creationStore'
-import type { DirectorChatMessage } from '@/stores/directorChatStore'
+import { useDirectorChatStore, type DirectorChatMessage } from '@/stores/directorChatStore'
 
 const TYPE_ICON = {
   video: Film,
@@ -87,6 +87,7 @@ export function DirectorChatMessageBubble({
   onCreationDecision,
 }: DirectorChatMessageBubbleProps) {
   const setInputText = useCreationStore((s) => s.setInputText)
+  const isSending = useDirectorChatStore((s) => s.isSending)
   const isUser = message.role === 'user'
   const isStreaming = message.status === 'streaming'
   const isError = message.kind === 'error'
@@ -179,12 +180,12 @@ export function DirectorChatMessageBubble({
                   </span>
                 ) : (
                   <>
-                    <button type="button" disabled={message.revisionDecisionStatus === 'confirming' || message.revisionDecisionStatus === 'rejecting'}
+                    <button type="button" disabled={isSending || message.revisionDecisionStatus === 'confirming' || message.revisionDecisionStatus === 'rejecting'}
                       className="rounded border border-emerald-400/30 px-2 py-1 text-emerald-200 disabled:opacity-50"
                       onClick={() => onRevisionDecision?.({ confirmationId: message.revisionConfirmationId ?? message.revisionIntent!.callId, action: 'confirm' })}>
                       确认执行
                     </button>
-                    <button type="button" disabled={message.revisionDecisionStatus === 'confirming' || message.revisionDecisionStatus === 'rejecting'}
+                    <button type="button" disabled={isSending || message.revisionDecisionStatus === 'confirming' || message.revisionDecisionStatus === 'rejecting'}
                       className="rounded border border-zinc-500/30 px-2 py-1 text-zinc-300 disabled:opacity-50"
                       onClick={() => onRevisionDecision?.({ confirmationId: message.revisionConfirmationId ?? message.revisionIntent!.callId, action: 'reject' })}>
                       取消提案
@@ -222,12 +223,12 @@ export function DirectorChatMessageBubble({
                   </span>
                 ) : (
                   <>
-                    <button type="button" disabled={message.creationDecisionStatus === 'confirming' || message.creationDecisionStatus === 'rejecting'}
+                    <button type="button" disabled={isSending || message.creationDecisionStatus === 'confirming' || message.creationDecisionStatus === 'rejecting'}
                       className="rounded border border-emerald-400/30 px-2 py-1 text-emerald-200 disabled:opacity-50"
                       onClick={() => onCreationDecision?.({ confirmationId: message.creationConfirmationId!, action: 'confirm' })}>
                       确认并生成方案
                     </button>
-                    <button type="button" disabled={message.creationDecisionStatus === 'confirming' || message.creationDecisionStatus === 'rejecting'}
+                    <button type="button" disabled={isSending || message.creationDecisionStatus === 'confirming' || message.creationDecisionStatus === 'rejecting'}
                       className="rounded border border-zinc-500/30 px-2 py-1 text-zinc-300 disabled:opacity-50"
                       onClick={() => onCreationDecision?.({ confirmationId: message.creationConfirmationId!, action: 'reject' })}>
                       暂不生成
