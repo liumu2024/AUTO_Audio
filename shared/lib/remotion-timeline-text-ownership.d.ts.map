@@ -1,1 +1,1 @@
-{"version":3,"file":"remotion-timeline-text-ownership.d.ts","sourceRoot":"","sources":["remotion-timeline-text-ownership.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAIV,sBAAsB,EACvB,MAAM,uCAAuC,CAAA;AA4D9C;;;;;GAKG;AACH,wBAAgB,gCAAgC,CAC9C,IAAI,EAAE,sBAAsB,GAC3B,sBAAsB,CAoDxB"}
+{"version":3,"file":"remotion-timeline-text-ownership.d.ts","sourceRoot":"","sources":["remotion-timeline-text-ownership.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAIV,sBAAsB,EACvB,MAAM,uCAAuC,CAAA;AAgD9C;;;;;GAKG;AACH,wBAAgB,gCAAgC,CAC9C,IAAI,EAAE,sBAAsB,GAC3B,sBAAsB,CA4CxB"}

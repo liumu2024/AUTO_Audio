@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils'
 import { useCreationStore } from '@/stores/creationStore'
 import { useEditorStore } from '@/stores/editorStore'
 import {
+  directorTagsForMaterial,
   useMaterialLibraryStore,
   type MaterialType,
   type UserMaterial,
@@ -72,10 +73,6 @@ function materialMatchesQuery(material: UserMaterial, query: string) {
     material.name,
     material.type,
     ...material.tags,
-    ...(material.analysis?.tags ?? []),
-    ...((material.analysis?.segments ?? []).flatMap(
-      (segment) => segment.emotion_tags ?? [],
-    )),
   ]
     .join(' ')
     .toLowerCase()
@@ -248,7 +245,7 @@ export function MaterialLibraryManager({
       url: m.url,
       source: 'library',
       materialId: m.id,
-      tags: m.tags,
+      tags: directorTagsForMaterial(m),
     })
     closeMaterialLibrary()
   }

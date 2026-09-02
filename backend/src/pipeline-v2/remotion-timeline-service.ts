@@ -22,11 +22,6 @@ import {
   buildDeterministicRemotionTimelineSpec,
   type V2RemotionTimelinePlannerInput,
 } from './remotion-timeline-planner.js'
-import {
-  applyV2TimelineHardRequirements,
-  evaluateV2TimelineHardRequirements,
-  extractV2TimelineHardRequirements,
-} from './hard-requirements.js'
 import { renderV2RemotionTimeline, type V2TimelineRenderResult } from './remotion-timeline-renderer.js'
 import {
   buildV2TimelinePlanningReview,
@@ -341,8 +336,6 @@ export async function previewV2RemotionTimeline(
     operationId: options.traceContext?.operationId,
   })
   await trace.writeJson('01-input', 'timeline-planner-input.json', traceablePlannerInput(input))
-  const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
-  await trace.writeJson('01-input', 'timeline-hard-requirements.json', hardRequirements)
   const resolved = await resolveTimelineSpec({
     plannerInput: input,
     trace,
@@ -355,11 +348,7 @@ export async function previewV2RemotionTimeline(
     visual_input_report: resolved.visualInputReport ?? null,
     semantic_caption_policy: semanticCaptionPolicy(resolved.plannerSource, attachedImages),
   })
-  let spec = applyV2TimelineHardRequirements({
-    spec: normalizeV2TimelineTextOwnership(resolved.spec),
-    requirements: hardRequirements,
-    synthesizeMissing: !input.revisionBaseSpec,
-  })
+  let spec = normalizeV2TimelineTextOwnership(resolved.spec)
   const revision = input.revisionContext && input.revisionBaseSpec
     ? applyV2TimelineRevisionPreservation({
         baseSpec: input.revisionBaseSpec,
@@ -369,17 +358,9 @@ export async function previewV2RemotionTimeline(
     : undefined
   if (revision) spec = revision.spec
   const validation = validateRemotionTimelineSpec(spec)
-  const hardRequirementCheck = evaluateV2TimelineHardRequirements({
-    spec,
-    requirements: hardRequirements,
-  })
-  if (input.revisionBaseSpec && !hardRequirementCheck.ok) {
-    throw new Error(`V2 hard requirements failed: ${JSON.stringify(hardRequirementCheck.missing_captions)}`)
-  }
   const review = buildV2TimelinePlanningReview({ spec, validation })
   await trace.writeJson('02-planning', 'timeline-spec.json', spec)
   await trace.writeJson('02-planning', 'timeline-validation.json', validation)
-  await trace.writeJson('02-planning', 'timeline-hard-requirement-check.json', hardRequirementCheck)
   if (input.revisionContext) {
     await trace.writeJson('02-planning', 'revision-context.json', input.revisionContext)
   }
@@ -450,8 +431,6 @@ export async function runV2RemotionTimeline(
   }
   await trace.writeJson('01-input', 'timeline-planner-input.json', traceablePlannerInput(input))
   await reportProgress({ phase: 'prepare', progress: 5, message: '正在读取并校验当前方案。' })
-  const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
-  await trace.writeJson('01-input', 'timeline-hard-requirements.json', hardRequirements)
   const outputRoot = outputRootFor(input.taskId, options.outputBaseDir)
   await mkdir(outputRoot, { recursive: true })
 
@@ -471,11 +450,7 @@ export async function runV2RemotionTimeline(
   })
   let spec = input.timelineSpecOverride
     ? resolved.spec
-    : applyV2TimelineHardRequirements({
-        spec: normalizeV2TimelineTextOwnership(resolved.spec),
-        requirements: hardRequirements,
-        synthesizeMissing: !input.revisionBaseSpec,
-      })
+    : normalizeV2TimelineTextOwnership(resolved.spec)
   const revision = !input.timelineSpecOverride && input.revisionContext && input.revisionBaseSpec
     ? applyV2TimelineRevisionPreservation({
         baseSpec: input.revisionBaseSpec,
@@ -485,16 +460,9 @@ export async function runV2RemotionTimeline(
     : undefined
   if (revision) spec = revision.spec
   const validation = validateRemotionTimelineSpec(spec)
-  const hardRequirementCheck = input.timelineSpecOverride
-    ? { ok: true, missing_captions: [] as string[] }
-    : evaluateV2TimelineHardRequirements({ spec, requirements: hardRequirements })
-  if (!input.timelineSpecOverride && !hardRequirementCheck.ok) {
-    throw new Error(`V2 hard requirements failed: ${JSON.stringify(hardRequirementCheck.missing_captions)}`)
-  }
   const review = buildV2TimelinePlanningReview({ spec, validation })
   await trace.writeJson('02-planning', 'timeline-spec.json', spec)
   await trace.writeJson('02-planning', 'timeline-validation.json', validation)
-  await trace.writeJson('02-planning', 'timeline-hard-requirement-check.json', hardRequirementCheck)
   if (input.revisionContext) {
     await trace.writeJson('02-planning', 'revision-context.json', input.revisionContext)
   }

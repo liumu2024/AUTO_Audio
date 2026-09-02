@@ -56,6 +56,8 @@ export interface V2PlannerInput {
   inputImageUrl?: string
   referenceVideoPath?: string
   sampleUnderstanding?: V2SampleUnderstandingResult
+  /** Director-authorized use of the currently selected sample in this operation. */
+  useSampleReference?: boolean
   conversationSummary?: string
   planningContext?: V2PlanningContext
   /** Server-built from a persisted V2 draft; clients never provide this. */

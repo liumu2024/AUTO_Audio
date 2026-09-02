@@ -19,7 +19,6 @@ import {
   buildDeterministicRemotionTimelineSpec,
   type V2RemotionTimelinePlannerInput,
 } from './remotion-timeline-planner.js'
-import { extractV2TimelineHardRequirements } from './hard-requirements.js'
 import {
   applyV2TimelineRevisionGroupFragment,
   applyV2TimelineRevisionFragment,
@@ -382,43 +381,45 @@ function sanitizeRevisionFragment(
 
 export type V2TimelineVisualInputReport = ArkImageInputReport
 
-function referencesImageContext(text: string) {
-  return /原图|图片|照片|图像|参考图|这张图|input_asset_id|image_motion/i.test(text)
-}
-
-function referencesSampleContext(text: string) {
-  return /样例|样片|参考视频|像刚才|参照刚才|照着刚才|沿用刚才|sample/i.test(text)
-}
-
 export function deriveV2TimelineReviewSourceContext(
   input: V2RemotionTimelinePlannerInput,
   visualInputReport?: V2TimelineVisualInputReport,
-  promptOverride?: string,
 ) {
-  const referenceText = JSON.stringify({
-    prompt: promptOverride ?? input.prompt,
-    active_requirements: input.planningContext?.activeRequirements ?? [],
-    revision_group: input.revisionGroup?.items.map((item) => item.instruction) ?? [],
-  })
   const targetHasImageContext = input.revisionContext?.timeline.assets.some((asset) => asset.type === 'image')
     || input.revisionContext?.timeline.scenes.some((scene) => scene.type === 'image_motion')
     || input.revisionContext?.timeline.material_jobs.some((job) => Boolean(job.input_asset_id))
   const imageMaterials = (input.materials ?? []).filter((material) => material.type === 'image')
-  const baseAssetIds = new Set(input.revisionBaseSpec?.assets.map((asset) => asset.id) ?? [])
-  const unboundImageMaterials = imageMaterials.filter((material) => !baseAssetIds.has(material.id))
-  const referencesSingleUnboundImage = unboundImageMaterials.length === 1
-    && /(?:用|以|基于|参考|按照)(?:这个|这张|当前|刚刚上传的?|刚上传的?|新上传的?)(?:素材|图片|照片)?/i.test(referenceText)
+  const imageMaterialIds = new Set(imageMaterials.map((material) => material.id))
+  const requiresImageMaterial = (input.requiredMaterialIds ?? []).some((id) => imageMaterialIds.has(id))
   const initialImageContext = !input.revisionBaseSpec
     && Boolean(visualInputReport?.requested_image_material_count || imageMaterials.length)
+  const mediaScopeApplies = !input.revisionBaseSpec
+    || input.revisionScope === 'scene'
+    || input.revisionScope === 'visual_strategy'
+    || input.revisionScope === 'structure'
+    || input.revisionGroup?.items.some((item) => item.scope === 'scene' || item.scope === 'visual_strategy')
+  const sampleScopeApplies = !input.revisionBaseSpec
+    || Boolean(mediaScopeApplies)
+    || input.revisionScope === 'transition'
+    || input.revisionScope === 'global'
+    || input.revisionGroup?.items.some((item) => item.scope === 'transition')
   return {
     imageContextAvailable: Boolean(
       initialImageContext
-      || targetHasImageContext
-      || (imageMaterials.length > 0 && referencesImageContext(referenceText))
-      || referencesSingleUnboundImage,
+      || (mediaScopeApplies && (
+        targetHasImageContext
+        || requiresImageMaterial
+      )),
     ),
-    sampleContextAvailable: Boolean(input.sampleUnderstanding)
-      && (!input.revisionBaseSpec || referencesSampleContext(referenceText)),
+    sampleContextAvailable: Boolean(
+      input.sampleUnderstanding
+      && sampleScopeApplies
+      && (
+        !input.revisionBaseSpec
+        || input.useSampleReference
+        || input.revisionContext?.timeline.creative_brief?.sample_methods?.length
+      )
+    ),
   }
 }
 
@@ -632,10 +633,10 @@ export function buildV2TimelinePlannerPrompt(
   visualInputReport?: V2TimelineVisualInputReport,
 ): string {
   const example = buildDeterministicRemotionTimelineSpec(input)
-  const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
+  const useSampleReference = input.useSampleReference === true
   const creationMode =
     input.creationMode ??
-    (input.sampleUnderstanding || input.referenceVideoPath
+    (useSampleReference && (input.sampleUnderstanding || input.referenceVideoPath)
       ? 'sample_replicate'
       : input.materials?.some((material) => material.type === 'image' || material.type === 'video')
         ? 'material_brief'
@@ -713,7 +714,7 @@ export function buildV2TimelinePlannerPrompt(
     '- For a scene-content revision, keep creative_intent and that scene\'s material-job prompt semantically aligned. For an ai_video visual_strategy revision, carry the requested palette, lighting, composition or camera treatment into that scene\'s material-job prompt so the rendered shot changes; do not introduce a new subject, location, action, event or prop only in the prompt.',
     '- For global brief_update, copy direct timeline fields and materially revise creative_brief.direction to express the requested whole-video direction. Do not claim success by changing notes only.',
     '- For every ai_video scene, set asset_id to the output_asset_id of that scene\'s generate_video material job. The generated asset may be absent from assets until material resolution.',
-    '- hard_requirements.required_captions are mandatory user-provided caption lines. Every required caption must appear verbatim in overlays[].text exactly once or more.',
+    '- When the user explicitly provides audience-facing wording to display, preserve that wording exactly in overlays[].text; do not infer visible copy from scene descriptions or production instructions.',
     '- Every scene must have concrete time, type, render role, and a valid asset reference when the scene type needs an asset.',
     '- Every asset id, scene id, transition id, overlay id, and material job id must be unique.',
     '',
@@ -757,8 +758,7 @@ export function buildV2TimelinePlannerPrompt(
           source: asset.source,
         })),
         required_material_ids: input.requiredMaterialIds ?? [],
-        sample_understanding: compactSampleUnderstanding(input),
-        hard_requirements: hardRequirements,
+        sample_understanding: useSampleReference ? compactSampleUnderstanding(input) : null,
         attached_image_inputs: visualInputReport ?? {
           requested_image_material_count: (input.materials ?? []).filter((material) => material.type === 'image').length,
           attached_image_input_count: 0,
@@ -814,7 +814,6 @@ export function buildV2TimelineRevisionPlannerPrompt(
   visualInputReport?: V2TimelineVisualInputReport,
 ): string {
   const creationMode = input.creationMode ?? 'text_to_video'
-  const hardRequirements = extractV2TimelineHardRequirements(input.prompt)
   const assetCatalog = [...authoritativePlannerAssets(input).values()].map((asset) => ({
     id: asset.id,
     type: asset.type,
@@ -839,24 +838,27 @@ export function buildV2TimelineRevisionPlannerPrompt(
     || input.revisionScope === 'visual_strategy'
     || input.revisionScope === 'structure'
     || input.revisionGroup?.items.some((item) => item.scope === 'scene' || item.scope === 'visual_strategy')
-  const promptMentionsImage = /原图|图片|照片|图像|input_asset_id|image_motion/i.test(input.prompt)
   const revisionHasImageContext = input.revisionContext?.timeline.assets.some((asset) => asset.type === 'image')
     || input.revisionContext?.timeline.scenes.some((scene) => scene.type === 'image_motion')
     || input.revisionContext?.timeline.material_jobs.some((job) => Boolean(job.input_asset_id))
-  const hasImageRule = promptMentionsImage
-    || Boolean(mediaScopeApplies && (visualInputReport?.attached_image_input_count || revisionHasImageContext))
+  const imageMaterialIds = new Set((input.materials ?? [])
+    .filter((material) => material.type === 'image')
+    .map((material) => material.id))
+  const requiresImageMaterial = (input.requiredMaterialIds ?? []).some((id) => imageMaterialIds.has(id))
+  const hasImageRule = Boolean(mediaScopeApplies && (
+    revisionHasImageContext
+    || requiresImageMaterial
+  ))
   const sampleScopeApplies = mediaScopeApplies
     || input.revisionScope === 'transition'
     || input.revisionScope === 'global'
     || input.revisionGroup?.items.some((item) => item.scope === 'transition')
-  const sampleReferenceText = JSON.stringify({
-    prompt: input.prompt,
-    active_requirements: activeRequirements,
-    revision_group: input.revisionGroup?.items.map((item) => item.instruction) ?? [],
-  })
   const hasSampleRule = Boolean(input.sampleUnderstanding)
     && Boolean(sampleScopeApplies)
-    && referencesSampleContext(sampleReferenceText)
+    && Boolean(
+      input.useSampleReference
+      || input.revisionContext?.timeline.creative_brief?.sample_methods?.length
+    )
   const existingComponentIds = new Set(
     input.revisionContext?.timeline.scenes.flatMap((scene) => scene.custom_render?.component_id
       ? [scene.custom_render.component_id]
@@ -875,7 +877,6 @@ export function buildV2TimelineRevisionPlannerPrompt(
       || /组件|自定义|程序化|特殊效果|复杂动效|custom_render|component_id/i.test(input.prompt))
   const hasVisibleTextRule = input.revisionScope === 'subtitle'
     || input.revisionGroup?.items.some((item) => item.scope === 'subtitle')
-    || hardRequirements.required_captions.length > 0
   return [
     '你是视频创作平台中负责局部方案修订的规划模型。请在服务端授权范围内修改已有可编辑时间线，只返回当前修订所需的 Fragment；不要重新规划整案。',
     '',
@@ -957,7 +958,6 @@ export function buildV2TimelineRevisionPlannerPrompt(
       revision_transition_ids: input.revisionTransitionIds ?? null,
       server_asset_catalog: assetCatalog,
       required_material_ids: input.requiredMaterialIds ?? [],
-      hard_requirements: hardRequirements,
     }, null, 2),
     ...(hasImageRule ? ['', '真实图片输入报告', JSON.stringify(visualInputReport ?? null)] : []),
     ...(hasSampleRule ? ['', '相关样例理解', JSON.stringify(compactSampleUnderstanding(input))] : []),
@@ -1011,25 +1011,15 @@ export function buildV2TimelineSemanticCorrectionPrompt(input: {
     repairInstruction: input.repairInstruction,
     candidate: input.rejectedCandidate,
   })
-  const mediaScopeApplies = input.outputKind === 'timeline'
-    || plannerInput.revisionScope === 'scene'
-    || plannerInput.revisionScope === 'visual_strategy'
-    || plannerInput.revisionScope === 'structure'
-    || plannerInput.revisionGroup?.items.some((item) => item.scope === 'scene' || item.scope === 'visual_strategy')
   const revisionContextText = JSON.stringify(plannerInput.revisionContext ?? {})
-  const hasImageContext = Boolean(mediaScopeApplies)
-    && Boolean(input.visualInputReport?.attached_image_input_count || /原图|图片|照片|图像|input_asset_id|image_motion/i.test(correctionFacts))
-  const hasSampleContext = Boolean(plannerInput.sampleUnderstanding)
-    && (/样例|样片|参考视频|sample_boundary|sample_methods/i.test(correctionFacts)
-      || /"sample_methods":\s*\[(?!\s*\])/.test(revisionContextText))
+  const sourceContext = deriveV2TimelineReviewSourceContext(plannerInput, input.visualInputReport)
+  const hasImageContext = sourceContext.imageContextAvailable
+  const hasSampleContext = sourceContext.sampleContextAvailable
   const componentIds = new Set((plannerInput.availableComponents ?? []).map((component) => component.id))
   const hasComponentContext = Boolean(plannerInput.availableComponents?.length)
-    && (/custom_render|组件|自定义画面|component/i.test(correctionFacts)
-      || [...componentIds].some((id) => correctionFacts.includes(id) || revisionContextText.includes(id)))
-  const recalledPreferences = (plannerInput.planningContext?.recalledCreativeMemories ?? [])
-    .filter((item) => correctionFacts.includes(item))
-  const recalledKnowledge = (plannerInput.planningContext?.recalledCreativeKnowledge ?? [])
-    .filter((item) => correctionFacts.includes(item))
+    && [...componentIds].some((id) => correctionFacts.includes(id) || revisionContextText.includes(id))
+  const recalledPreferences = plannerInput.planningContext?.recalledCreativeMemories ?? []
+  const recalledKnowledge = plannerInput.planningContext?.recalledCreativeKnowledge ?? []
   const creativeContext = {
     recalled_user_preferences: recalledPreferences,
     recalled_creation_knowledge: recalledKnowledge,

@@ -127,6 +127,8 @@ export interface V2AgentToolDispatchInput {
   traceSessionId?: string
   recalledCreativeMemories?: string[]
   recalledCreativeKnowledge?: string[]
+  /** True when this stage depends on a successful sample analysis in the same turn. */
+  sampleReferenceAuthorized?: boolean
   authorizedDraftComponentIds?: string[]
   onProgress?: (event: V2AgentToolProgress) => void | Promise<void>
   /** Internal evaluation seam; public requests cannot supply an adapter. */
@@ -137,8 +139,8 @@ export interface V2AgentToolDispatchInput {
 
 const drafts = createV2TimelineDraftRepository()
 
-function creationMode(context: DirectorContext): V2PlannerInput['creationMode'] {
-  if (context.sampleVideo?.url) return 'sample_replicate'
+function creationMode(context: DirectorContext, useSampleReference: boolean): V2PlannerInput['creationMode'] {
+  if (useSampleReference && context.sampleVideo?.url) return 'sample_replicate'
   if (context.materials.some((material) => material.type === 'image' || material.type === 'video')) return 'material_brief'
   return 'text_to_video'
 }
@@ -164,14 +166,16 @@ function plannerInput(input: {
   availableComponents?: RenderComponentSummary[]
   toolArguments?: Record<string, unknown>
   requiredMaterialIds?: string[]
+  useSampleReference?: boolean
 }): V2PlannerInput {
   return {
     taskId: input.taskId,
     prompt: input.prompt,
     originalUserPrompt: input.originalUserPrompt,
-    creationMode: input.creationMode ?? creationMode(input.context),
-    referenceVideoPath: input.context.sampleVideo?.url,
-    sampleUnderstanding: input.context.sampleVideo?.sampleUnderstanding,
+    creationMode: input.creationMode ?? creationMode(input.context, input.useSampleReference === true),
+    referenceVideoPath: input.useSampleReference ? input.context.sampleVideo?.url : undefined,
+    sampleUnderstanding: input.useSampleReference ? input.context.sampleVideo?.sampleUnderstanding : undefined,
+    useSampleReference: input.useSampleReference,
     conversationSummary: input.context.conversationSummary,
     materials: input.context.materials.map((material) => ({
       id: material.id, name: material.name, type: material.type,
@@ -428,6 +432,10 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
         ? checked.arguments.requiredMaterialIds as string[]
         : [],
   )]
+  const requestedUseSampleReference = input.sampleReferenceAuthorized === true
+    || (input.revisionGroup
+      ? input.revisionGroup.items.some((item) => item.useSampleReference)
+      : checked.arguments.useSampleReference === true)
   const availableMaterialIds = new Set(input.context.materials.map((material) => material.id))
   const unknownRequiredMaterialIds = requestedRequiredMaterialIds.filter((id) => !availableMaterialIds.has(id))
   if (unknownRequiredMaterialIds.length > 0) {
@@ -594,6 +602,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       availableComponents,
       toolArguments: plannerRequest.toolArguments,
       requiredMaterialIds: requestedRequiredMaterialIds,
+      useSampleReference: requestedUseSampleReference,
     })
     if (existing && input.workspace.draftId && input.workspace.baseRevision) {
       plan = {
@@ -698,7 +707,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
           candidateSpec: spec,
           availableComponents,
           confirmedContext: JSON.stringify(plan.planningContext?.activeRequirements ?? []),
-          ...deriveV2TimelineReviewSourceContext(plan, undefined, pendingResolution.instruction),
+          ...deriveV2TimelineReviewSourceContext(plan),
         })
       : undefined
     if (pendingResolutionReview && !pendingResolutionReview.pass) {

@@ -35,19 +35,9 @@ function sceneForOverlay(overlay, scenes) {
     }
     return undefined;
 }
-function isBareMaterialMetadata(value, scenes) {
-    const text = nonBlank(value);
-    if (!text)
-        return false;
-    const materialLabels = new Set(scenes
-        .filter((scene) => visualSceneTypes.has(scene.type))
-        .map((scene) => nonBlank(scene.creative_intent?.material_label))
-        .filter((label) => Boolean(label)));
-    return materialLabels.has(text) || /^[^\n]{1,120}\.(png|jpe?g|webp|gif|mp4|mov|webm)$/i.test(text);
-}
 /**
  * Normalizes two invariants at the V2 protocol seam:
- * - visual-scene planning metadata never becomes on-screen text;
+ * - visual-scene planning fields stay separate from on-screen text;
  * - a model-supplied text overlay with omitted layout numbers receives stable
  *   geometry from its owning scene instead of discarding the whole plan.
  */
@@ -64,12 +54,7 @@ export function normalizeV2TimelineTextOwnership(spec) {
             normalized.creative_intent = creative_intent;
         return normalized;
     });
-    const overlays = spec.overlays
-        // A material label belongs to planning metadata, not an implicit caption.
-        // Explicit user caption requirements are applied after this normalizer.
-        .filter((overlay) => !['caption', 'title', 'label'].includes(overlay.type) ||
-        !isBareMaterialMetadata(overlay.text, scenes))
-        .map((overlay) => {
+    const overlays = spec.overlays.map((overlay) => {
         if (!['caption', 'title', 'label'].includes(overlay.type))
             return overlay;
         const scene = sceneForOverlay(overlay, scenes);

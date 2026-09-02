@@ -277,7 +277,6 @@ function toolCapabilitiesForPrompt(input: DirectorPromptInput) {
 export function compactDirectorContextForPrompt(input: DirectorPromptInput) {
   const timelineSummary = summarizeCurrentTimeline(input.context)
   const hasDraft = Boolean(timelineSummary?.draftId && timelineSummary.currentRevision)
-  const lastError = input.context.directorState?.lastError
   const effectiveConfig = input.context.effectiveCreativeConfig ?? {
     aspectRatio: input.context.slots.aspectRatio,
     durationSec: input.context.slots.durationSec,
@@ -304,13 +303,6 @@ export function compactDirectorContextForPrompt(input: DirectorPromptInput) {
       timelineSummary: hasDraft ? timelineSummary : undefined,
       timelineFacts: hasDraft ? input.context.timelineFacts : undefined,
       pendingTimelineRevisions: input.pendingTimelineRevisions,
-      recentExecutionError: lastError
-        ? {
-            code: lastError.code,
-            message: lastError.message,
-            suggestions: lastError.suggestions.map((suggestion) => suggestion.label),
-          }
-          : undefined,
       recentFailure: input.recentFailure,
     },
     references: {
@@ -378,7 +370,7 @@ export function buildDirectorModelPrompt(input: DirectorPromptInput) {
 - 只有用户明确放弃某项失败修改并保留当前草稿时，才调用 timeline.pending.dismiss 并传入对应 callId。`
     : ''
   const sampleDependencyRule = input.context.sampleVideo?.url && !input.runtime.isSampleParsed
-    ? '- 当前样例尚未解析；只有用户明确要求当前创建或修改参考该样例时，才先请求 sample.analyze，并让对应 timeline.plan 或 timeline.patch 通过 dependsOn 等待分析完成。'
+    ? '- 当前样例尚未解析；只有用户明确要求当前创建或修改参考该样例时，才先请求 sample.analyze，让对应 timeline.plan 或 timeline.patch 通过 dependsOn 等待分析完成，并设置 useSampleReference=true。'
     : ''
   const stateRules = [creationRules, revisionRules, pendingRules].filter(Boolean).join('\n\n')
   const readOnlySurface = isReadOnlySurface(input.surfaceMode)
@@ -411,6 +403,7 @@ export function buildDirectorModelPrompt(input: DirectorPromptInput) {
 - 单独记录、替换、撤销或查询创作要求时使用 chat；不得因为要求中出现画面、字幕或风格就自动修改草稿。
 - sampleVideo 只提供结构、节奏和表达方法参考，materials 才是候选成片素材。
 ${sampleDependencyRule}
+- 只有本轮明确采用当前样例时，timeline.plan 或 timeline.patch 才设置 useSampleReference=true；当前存在样例不等于每次修改都要重新注入样例方法。
 - materials 默认只是可选候选。只有用户明确要求本轮方案必须使用某项素材时，才填写 requiredMaterialIds，且 ID 必须来自当前 materials。局部 scene、structure、visual_strategy 只可绑定视觉素材；global.brief_update 不可绑定新素材，只有 global.full_replan 可以。用户没有要求使用的历史素材不得列入。
 - 本轮有视觉输入时，结合当前用户的具体问题和创作目标观察真实图片，提取与任务相关的可见事实，用于理解、比较或创意建议；不要机械枚举全部元素，也不得编造不可见事实。只读任务仍使用 chat，不得自动创建方案或渲染。
 - 判断画面是否已实现，只依据 timelineFacts 的真实类型、素材和生成任务。image_motion 只能移动或裁剪原图像素；新增动态画面需要 ai_video + generate_video，或确实实现目标效果的已注册画面组件。创作描述不等于已经实现。

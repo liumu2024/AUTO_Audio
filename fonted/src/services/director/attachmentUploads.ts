@@ -1,7 +1,10 @@
 import { browserWorkspaceSessionId } from '@/services/director/workspaceSessionLifecycle'
 import type { AttachmentUpload, InputAttachment } from '@/stores/creationStore'
 import { useCreationStore } from '@/stores/creationStore'
-import { useMaterialLibraryStore } from '@/stores/materialLibraryStore'
+import {
+  directorTagsForMaterial,
+  useMaterialLibraryStore,
+} from '@/stores/materialLibraryStore'
 
 function attachmentTypeFromMime(mime: string): InputAttachment['type'] | null {
   if (mime.startsWith('video/')) return 'video'
@@ -29,7 +32,7 @@ async function uploadAttachment(
       url: material.url,
       source: 'upload',
       materialId: material.id,
-      tags: material.tags,
+      tags: directorTagsForMaterial(material),
     })
     store.completeAttachmentUpload(upload.id)
   } catch (error) {

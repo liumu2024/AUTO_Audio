@@ -192,15 +192,6 @@ function syncDirectorStateFromUI(input: {
   return next
 }
 
-function currentRecoverySuggestions() {
-  return useDirectorContextStore
-    .getState()
-    .context.directorState?.lastError?.suggestions.map((suggestion) => ({
-      label: suggestion.label,
-      prompt: suggestion.action.message,
-    }))
-}
-
 function restoreInputTrayAfterWorkspaceConflict(input: {
   prompt: string
   attachments: InputAttachment[]
@@ -735,7 +726,6 @@ export function DirectorChatPanel() {
           content: streamErrorMessage,
           kind: 'error',
           status: 'error',
-          recoverySuggestions: currentRecoverySuggestions(),
         })
         return
       }
@@ -780,7 +770,6 @@ export function DirectorChatPanel() {
         content: msg,
         kind: 'error',
         status: 'error',
-        recoverySuggestions: currentRecoverySuggestions(),
       })
       if (debugThoughts.length) {
         addThoughtMessage({

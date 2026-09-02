@@ -644,7 +644,6 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
       }]
     }),
   ]
-  const promptMentionsImage = /图片|照片|图像|原图|image|photo|picture/i.test(input.prompt)
   const candidateUsesImageRealization = input.candidateDigest.scenes.some((scene) =>
     scene.type === 'image_motion'
     || scene.material_jobs.some((job) => Boolean(job.input_asset_id)))
@@ -653,8 +652,7 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
   const mediaScopeApplies = !input.hasBase
     || ['scene', 'visual_strategy', 'structure'].includes(input.revisionScope ?? '')
     || Boolean(groupUsesImageRelevantScope)
-  const imageRiskApplies = promptMentionsImage
-    || (!input.hasBase && candidateUsesImageRealization)
+  const imageRiskApplies = (!input.hasBase && candidateUsesImageRealization)
     || (['scene', 'visual_strategy', 'structure'].includes(input.revisionScope ?? '') && candidateUsesImageRealization)
     || Boolean(groupUsesImageRelevantScope && candidateUsesImageRealization)
     || Boolean(input.imageContextAvailable && mediaScopeApplies)
@@ -662,9 +660,7 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
     || !input.hasBase
     || ['scene', 'visual_strategy', 'structure'].includes(input.revisionScope ?? '')
     || input.revisionGroup?.items.some((item) => item.scope === 'scene' || item.scope === 'visual_strategy')
-    || /镜头|人物|地点|动作|事件|道具|色彩|光线|构图|运镜|scene|visual|camera|lighting/i.test(input.prompt)
-  const sampleRiskApplies = /样例|样片|参考视频|sample|reference video/i.test(input.prompt)
-    || (!input.hasBase && Boolean(input.candidateDigest.creative_brief?.sample_methods?.length))
+  const sampleRiskApplies = (!input.hasBase && Boolean(input.candidateDigest.creative_brief?.sample_methods?.length))
     || Boolean(input.sampleContextAvailable && (
       mediaScopeApplies
       || input.revisionScope === 'transition'
@@ -672,10 +668,9 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
       || input.revisionGroup?.items.some((item) => item.scope === 'transition')
     ))
   const globalRiskApplies = input.revisionScope === 'global'
-    || /全片|整体方向|整案|whole video|full replan|global/i.test(input.prompt)
-  const visibleTextRiskApplies = input.revisionScope === 'subtitle'
+  const visibleTextRiskApplies = !input.hasBase
+    || input.revisionScope === 'subtitle'
     || input.revisionGroup?.items.some((item) => item.scope === 'subtitle')
-    || /字幕|文案|标题|上屏|caption|subtitle|copy/i.test(input.prompt)
   const authoritativeDiff = input.specDiff
     ? [
         ...input.specDiff.scenes,

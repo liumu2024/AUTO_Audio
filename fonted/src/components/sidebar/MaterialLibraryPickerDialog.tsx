@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import type { InputAttachment } from '@/stores/creationStore'
 import {
   useMaterialLibraryStore,
+  directorTagsForMaterial,
   type MaterialType,
   type UserMaterial,
 } from '@/stores/materialLibraryStore'
@@ -52,7 +53,7 @@ function toAttachment(material: UserMaterial): InputAttachment {
     url: material.url,
     source: 'library',
     materialId: material.id,
-    tags: material.tags,
+    tags: directorTagsForMaterial(material),
   }
 }
 

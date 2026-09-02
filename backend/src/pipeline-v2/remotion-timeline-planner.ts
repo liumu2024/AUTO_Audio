@@ -10,7 +10,6 @@ import {
   type RemotionTimelineScene,
   type RemotionTimelineSpecV1,
 } from '../../../shared/types/remotion-timeline-spec.v1.js'
-import { extractV2TimelineHardRequirements } from './hard-requirements.js'
 import type { V2PlannerInput } from './v2-input.js'
 
 export interface V2RemotionTimelinePlannerInput extends V2PlannerInput {
@@ -63,13 +62,6 @@ function durationFromFrameRanges(prompt: string, fps: number): number | undefine
   const matches = [...prompt.matchAll(/第\s*(\d+)\s*[-—~至]\s*(\d+)\s*帧/g)]
   const maxFrame = matches.reduce((max, match) => Math.max(max, Number(match[2] ?? 0)), 0)
   return maxFrame > 0 && fps > 0 ? Number((maxFrame / fps).toFixed(3)) : undefined
-}
-
-function captionsForScene(captions: string[], index: number, sceneCount: number): string[] {
-  if (!captions.length) return []
-  const start = Math.floor((index * captions.length) / sceneCount)
-  const end = Math.max(start + 1, Math.floor(((index + 1) * captions.length) / sceneCount))
-  return captions.slice(start, end)
 }
 
 function legacyImageAssetId(source: string): string {
@@ -199,7 +191,6 @@ export function buildDeterministicRemotionTimelineSpec(
   const height = input.canvas?.height ?? 1280
   const fps = input.canvas?.fps ?? 24
   const copy = textFromPrompt(input.prompt)
-  const requiredCaptions = extractV2TimelineHardRequirements(input.prompt).required_captions
   const assets = buildPlannerAssets(input)
   const visualAssets = assets.filter((asset) => asset.type === 'video' || asset.type === 'image')
   const conditioningImageAssetId = assets.find((asset) => asset.type === 'image')?.id
@@ -243,17 +234,11 @@ export function buildDeterministicRemotionTimelineSpec(
       : visualAssets[index % Math.max(visualAssets.length, 1)]
     const role = roleForIndex(index, sceneCount)
     const sceneId = `scene_${String(index + 1).padStart(3, '0')}`
-    const sceneCaptions = captionsForScene(requiredCaptions, index, sceneCount)
-    const captionSummary = sceneCaptions.join(' ')
     const baseTitle = titleForRole(role, index)
-    const title = captionSummary
-        ? `${baseTitle}：${captionSummary.slice(0, 22)}${captionSummary.length > 22 ? '…' : ''}`
-        : baseTitle
+    const title = baseTitle
     const body = creationMode === 'sample_replicate'
       ? [copy.body, sampleMethods].filter(Boolean).join(' ')
-      : captionSummary
-        ? `画面需要具体呈现“${captionSummary}”，明确主体、环境、光线、动作和镜头运动，并自然衔接下一镜头。`
-        : copy.body
+      : copy.body
 
     if (asset?.type === 'video') {
       scenes.push({
@@ -324,7 +309,7 @@ export function buildDeterministicRemotionTimelineSpec(
         type: 'remotion_card',
         start_sec: start,
         duration_sec: duration,
-        title: index === 0 && !captionSummary ? copy.title : title,
+        title: index === 0 ? copy.title : title,
         subtitle: generateMissingFootage ? '视频模型待生成' : copy.subtitle,
         body,
         accent_color: index % 2 === 0 ? '#38bdf8' : '#f59e0b',
@@ -338,7 +323,7 @@ export function buildDeterministicRemotionTimelineSpec(
           type: 'generate_video',
           status: 'planned',
           prompt: [
-            captionSummary ? `画面内容：${captionSummary}` : copy.title,
+            copy.title,
             `镜头作用：${baseTitle}`,
             '生成写实、连贯的视频画面，明确主体、环境、光线、动作和镜头运动',
           ]
@@ -352,24 +337,6 @@ export function buildDeterministicRemotionTimelineSpec(
       }
     }
 
-    // A deterministic fallback has no visual understanding. It may preserve
-    // explicit user copy, but must not turn asset metadata into fake captions.
-    const overlayText = sceneCaptions[0] ?? (!asset && index === 0 ? copy.title : undefined)
-    if (overlayText) {
-      overlays.push({
-        id: `caption_${String(index + 1).padStart(3, '0')}`,
-        type: index === 0 ? 'title' : 'caption',
-        scene_id: sceneId,
-        start_sec: Number((start + Math.min(0.2, duration / 5)).toFixed(3)),
-        end_sec: Number((start + Math.max(0.4, duration - 0.15)).toFixed(3)),
-        text: overlayText,
-        x_pct: 50,
-        y_pct: index === 0 ? 78 : 86,
-        width_pct: 78,
-        background: index === 0 ? 'rgba(15, 23, 42, 0.42)' : 'rgba(15, 23, 42, 0.66)',
-        animation: index === 0 ? 'pop' : 'slide_up_fade',
-      })
-    }
     cursor += duration
   }
 

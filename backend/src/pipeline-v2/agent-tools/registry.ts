@@ -50,9 +50,11 @@ const sampleAnalyzeArgumentsSchema = emptyArgumentsSchema
 const materialInspectArgumentsSchema = emptyArgumentsSchema
 const requiredMaterialIdsSchema = z.array(z.string().trim().min(1).max(200)).min(1).max(20)
   .refine((ids) => new Set(ids).size === ids.length, 'requiredMaterialIds must be unique.').optional()
+const useSampleReferenceSchema = z.boolean().optional()
 const timelinePlanArgumentsSchema = z.object({
   instruction: z.string().trim().min(1).max(4_000).optional(),
   requiredMaterialIds: requiredMaterialIdsSchema,
+  useSampleReference: useSampleReferenceSchema,
 }).strict()
 const patchInstructionSchema = z.string().trim().min(1).max(4_000).optional()
 const resolvesPendingCallIdSchema = z.string().trim().min(1).max(200).optional()
@@ -63,9 +65,10 @@ const scopedTimelinePatchArgumentsSchema = z.discriminatedUnion('scope', [
     overlayIds: z.array(z.string().trim().min(1).max(200)).min(1).max(20)
       .refine((ids) => new Set(ids).size === ids.length, 'overlayIds must be unique.').optional(),
     instruction: patchInstructionSchema,
+    useSampleReference: useSampleReferenceSchema,
     resolvesPendingCallId: resolvesPendingCallIdSchema,
   }).strict(),
-  z.object({ scope: z.literal('scene'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema, resolvesPendingCallId: resolvesPendingCallIdSchema }).strict(),
+  z.object({ scope: z.literal('scene'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema, useSampleReference: useSampleReferenceSchema, resolvesPendingCallId: resolvesPendingCallIdSchema }).strict(),
   z.object({
     scope: z.literal('structure'),
     sceneIds: z.array(z.string().trim().min(1).max(200)).min(1).max(20)
@@ -73,14 +76,16 @@ const scopedTimelinePatchArgumentsSchema = z.discriminatedUnion('scope', [
     durationMode: z.enum(['preserve_range', 'resize_timeline']).default('preserve_range'),
     requiredMaterialIds: requiredMaterialIdsSchema,
     instruction: patchInstructionSchema,
+    useSampleReference: useSampleReferenceSchema,
     resolvesPendingCallId: resolvesPendingCallIdSchema,
   }).strict(),
-  z.object({ scope: z.literal('visual_strategy'), sceneId: z.string().trim().min(1).max(200).optional(), requiredMaterialIds: requiredMaterialIdsSchema, instruction: patchInstructionSchema, resolvesPendingCallId: resolvesPendingCallIdSchema }).strict(),
+  z.object({ scope: z.literal('visual_strategy'), sceneId: z.string().trim().min(1).max(200).optional(), requiredMaterialIds: requiredMaterialIdsSchema, instruction: patchInstructionSchema, useSampleReference: useSampleReferenceSchema, resolvesPendingCallId: resolvesPendingCallIdSchema }).strict(),
   z.object({
     scope: z.literal('transition'),
     transitionIds: z.array(z.string().trim().min(1).max(200)).min(1).max(20)
       .refine((ids) => new Set(ids).size === ids.length, 'transitionIds must be unique.'),
     instruction: patchInstructionSchema,
+    useSampleReference: useSampleReferenceSchema,
     resolvesPendingCallId: resolvesPendingCallIdSchema,
   }).strict(),
 ])
@@ -89,6 +94,7 @@ const globalTimelinePatchArgumentsSchema = z.discriminatedUnion('mode', [
     scope: z.literal('global'),
     mode: z.literal('brief_update'),
     instruction: patchInstructionSchema,
+    useSampleReference: useSampleReferenceSchema,
     resolvesPendingCallId: resolvesPendingCallIdSchema,
   }).strict(),
   z.object({
@@ -96,6 +102,7 @@ const globalTimelinePatchArgumentsSchema = z.discriminatedUnion('mode', [
     mode: z.literal('full_replan'),
     requiredMaterialIds: requiredMaterialIdsSchema,
     instruction: patchInstructionSchema,
+    useSampleReference: useSampleReferenceSchema,
     resolvesPendingCallId: resolvesPendingCallIdSchema,
   }).strict(),
 ])

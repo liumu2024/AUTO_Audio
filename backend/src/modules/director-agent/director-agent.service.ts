@@ -791,9 +791,7 @@ export async function* streamDirectorAgentChat(
   const resolvedStateActionRefs = stateAction && requirementResult.ok ? [stateAction.ref] : []
 
   const unresovedAction = directorActionFromIntentResult({
-    prompt: input.prompt,
     context: workspaceState.context,
-    runtime: effectiveRuntime,
     result: routed.result,
   })
   const effectiveCreativeConfig = confirmedProposal?.executionContext.context.effectiveCreativeConfig
@@ -1047,6 +1045,7 @@ export async function* streamDirectorAgentChat(
           overlayIds: request.arguments.overlayIds,
           transitionIds: request.arguments.transitionIds,
           requiredMaterialIds: request.arguments.requiredMaterialIds,
+          useSampleReference: request.arguments.useSampleReference,
           resolvesPendingCallId: request.arguments.resolvesPendingCallId,
         })),
       })
@@ -1243,6 +1242,8 @@ export async function* streamDirectorAgentChat(
               ?? creativeMemoryRetrieval.active.map((item) => item.memory.statement),
             recalledCreativeKnowledge: executionContext?.recalledCreativeKnowledge
               ?? creativeKnowledgeRetrieval.items.map((item) => item.knowledge.statement),
+            sampleReferenceAuthorized: dependencyRefs.some((ref) =>
+              requestedTools.some((item) => item.ref === ref && item.toolId === 'sample.analyze')),
             authorizedDraftComponentIds: dependencyRefs.flatMap((ref) => {
               const dependencyRequest = requestedTools.find((item) => item.ref === ref)
               const dependencyResult = dependencyRequest

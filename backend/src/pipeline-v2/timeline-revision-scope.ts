@@ -23,6 +23,7 @@ export interface V2TimelineRevisionGroupItem {
   overlayIds?: string[]
   transitionIds?: string[]
   requiredMaterialIds?: string[]
+  useSampleReference?: boolean
 }
 
 /** Server-authorized same-scene revision bundle. It is never accepted from a
@@ -948,6 +949,7 @@ export function resolveV2TimelineRevisionGroup(input: {
     overlayIds?: unknown
     transitionIds?: unknown
     requiredMaterialIds?: unknown
+    useSampleReference?: unknown
     resolvesPendingCallId?: unknown
   }>
 }): V2TimelineRevisionGroup | undefined {
@@ -1020,6 +1022,7 @@ export function resolveV2TimelineRevisionGroup(input: {
       ...(memberOverlayIds?.length ? { overlayIds: memberOverlayIds } : {}),
       ...(memberTransitionIds?.length ? { transitionIds: memberTransitionIds } : {}),
       ...(memberRequiredMaterialIds?.length ? { requiredMaterialIds: memberRequiredMaterialIds } : {}),
+      ...(item.useSampleReference === true ? { useSampleReference: true } : {}),
     })
   }
   return {
@@ -1045,6 +1048,7 @@ export function partitionV2TimelineRevisionGroups(input: {
     overlayIds?: unknown
     transitionIds?: unknown
     requiredMaterialIds?: unknown
+    useSampleReference?: unknown
     resolvesPendingCallId?: unknown
   }>
 }): V2TimelineRevisionGroupPartition {

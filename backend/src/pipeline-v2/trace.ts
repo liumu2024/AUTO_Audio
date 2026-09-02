@@ -36,7 +36,7 @@ const compactTraceFiles = [
   /^planning-decision\.json$/,
   /^timeline-revision-fragment\.json$/,
   /^timeline-(?:outcome-review|outcome-correction-review)\.json$/,
-  /^timeline-(?:spec|validation|hard-requirement-check)\.json$/,
+  /^timeline-(?:spec|validation)\.json$/,
   /^revision-(?:diff|preservation)\.json$/,
   /^timeline-review\.json$/,
   /^sample-understanding-input\.json$/,

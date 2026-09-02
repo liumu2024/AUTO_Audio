@@ -1,10 +1,3 @@
-import type {
-  DirectorAction,
-  DirectorActionType,
-  DirectorFailureCode,
-  DirectorPlanStepRun,
-} from './director-action.js'
-
 export type DirectorSessionPhase =
   | 'idle'
   | 'sample_analyzing'
@@ -42,33 +35,6 @@ export interface DirectorTimelineSnapshot {
   lastChangeSummary?: string
 }
 
-export interface DirectorActionRecord {
-  id: string
-  type: DirectorActionType
-  prompt: string
-  phaseBefore: DirectorSessionPhase
-  phaseAfter: DirectorSessionPhase
-  status: 'planned' | 'running' | 'completed' | 'failed' | 'cancelled'
-  revisionBefore?: number
-  revisionAfter?: number
-  message?: string
-  error?: string
-  planSteps?: DirectorPlanStepRun[]
-  createdAt: string
-  completedAt?: string
-}
-
-export interface DirectorRecoverSuggestion {
-  label: string
-  action: Pick<DirectorAction, 'type' | 'message' | 'payload'>
-}
-
-export interface DirectorRecoverableError {
-  code: DirectorFailureCode
-  message: string
-  suggestions: DirectorRecoverSuggestion[]
-}
-
 export interface DirectorSessionState {
   taskId?: string
   phase: DirectorSessionPhase
@@ -76,9 +42,6 @@ export interface DirectorSessionState {
   materialStatus: 'missing' | 'partial' | 'ready'
   /** Authoritative timeline state for V2 and legacy adapters. */
   timeline?: DirectorTimelineSnapshot
-  lastAction?: DirectorActionRecord
-  lastError?: DirectorRecoverableError
-  actionLedger: DirectorActionRecord[]
 }
 
 export interface DirectorSessionSnapshotInput {
