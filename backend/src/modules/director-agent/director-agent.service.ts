@@ -264,46 +264,6 @@ function requirementConfirmation(changes: RequirementChanges) {
   return messages.join('；')
 }
 
-function creativeLearningReplyFacts(
-  receipt: CreativePreferenceLearningReceipt,
-  userPrompt: string,
-): DirectorFinalReplyFact[] {
-  if (receipt.status === 'skipped') return []
-  const usesChinese = usesChineseAsPrimaryLanguage(userPrompt)
-  const active = receipt.changes.filter((item) => item.effectiveStatus === 'active').length
-  const candidate = receipt.changes.filter((item) => item.effectiveStatus === 'candidate').length
-  const revoked = receipt.changes.filter((item) => item.effectiveStatus === 'revoked').length
-  const effectiveParts = usesChinese
-    ? [
-        active ? `${active} 项长期偏好已可在后续创作中参考` : '',
-        candidate ? `${candidate} 项倾向只作为待观察候选，不会直接影响方案` : '',
-        revoked ? `${revoked} 项历史偏好已停止沿用` : '',
-      ].filter(Boolean)
-    : [
-        active ? `${active} long-term preference${active === 1 ? '' : 's'} can now inform later creations` : '',
-        candidate ? `${candidate} signal${candidate === 1 ? ' is' : 's are'} only being observed and will not affect plans yet` : '',
-        revoked ? `${revoked} previous preference${revoked === 1 ? '' : 's'} will no longer be used` : '',
-      ].filter(Boolean)
-  const facts: DirectorFinalReplyFact[] = []
-  if (effectiveParts.length) {
-    facts.push({
-      ref: 'creative_preferences_applied',
-      status: 'succeeded',
-      summary: effectiveParts.join(usesChinese ? '；' : '; '),
-    })
-  }
-  if (receipt.errors.length) {
-    facts.push({
-      ref: 'creative_preferences_rejected',
-      status: 'failed',
-      summary: usesChinese
-        ? '本轮还有偏好内容未能可靠处理，不能声称已全部保存'
-        : 'Some preference information was not processed reliably, so do not say that everything was saved.',
-    })
-  }
-  return facts
-}
-
 function userFacingExecutionText(message: string) {
   return message
     .replace(/V2\s+正式渲染/giu, '成片导出')
@@ -1592,7 +1552,7 @@ export async function* streamDirectorAgentChat(
       status: receipt.status,
       summary: userFacingExecutionText(summary),
     }
-  }), ...creativeLearningReplyFacts(creativeLearning, input.prompt)]
+  })]
   const awaitsProposalConfirmation = awaitsRevisionConfirmation || awaitsPlanConfirmation
   const fallbackAssistantMessage = !awaitsProposalConfirmation && finalReplyFacts.length > 0
     ? finalReplyFacts.map((fact) => fact.summary)
