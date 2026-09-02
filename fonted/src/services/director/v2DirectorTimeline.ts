@@ -69,18 +69,23 @@ export async function renderV2DirectorTimeline(
   taskStore.startTask(input.prompt || '导出视频成片', current.draftId)
   taskStore.updateProgress(10, '准备导出', '正在准备当前方案和素材。')
   taskStore.updateProgress(30, '准备画面素材', '正在复用已有镜头，并补充确实需要重新生成的内容。')
-  const result = await api.runV2TimelineDraft({
-    draftId: current.draftId,
-    revision: current.draftRevision,
-  })
-  useV2TimelineStore.getState().setResult(result)
-  syncV2TimelineWorkspace({ spec: current.spec })
-  taskStore.updateProgress(
-    100,
-    '视频成片已导出',
-    '成片已经更新到预览区。',
-  )
-  taskStore.setBackendReady(true)
-  taskStore.setComplete(true)
-  return result
+  try {
+    const result = await api.runV2TimelineDraft({
+      draftId: current.draftId,
+      revision: current.draftRevision,
+    })
+    useV2TimelineStore.getState().setResult(result)
+    syncV2TimelineWorkspace({ spec: current.spec })
+    taskStore.updateProgress(
+      100,
+      '视频成片已导出',
+      '成片已经更新到预览区。',
+    )
+    taskStore.setBackendReady(true)
+    taskStore.setComplete(true)
+    return result
+  } catch (error) {
+    taskStore.setFailed(error instanceof Error ? error.message : String(error))
+    throw error
+  }
 }
