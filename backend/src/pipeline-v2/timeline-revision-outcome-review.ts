@@ -629,8 +629,8 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
   sampleContextAvailable?: boolean
   requiredCorrections?: V2TimelineRevisionReviewVerdict['violations']
   fullTimelineSummary?: {
-    base?: { scene_count: number; duration_sec: number }
-    candidate: { scene_count: number; duration_sec: number }
+    base?: { scene_count: number; duration_sec: number; canvas_width: number; canvas_height: number }
+    candidate: { scene_count: number; duration_sec: number; canvas_width: number; canvas_height: number }
   }
 }) {
   const componentsById = new Map((input.availableComponents ?? []).map((item) => [item.id, item]))
@@ -743,6 +743,7 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
           '- 插入或删除镜头所必需的相邻转场重连属于结构修改的一部分；不要要求保留已不再成立的旧相邻关系，只保护编辑范围之外的转场。',
         ]
       : []),
+    '- 画幅以全片结构摘要中的 canvas_width 和 canvas_height 为准；不要因为受影响事实投影里没有画布字段就判定画幅缺失。',
     '- 可见文字必须是观众文案；技术说明、文件名、内部 ID、布局约束和规划指令不得成为字幕，除非用户明确要求逐字展示。',
     '- 用户明确要求程序化画面时，对应镜头必须由 remotion_card、caption_scene、data_viz 或已授权 custom_render 实现；ai_video + generate_video 不算程序化实现。',
     ...(visibleTextRiskApplies
@@ -967,12 +968,16 @@ export async function reviewV2TimelineRevisionOutcome(input: {
             base: {
               scene_count: input.baseSpec.scenes.length,
               duration_sec: input.baseSpec.canvas.duration_sec,
+              canvas_width: input.baseSpec.canvas.width,
+              canvas_height: input.baseSpec.canvas.height,
             },
           }
         : {}),
       candidate: {
         scene_count: input.candidateSpec.scenes.length,
         duration_sec: input.candidateSpec.canvas.duration_sec,
+        canvas_width: input.candidateSpec.canvas.width,
+        canvas_height: input.candidateSpec.canvas.height,
       },
     },
   })
