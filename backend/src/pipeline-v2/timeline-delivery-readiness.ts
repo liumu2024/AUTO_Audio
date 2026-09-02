@@ -67,7 +67,7 @@ export function evaluateV2TimelineDeliveryReadiness(input: {
     }
     const publication = evaluateExternalPublicationReadiness(asset.src)
     if (!publication.ready) {
-      missing.push({ code: 'generation_input_unreachable', description: `${sceneLabel(job.scene_id)}的参考素材暂时无法用于视频生成，请重新上传或检查素材后再试。` })
+      missing.push({ code: 'generation_input_unreachable', description: `${sceneLabel(job.scene_id)}的参考素材没有外部可访问地址，视频生成服务暂时无法读取。` })
     }
   }
   return {
