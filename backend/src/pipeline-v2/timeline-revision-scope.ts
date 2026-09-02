@@ -1025,7 +1025,7 @@ export function resolveV2TimelineRevisionGroup(input: {
   const items: V2TimelineRevisionGroupItem[] = []
   for (const item of input.items) {
     const scope = item.scope as V2TimelineRevisionGroupScope
-    const memberOverlayIds = Array.isArray(item.overlayIds)
+    let memberOverlayIds = Array.isArray(item.overlayIds)
       ? item.overlayIds.filter((id): id is string => typeof id === 'string')
       : undefined
     const memberTransitionIds = Array.isArray(item.transitionIds)
@@ -1041,6 +1041,8 @@ export function resolveV2TimelineRevisionGroup(input: {
         if (memberOverlayIds.some((id) => !existingSceneCaptions.some((overlay) => overlay.id === id))) {
           throw new Error('Same-scene revision group caption target is invalid.')
         }
+      } else if (existingSceneCaptions.length === 1) {
+        memberOverlayIds = [existingSceneCaptions[0]!.id]
       } else if (existingSceneCaptions.length > 0) {
         throw new Error('Same-scene revision group must identify existing caption overlays explicitly.')
       }
