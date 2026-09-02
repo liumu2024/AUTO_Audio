@@ -1,7 +1,4 @@
-import type {
-  DirectorSessionState,
-  DirectorTimelineSnapshot,
-} from './director-state.js'
+import type { DirectorTimelineSnapshot } from './director-state.js'
 import type { V2SampleUnderstandingResult } from './v2-sample-understanding.js'
 import type {
   RemotionTimelineMaterialJob,
@@ -253,7 +250,6 @@ export interface DirectorContext {
   currentTimeline?: DirectorTimelineContext
   /** Server-derived facts for grounded discussion of the current V2 revision. */
   timelineFacts?: DirectorTimelineFacts
-  directorState?: DirectorSessionState
   conversationSummary?: string
   slots: DirectorContextSlots
   /** Explicit UI values are passed separately from model-inferred intent. */

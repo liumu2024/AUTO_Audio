@@ -74,6 +74,7 @@ function normalizedContext(input: DirectorContext): {
   legacyConstraints: string[]
 } {
   const context = clone(input)
+  delete (context as unknown as Record<string, unknown>).directorState
   const legacyIntent = context.userIntent as Record<string, unknown>
   const legacyConstraints = Array.isArray(legacyIntent.constraints)
     ? legacyIntent.constraints

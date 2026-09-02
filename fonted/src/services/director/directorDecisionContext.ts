@@ -86,8 +86,6 @@ export function buildDirectorContextFromUI(input: {
     })),
     userIntent,
     currentTimeline: input.existing?.currentTimeline,
-    directorState: input.existing?.directorState,
-    conversationSummary: input.existing?.conversationSummary,
     explicitUiControls,
     slots: mergeDirectorSlots(baseSlots, runtimeSlots),
   }

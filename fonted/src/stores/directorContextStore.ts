@@ -4,9 +4,6 @@ import {
   createDefaultDirectorSlots,
   mergeDirectorSlots,
 } from '@shared/lib/director-understanding'
-import {
-  createInitialDirectorSessionState,
-} from '@shared/lib/director-state-machine'
 import type {
   DirectorContext,
   DirectorContextSlots,
@@ -15,7 +12,6 @@ import type {
   DirectorSampleVideoContext,
   DirectorUserIntent,
 } from '@shared/types/director-context'
-import type { DirectorSessionState } from '@shared/types/director-state'
 
 interface DirectorContextState {
   context: DirectorContext
@@ -25,11 +21,6 @@ interface DirectorContextState {
   setUserIntent: (patch: Partial<DirectorUserIntent>) => void
   patchSlots: (patch: Partial<DirectorContextSlots>) => void
   applyIntentResult: (result: DirectorIntentResult) => void
-  setDirectorState: (directorState?: DirectorSessionState) => void
-  updateDirectorState: (
-    updater: (state: DirectorSessionState) => DirectorSessionState,
-  ) => void
-  setConversationSummary: (conversationSummary?: string) => void
   reset: () => void
 }
 
@@ -37,7 +28,6 @@ const initialContext: DirectorContext = {
   materials: [],
   userIntent: {},
   slots: createDefaultDirectorSlots(),
-  directorState: createInitialDirectorSessionState(),
 }
 
 export const useDirectorContextStore = create<DirectorContextState>((set) => ({
@@ -111,34 +101,6 @@ export const useDirectorContextStore = create<DirectorContextState>((set) => ({
               }
             : undefined,
         }),
-      },
-    })),
-
-  setDirectorState: (directorState) =>
-    set((state) => ({
-      context: {
-        ...state.context,
-        directorState,
-      },
-    })),
-
-  updateDirectorState: (updater) =>
-    set((state) => {
-      const previous =
-        state.context.directorState ?? createInitialDirectorSessionState()
-      return {
-        context: {
-          ...state.context,
-          directorState: updater(previous),
-        },
-      }
-    }),
-
-  setConversationSummary: (conversationSummary) =>
-    set((state) => ({
-      context: {
-        ...state.context,
-        conversationSummary,
       },
     })),
 

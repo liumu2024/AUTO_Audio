@@ -188,7 +188,7 @@ export interface DirectorFinalReplyResult {
 }
 
 function summarizeCurrentTimeline(context: DirectorContext) {
-  const timeline = context.currentTimeline ?? context.directorState?.timeline
+  const timeline = context.currentTimeline
   if (!timeline) return undefined
   return {
     kind: timeline.kind,

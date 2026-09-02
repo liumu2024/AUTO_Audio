@@ -2,7 +2,6 @@ import type {
   DirectorContextSlots,
   DirectorEffectiveCreativeConfig,
 } from './director-context.js'
-import type { DirectorSessionState } from './director-state.js'
 import type { DirectorWorkspaceState } from './director-workspace-session.js'
 import type { RemotionTimelineSpecV1 } from './remotion-timeline-spec.v1.js'
 
@@ -124,7 +123,6 @@ export type DirectorAgentStreamEvent =
       }
     }
   | { type: 'assistant_reply'; message: string }
-  | { type: 'state_update'; state: DirectorSessionState }
   | {
       type: 'workspace_session'
       workspaceSessionId: string

@@ -107,7 +107,6 @@ function runtimeObservationPatch(input: DirectorAgentChatRequest) {
         ? { materials: input.context.materials }
         : {}),
       currentTimeline: input.context.currentTimeline,
-      directorState: input.context.directorState,
       slots: {
         ...(explicitUiControls?.aspectRatio ? { aspectRatio: explicitUiControls.aspectRatio } : {}),
         ...(explicitUiControls?.durationSec !== undefined ? { durationSec: explicitUiControls.durationSec } : {}),

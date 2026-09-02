@@ -12,10 +12,6 @@ import {
 } from '@/lib/api'
 import type { DirectorAgentStreamEvent } from '@shared/types/director-stream'
 import {
-  summarizeDirectorSessionState,
-  syncDirectorSessionSnapshot,
-} from '@shared/lib/director-state-machine'
-import {
   buildDirectorContextFromUI,
   buildDirectorSampleVideoFromUI,
 } from '@/services/director/directorDecisionContext'
@@ -35,10 +31,7 @@ import {
 import { useDirectorContextStore } from '@/stores/directorContextStore'
 import { useTaskStore } from '@/stores/taskStore'
 import { useV2TimelineStore } from '@/stores/v2TimelineStore'
-import type {
-  DirectorSessionState,
-  DirectorTimelineSnapshot,
-} from '@shared/types/director-state'
+import type { DirectorTimelineSnapshot } from '@shared/types/director-state'
 import type { DirectorContext } from '@shared/types/director-context'
 
 function attachmentMaterialId(attachment: InputAttachment): string {
@@ -158,38 +151,6 @@ function currentV2TimelineSnapshot(): DirectorTimelineSnapshot | undefined {
     selectedClipId: v2.selectedClipId ?? undefined,
     selectedSceneId,
   }
-}
-
-function buildV2ConversationSummary() {
-  const v2 = useV2TimelineStore.getState()
-  if (!v2.spec) return ''
-  return `Current editable video plan: ${v2.spec.scenes.length} scenes, ${v2.spec.canvas.width}x${v2.spec.canvas.height}, ${v2.spec.canvas.duration_sec}s.`
-}
-
-function buildConversationSummary() {
-  return buildV2ConversationSummary()
-}
-
-function syncDirectorStateFromUI(input: {
-  sampleUrl: string
-  isSampleParsed: boolean
-  attachments: InputAttachment[]
-  activeTaskId?: string | null
-}): DirectorSessionState {
-  const v2Timeline = currentV2TimelineSnapshot()
-  const previous = useDirectorContextStore.getState().context.directorState
-  const next = syncDirectorSessionSnapshot(previous, {
-    taskId: input.activeTaskId,
-    sampleUrl: input.sampleUrl,
-    isSampleParsed: input.isSampleParsed,
-    hasVisualMaterial: input.attachments.some(
-      (item) => item.type === 'video' || item.type === 'image',
-    ),
-    materialCount: input.attachments.length,
-    timeline: v2Timeline,
-  })
-  useDirectorContextStore.getState().setDirectorState(next)
-  return next
 }
 
 function restoreInputTrayAfterWorkspaceConflict(input: {
@@ -373,12 +334,6 @@ export function DirectorChatPanel() {
       sampleName: effectiveSampleName,
       attachments: contextAttachments,
     })
-    const directorState = syncDirectorStateFromUI({
-      sampleUrl: effectiveSampleUrl,
-      isSampleParsed: currentIsSampleParsed,
-      attachments: contextAttachments,
-      activeTaskId: useV2TimelineStore.getState().taskId ?? activeTaskId,
-    })
     const v2State = useV2TimelineStore.getState()
 
     const directorContext = buildDirectorContextFromUI({
@@ -404,14 +359,6 @@ export function DirectorChatPanel() {
           sceneCount: v2State.spec?.scenes.length,
         }
       : undefined
-    directorContext.directorState = directorState
-    directorContext.conversationSummary = [
-      buildConversationSummary(),
-      summarizeDirectorSessionState(directorState),
-    ]
-      .filter(Boolean)
-      .join('\n')
-
     addUserMessage({
       content:
         prompt ||
@@ -624,9 +571,6 @@ export function DirectorChatPanel() {
           if (event.type === 'error') {
             streamErrorMessage = event.message
             streamErrorCode = event.code ?? null
-          }
-          if (event.type === 'state_update') {
-            useDirectorContextStore.getState().setDirectorState(event.state)
           }
           if (event.type === 'workspace_session') {
             if (event.turnRequestId !== turnRequestId) return
