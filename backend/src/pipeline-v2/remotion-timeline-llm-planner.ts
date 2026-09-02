@@ -436,6 +436,9 @@ export interface V2TimelineLlmPlannerResult {
   jsonRepair?: { request: string; responseAudit?: unknown; error?: string }
 }
 
+const singleImageInputRuleZh = '- 每个 generate_video 任务的 input_asset_id 只能填写一个最相关的图片素材 ID；不得拼接、合并或列出多个 ID。'
+const singleImageInputRuleEn = 'Each generate_video job accepts exactly one input_asset_id. Choose one image ID from the catalog; never concatenate or list multiple IDs.'
+
 export class V2TimelinePlannerProtocolError extends Error {
   constructor(
     message: string,
@@ -494,6 +497,10 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
   const resolvedAssetIds = new Set(
     spec.assets.filter((asset) => Boolean(asset.src.trim())).map((asset) => asset.id),
   )
+  const reservedOutputAssetIds = new Set(
+    spec.material_jobs.flatMap((job) => job.output_asset_id ? [job.output_asset_id] : []),
+  )
+  const claimedOutputAssetIds = new Set<string>()
   const material_jobs = spec.material_jobs
     .filter((job) => !audioJobIds.has(job.id))
     .map((job) => {
@@ -543,19 +550,27 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
       const existingOutput = job.output_asset_id
         ? spec.assets.find((asset) => asset.id === job.output_asset_id)
         : undefined
-      if (job.status === 'planned' && existingOutput && existingOutput.source !== 'generated_asset') {
+      if (job.status === 'planned' && (
+        !job.output_asset_id
+        || claimedOutputAssetIds.has(job.output_asset_id)
+        || (existingOutput && existingOutput.source !== 'generated_asset')
+      )) {
         const stem = `generated_${job.id}`
         let outputAssetId = stem
         let suffix = 2
-        while (resolvedAssetIds.has(outputAssetId)) outputAssetId = `${stem}_${suffix++}`
+        while (resolvedAssetIds.has(outputAssetId) || reservedOutputAssetIds.has(outputAssetId)) {
+          outputAssetId = `${stem}_${suffix++}`
+        }
         nextJob = { ...nextJob, output_asset_id: outputAssetId }
+        reservedOutputAssetIds.add(outputAssetId)
         repairs.push({
           job_id: job.id,
           scene_id: job.scene_id,
           field: 'output_asset_id',
-          reason: '待生成结果不能覆盖已有素材，已分配独立的输出资产标识。',
+          reason: '待生成任务缺少独立输出或与其他任务冲突，已分配唯一的输出资产标识。',
         })
       }
+      if (nextJob.output_asset_id) claimedOutputAssetIds.add(nextJob.output_asset_id)
       if (
         job.status === 'fulfilled' &&
         (!job.output_asset_id || !resolvedAssetIds.has(job.output_asset_id))
@@ -700,6 +715,7 @@ export function buildV2TimelinePlannerPrompt(
     '- This V2 plan has no audio-generation tool. When the user requests a BGM strategy but provides no audio asset, describe it in notes only; do not create audio clips, empty audio assets, or generate_video jobs for music.',
     '- audio may reference only an existing asset whose type is audio. A narration or voice-direction request without supplied audio belongs in the creative brief or notes; never bind an image, video, or nonexistent asset as an audio clip.',
     '- For image-conditioned video generation, set input_asset_id to an existing image asset. Never output input_image_url; the backend binds the provider URL at execution time.',
+    singleImageInputRuleEn,
     '- When input_asset_id is used, the target scene creative_intent.description must explain which visible source-image facts are retained and which requested moving or new elements are added.',
     '- If main_video_asset_id is null, do not create user_video scenes unless another video asset exists in assets.',
     '- If reference_video_path is provided, treat it as style/structure context only; do not include it as an output asset unless it is also listed as main_video_path.',
@@ -975,6 +991,7 @@ export function buildV2TimelineRevisionPlannerPrompt(
           '',
           '本轮图片规则',
           '- image_motion 只能平移、缩放或裁切原像素。新增动作、事件、视角或扩展环境需要 ai_video + generate_video；依赖原图时，image_references 记录事实和用途，material_job 通过 input_asset_id 绑定同一素材。',
+          singleImageInputRuleZh,
         ]
       : []),
     ...(hasSampleRule
@@ -1131,7 +1148,7 @@ export function buildV2TimelineSemanticCorrectionPrompt(input: {
       creative_context: creativeContext,
     }, null, 2),
     ...(hasImageContext
-      ? ['', '真实图片输入报告', JSON.stringify(input.visualInputReport ?? null)]
+      ? ['', '图片条件生成约束', singleImageInputRuleZh, '', '真实图片输入报告', JSON.stringify(input.visualInputReport ?? null)]
       : []),
     ...(hasSampleContext
       ? ['', '相关样例理解', JSON.stringify(compactSampleUnderstanding(plannerInput))]
@@ -1491,6 +1508,7 @@ function timelineFieldRepairPrompt(input: {
       ? `Only these JSON paths may change: ${JSON.stringify(input.allowedRepairPaths)}`
       : 'This is a revision fragment; remain inside the fragment schema and its authorized revision scope.',
     'Use only server-provided asset IDs and remove or replace rejected references when the error requires it.',
+    singleImageInputRuleEn,
     'A catalog id is the assets[].id itself, not an alias. Copy that id unchanged into assets[] and use the same id for input_asset_id.',
     'To faithfully display an available image, use image_motion with a fulfilled reuse_asset job whose output_asset_id is that image id. Use ai_video only with generate_video; then scene.asset_id is the generated output and input_asset_id is the source image. Never use request_user_material for an asset already present in the server catalog.',
     'For ai_video, scene.asset_id must remain equal to its generate_video job output_asset_id. Never replace it with the input image id or add the unresolved output id to assets[].',
