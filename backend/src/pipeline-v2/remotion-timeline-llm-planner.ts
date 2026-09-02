@@ -954,8 +954,6 @@ export function buildV2TimelineRevisionPlannerPrompt(
     existingComponentIds.has(component.id)
     || (transitionScopeApplies ? component.purpose === 'transition' : Boolean(mediaScopeApplies) && component.purpose === 'scene'))
   const hasComponentRule = relevantComponents.length > 0
-    && (existingComponentIds.size > 0
-      || /组件|自定义|程序化|特殊效果|复杂动效|custom_render|component_id/i.test(input.prompt))
   const hasVisibleTextRule = input.revisionScope === 'subtitle'
     || input.revisionGroup?.items.some((item) => item.scope === 'subtitle')
   return [
