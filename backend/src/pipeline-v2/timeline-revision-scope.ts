@@ -105,11 +105,13 @@ function mergeImageReferencesForJobs(input: {
   candidateSpec: RemotionTimelineSpecV1
   jobs: RemotionTimelineSpecV1['material_jobs']
 }): RemotionTimelineSpecV1['creative_brief'] {
-  const conditionedAssetIds = new Set(input.jobs.flatMap((job) =>
-    job.input_asset_id ? [job.input_asset_id] : []))
-  if (conditionedAssetIds.size === 0) return input.baseSpec.creative_brief
+  const referencedImageAssetIds = new Set(input.jobs.flatMap((job) => [
+    ...(job.input_asset_id ? [job.input_asset_id] : []),
+    ...(job.type === 'reuse_asset' && job.output_asset_id ? [job.output_asset_id] : []),
+  ]))
+  if (referencedImageAssetIds.size === 0) return input.baseSpec.creative_brief
   const candidateReferences = (input.candidateSpec.creative_brief?.image_references ?? [])
-    .filter((reference) => conditionedAssetIds.has(reference.asset_id))
+    .filter((reference) => referencedImageAssetIds.has(reference.asset_id))
   const candidateReferenceIds = new Set(candidateReferences.map((reference) => reference.asset_id))
   const baseBrief = input.baseSpec.creative_brief
   if (!baseBrief) return input.candidateSpec.creative_brief
@@ -514,13 +516,17 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
         if (!baseJob) return job
         const candidatePrompt = job.prompt?.trim()
         const promptChanged = candidatePrompt && candidatePrompt !== baseJob.prompt?.trim()
+        const strategyPrompt = effectiveCandidateScene ? visualStrategyPrompt(effectiveCandidateScene) : ''
+        const basePrompt = baseJob.prompt?.trim()
         if (!strategyChanged && JSON.stringify(baseJob) === JSON.stringify(job)) return job
         return {
           ...job,
           status: 'planned',
-          prompt: promptChanged || !effectiveCandidateScene
+          prompt: promptChanged || !strategyPrompt
             ? candidatePrompt
-            : [baseJob.prompt?.trim(), visualStrategyPrompt(effectiveCandidateScene)].filter(Boolean).join('\n'),
+            : basePrompt?.split('\n').includes(strategyPrompt)
+              ? basePrompt
+              : [basePrompt, strategyPrompt].filter(Boolean).join('\n'),
         }
       }),
     }
@@ -845,10 +851,15 @@ export function applyV2TimelineRevisionGroupFragment(input: {
   }
 
   const targetOverlayIds = new Set(input.group.items.flatMap((item) => item.overlayIds ?? []))
+  const addsSceneCaption = input.group.items.some((item) =>
+    item.scope === 'subtitle' && !item.overlayIds?.length)
   const targetTransitionIds = new Set(input.group.items.flatMap((item) => item.transitionIds ?? []))
   const targetJobIds = new Set(input.baseSpec.material_jobs
     .filter((job) => job.scene_id === input.group.sceneId)
     .map((job) => job.id))
+  const baseTargetJobById = new Map(input.baseSpec.material_jobs
+    .filter((job) => job.scene_id === input.group.sceneId)
+    .map((job) => [job.id, job]))
   const assets = candidateAssets(input.baseSpec, input.availableAssets)
   const assetIds = new Set(assets.map((asset) => asset.id))
   const targetCandidateJobs = input.fragment.material_jobs?.filter((job) =>
@@ -856,14 +867,22 @@ export function applyV2TimelineRevisionGroupFragment(input: {
     && (
       targetJobIds.has(job.id)
       || Boolean(scopes.has('visual_strategy') && job.output_asset_id && assetIds.has(job.output_asset_id))
-    )) ?? []
-  const targetCandidateOverlays = input.fragment.overlays?.filter((item) => targetOverlayIds.has(item.id)) ?? []
+    )).map((job) => {
+      const stableOutputAssetId = baseTargetJobById.get(job.id)?.output_asset_id
+      return !job.output_asset_id && stableOutputAssetId
+        ? { ...job, output_asset_id: stableOutputAssetId }
+        : job
+    }) ?? []
+  const isTargetOverlay = (item: RemotionTimelineSpecV1['overlays'][number]) =>
+    targetOverlayIds.has(item.id)
+    || Boolean(addsSceneCaption && item.type === 'caption' && item.scene_id === input.group.sceneId)
+  const targetCandidateOverlays = input.fragment.overlays?.filter(isTargetOverlay) ?? []
   const targetTrackIds = new Set([
     ...input.baseSpec.overlays.filter((overlay) => targetOverlayIds.has(overlay.id)),
     ...targetCandidateOverlays,
   ].flatMap((overlay) => overlay.track_id ? [overlay.track_id] : []))
   const protectedTrackIds = new Set(input.baseSpec.overlays
-    .filter((overlay) => overlay.type === 'caption' && !targetOverlayIds.has(overlay.id) && overlay.track_id)
+    .filter((overlay) => overlay.type === 'caption' && !isTargetOverlay(overlay) && overlay.track_id)
     .map((overlay) => overlay.track_id as string))
   const captionTracks = input.fragment.caption_tracks
     ? mergeScopedArray({
@@ -876,10 +895,12 @@ export function applyV2TimelineRevisionGroupFragment(input: {
   const overlays = input.fragment.overlays
     ? removeRedundantCaptionTrackOverrides({
         baseOverlays: input.baseSpec.overlays,
-        candidateOverlays: mergeExistingById(
-          input.baseSpec.overlays,
-          targetCandidateOverlays,
-        ),
+        candidateOverlays: mergeScopedArray({
+          base: input.baseSpec.overlays,
+          candidate: targetCandidateOverlays,
+          isInScope: isTargetOverlay,
+          key: (overlay) => overlay.id,
+        }),
         captionTracks,
       })
     : input.baseSpec.overlays
@@ -974,9 +995,16 @@ export function resolveV2TimelineRevisionGroup(input: {
     const memberRequiredMaterialIds = Array.isArray(item.requiredMaterialIds)
       ? item.requiredMaterialIds.filter((id): id is string => typeof id === 'string')
       : undefined
-    if (scope === 'subtitle' && (!memberOverlayIds?.length || memberOverlayIds.some((id) =>
-      !input.baseSpec.overlays.some((overlay) => overlay.id === id && overlay.scene_id === sceneId)))) {
-      throw new Error('Same-scene revision group caption target is invalid.')
+    if (scope === 'subtitle') {
+      const existingSceneCaptions = input.baseSpec.overlays.filter((overlay) =>
+        overlay.type === 'caption' && overlay.scene_id === sceneId)
+      if (memberOverlayIds?.length) {
+        if (memberOverlayIds.some((id) => !existingSceneCaptions.some((overlay) => overlay.id === id))) {
+          throw new Error('Same-scene revision group caption target is invalid.')
+        }
+      } else if (existingSceneCaptions.length > 0) {
+        throw new Error('Same-scene revision group must identify existing caption overlays explicitly.')
+      }
     }
     if (scope === 'transition' && (!memberTransitionIds?.length || memberTransitionIds.some((id) =>
       !input.baseSpec.transitions.some((transition) => transition.id === id
@@ -1070,7 +1098,14 @@ export function partitionV2TimelineRevisionGroups(input: {
     if (items.length < 2) continue
     try {
       const group = resolveV2TimelineRevisionGroup({ baseSpec: input.baseSpec, items })
-      if (group) groups.push(group)
+      if (group) {
+        groups.push(group)
+      } else {
+        invalid.push({
+          callIds: items.map((item) => item.callId),
+          message: 'Same-scene revision requests could not form one compatible revision group.',
+        })
+      }
     } catch (error) {
       invalid.push({
         callIds: items.map((item) => item.callId),

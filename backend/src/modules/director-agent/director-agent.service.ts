@@ -1010,15 +1010,16 @@ export async function* streamDirectorAgentChat(
   const pendingDismissalAuthorization = pendingDismissalAuthorizationFromDirectorDecision({
     prompt: executionPrompt,
     intent: routed.conversationIntent,
-    requestedCallId: (() => {
-      const proposals = modelToolProposals.filter((proposal) => proposal.toolId === 'timeline.pending.dismiss')
-      return proposals.length === 1 && typeof proposals[0]?.arguments.callId === 'string'
-        ? proposals[0].arguments.callId
-        : undefined
-    })(),
+    requestedCallIds: modelToolProposals
+      .filter((proposal) => proposal.toolId === 'timeline.pending.dismiss')
+      .flatMap((proposal) => typeof proposal.arguments.callId === 'string'
+        ? [proposal.arguments.callId]
+        : []),
     pendingRevisions: workspaceState.pendingTimelineRevisions ?? [],
   })
   const executionContext = confirmedProposal?.executionContext
+  let dispatchContext = executionContext?.context ?? workspaceState.context
+  let dispatchRuntime = executionContext?.runtime ?? effectiveRuntime
   const dispatchWorkspace = executionContext
     ? {
         ...workspaceState,
@@ -1226,10 +1227,11 @@ export async function* streamDirectorAgentChat(
                 : undefined,
             revisionGroup: revisionGroupPrimary ? revisionGroup : undefined,
             userId,
-            context: executionContext?.context ?? workspaceState.context,
-            runtime: executionContext?.runtime ?? effectiveRuntime,
+            context: dispatchContext,
+            runtime: dispatchRuntime,
             workspace: {
               ...dispatchWorkspace,
+              context: dispatchContext,
               draftId: workspaceState.draftId,
               baseRevision: workspaceState.baseRevision,
             },
@@ -1376,17 +1378,23 @@ export async function* streamDirectorAgentChat(
       const facts = toolResultTimelineFacts(result)
       if (result.sampleUnderstanding && result.sampleSelection) {
         const understanding = result.sampleUnderstanding as V2SampleUnderstandingResult
+        const sampleVideo = {
+          ...result.sampleSelection,
+          sampleUnderstanding: understanding,
+          reference: summarizeDirectorReference(understanding),
+        }
+        const materials = dispatchContext.materials.filter(
+          (material) => material.id !== result.sampleSelection!.id,
+        )
+        dispatchContext = { ...dispatchContext, sampleVideo, materials }
+        dispatchRuntime = {
+          ...dispatchRuntime,
+          sampleUrl: result.sampleSelection.url,
+          sampleName: result.sampleSelection.name,
+          isSampleParsed: true,
+        }
         workspaceState = applyDirectorWorkspacePatch(workspaceState, {
-          context: {
-            sampleVideo: {
-              ...result.sampleSelection,
-              sampleUnderstanding: understanding,
-              reference: summarizeDirectorReference(understanding),
-            },
-            materials: workspaceState.context.materials.filter(
-              (material) => material.id !== result.sampleSelection!.id,
-            ),
-          },
+          context: { sampleVideo, materials },
         })
       }
       if (result.draft && facts) {
@@ -1509,7 +1517,18 @@ export async function* streamDirectorAgentChat(
       ? stripUnsupportedPersistenceClaims(modelAssistantMessage)
         || '我理解了你的意思，可以继续按这个方向讨论。'
       : modelAssistantMessage
-  const finalReplyFacts = actionReceipts.map((receipt) => {
+  const seenDismissalOutcomes = new Set<string>()
+  const userFacingActionReceipts = actionReceipts.filter((receipt) => {
+    if (receipt.kind !== 'tool.call' || !receipt.callId) return true
+    if (receipt.toolId === 'timeline.pending.dismiss') {
+      const key = `${receipt.status}:${receipt.reason ?? ''}`
+      if (seenDismissalOutcomes.has(key)) return false
+      seenDismissalOutcomes.add(key)
+    }
+    const group = revisionGroupByCallId.get(receipt.callId)
+    return !group || group.items[0]?.callId === receipt.callId
+  })
+  const finalReplyFacts = userFacingActionReceipts.map((receipt) => {
     const toolResult = receipt.kind === 'tool.call'
       ? toolResults.find((item) => item.callId === receipt.callId)
       : undefined

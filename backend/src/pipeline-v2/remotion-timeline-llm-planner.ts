@@ -265,10 +265,19 @@ function revisionGroupFragmentJsonSchema(input: V2RemotionTimelinePlannerInput):
   }
   if (scopes.has('subtitle')) {
     const ids = [...new Set(group.items.flatMap((item) => item.overlayIds ?? []))]
+    const addsSceneCaption = group.items.some((item) =>
+      item.scope === 'subtitle' && !item.overlayIds?.length)
     required.push('overlays', 'caption_tracks')
     properties.overlays = {
-      type: 'array', minItems: ids.length, maxItems: ids.length,
-      items: fragmentItemSchema(overlayItem, { id: { type: 'string', enum: ids } }),
+      type: 'array',
+      minItems: addsSceneCaption ? 1 : ids.length,
+      ...(addsSceneCaption ? {} : { maxItems: ids.length }),
+      items: fragmentItemSchema(overlayItem, addsSceneCaption
+        ? {
+            type: { type: 'string', const: 'caption' },
+            scene_id: { type: 'string', const: group.sceneId },
+          }
+        : { id: { type: 'string', enum: ids } }),
     }
     properties.caption_tracks = { type: 'array', items: fragmentItemSchema(trackItem) }
   }
@@ -421,7 +430,7 @@ export interface V2TimelineLlmPlannerResult {
   extractionReport: StructuredJsonExtractionReport
   promptText: string
   visualInputReport: V2TimelineVisualInputReport
-  repairs: Array<{ job_id: string; scene_id: string; field: 'prompt' | 'status' | 'audio' | 'asset_id'; reason: string }>
+  repairs: Array<{ job_id: string; scene_id: string; field: 'prompt' | 'status' | 'audio' | 'asset_id' | 'input_asset_id' | 'provider'; reason: string }>
   structuredOutput: { requested: boolean; providerFallback: boolean; reason?: string }
   jsonRepair?: { request: string; responseAudit?: unknown; error?: string }
 }
@@ -473,6 +482,9 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
       .filter((asset) => asset.type === 'audio' && unresolvedGeneratedAssets.has(asset.id))
       .map((asset) => asset.id),
   )
+  const audioAssetIds = new Set(
+    spec.assets.filter((asset) => asset.type === 'audio').map((asset) => asset.id),
+  )
   const audioJobIds = new Set(
     spec.material_jobs
       .filter((job) => job.type === 'generate_video' && job.output_asset_id && unsupportedAudioAssets.has(job.output_asset_id))
@@ -484,6 +496,38 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
   const material_jobs = spec.material_jobs
     .filter((job) => !audioJobIds.has(job.id))
     .map((job) => {
+      if (job.type === 'reuse_asset') {
+        let nextJob = job
+        if (job.input_asset_id) {
+          const { input_asset_id: _discarded, ...withoutInput } = nextJob
+          nextJob = withoutInput
+          repairs.push({
+            job_id: job.id,
+            scene_id: job.scene_id,
+            field: 'input_asset_id',
+            reason: 'reuse_asset 直接复用 output_asset_id，不使用生成任务专属的 input_asset_id。',
+          })
+        }
+        if (job.output_asset_id && resolvedAssetIds.has(job.output_asset_id) && job.status !== 'fulfilled') {
+          nextJob = { ...nextJob, status: 'fulfilled' }
+          repairs.push({
+            job_id: job.id,
+            scene_id: job.scene_id,
+            field: 'status',
+            reason: 'reuse_asset 已引用真实可用素材，执行状态已归一为 fulfilled。',
+          })
+        }
+        if (job.provider !== 'none') {
+          nextJob = { ...nextJob, provider: 'none' }
+          repairs.push({
+            job_id: job.id,
+            scene_id: job.scene_id,
+            field: 'provider',
+            reason: 'reuse_asset 不调用外部生成服务，provider 已归一为 none。',
+          })
+        }
+        return nextJob
+      }
       if (job.type !== 'generate_video') return job
       let nextJob = job
       if (
@@ -543,13 +587,26 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
     })
     return { ...scene, asset_id: outputAssetId }
   })
-  const audio = spec.audio?.filter((clip) => !unsupportedAudioAssets.has(clip.asset_id))
+  const audio = spec.audio?.filter((clip) => {
+    const keep = audioAssetIds.has(clip.asset_id) && !unsupportedAudioAssets.has(clip.asset_id)
+    if (!keep && !unsupportedAudioAssets.has(clip.asset_id)) {
+      repairs.push({
+        job_id: clip.id,
+        scene_id: 'timeline',
+        field: 'audio',
+        reason: '音轨只能引用已存在的音频素材；已隔离错误引用图片、视频或不存在素材的可选音轨。',
+      })
+    }
+    return keep
+  })
   const nextSpec = {
     ...spec,
     ...(normalizedScenes.some((scene, index) => scene !== spec.scenes[index]) ? { scenes: normalizedScenes } : {}),
     ...(assets.length !== spec.assets.length ? { assets } : {}),
     ...(audio?.length !== spec.audio?.length ? { audio } : {}),
-    ...(material_jobs.length !== spec.material_jobs.length || repairs.some((repair) => repair.field === 'prompt' || repair.field === 'status') ? { material_jobs } : {}),
+    ...(material_jobs.length !== spec.material_jobs.length || repairs.some((repair) =>
+      repair.field === 'prompt' || repair.field === 'status' || repair.field === 'input_asset_id'
+      || repair.field === 'provider') ? { material_jobs } : {}),
   }
   return { spec: repairs.length || assets.length !== spec.assets.length || audio?.length !== spec.audio?.length ? nextSpec : spec, repairs }
 }
@@ -597,6 +654,7 @@ export function buildV2TimelinePlannerPrompt(
     '- Remotion may compose scenes, transitions, captions, text cards, image motion, labels, shapes, and light sweep overlays.',
     '- Realistic missing visual content must be represented as material_jobs with type "generate_video".',
     '- image_motion cannot invent new visual elements; it only pans, zooms, or crops pixels from its bound image asset. If the requested shot adds a person, animal, vehicle, weather event, or other content absent from the source image, use ai_video with a generate_video job.',
+    '- To faithfully display an available image, use an image_motion scene bound to that image and a fulfilled reuse_asset job whose output_asset_id is the same image id. When the material already exists in material_assets, never use request_user_material for it.',
     '- remotion_card is an intentional typography or motion-graphics scene, not a placeholder for missing photographic footage. Use it only when a card or graphic is part of the creative design; use ai_video with generate_video for a requested realistic moving shot.',
     '- The planner does not own execution status. New generate_video jobs must use status "planned"; only the backend may mark them fulfilled after a real output asset exists.',
     '- creative_brief.direction is the single whole-video creative direction. material_job.prompt contains only scene-specific semantics.',
@@ -606,6 +664,7 @@ export function buildV2TimelinePlannerPrompt(
     '- Never output creative_brief.planning_gaps. Only the server records unresolved planning work.',
     '- assets contains only already-resolved, renderable assets and every asset src must be non-empty. Do not add an empty placeholder asset for a planned generation; reference its material_job output_asset_id from the scene instead.',
     '- This V2 plan has no audio-generation tool. When the user requests a BGM strategy but provides no audio asset, describe it in notes only; do not create audio clips, empty audio assets, or generate_video jobs for music.',
+    '- audio may reference only an existing asset whose type is audio. A narration or voice-direction request without supplied audio belongs in the creative brief or notes; never bind an image, video, or nonexistent asset as an audio clip.',
     '- For image-conditioned video generation, set input_asset_id to an existing image asset. Never output input_image_url; the backend binds the provider URL at execution time.',
     '- When input_asset_id is used, the target scene creative_intent.description must explain which visible source-image facts are retained and which requested moving or new elements are added.',
     '- If main_video_asset_id is null, do not create user_video scenes unless another video asset exists in assets.',
@@ -737,6 +796,7 @@ function revisionFragmentScopeRules(input: V2RemotionTimelinePlannerInput): stri
   ]
   if (input.revisionScope === 'structure') return [
     '- structure：只返回授权连续范围的替换 scenes，以及它们需要的 transitions、overlays、caption tracks、material jobs 和 image references；不得返回范围外受保护镜头，范围边界由服务端提供。',
+    '- 插入或拆分镜头时，未被删除或合并的已有镜头及其 material jobs 必须保留稳定 ID；只给真正新增的对象分配不冲突的新 ID，不得通过整体顺移编号伪装新增。',
     input.revisionDurationMode === 'resize_timeline'
       ? '- 本轮明确允许改变范围时长；保持范围内场景相对时间一致。'
       : input.revisionContext?.constraints
@@ -1061,17 +1121,23 @@ export function assertRequiredMaterialCoverage(
 ) {
   const required = new Set(input.requiredMaterialIds ?? [])
   if (required.size === 0) return
-  const scenes = revisionFragment ? revisionFragment.scenes ?? [] : spec.scenes
-  const overlays = revisionFragment ? revisionFragment.overlays ?? [] : spec.overlays
-  const materialJobs = revisionFragment ? revisionFragment.material_jobs ?? [] : spec.material_jobs
-  const used = new Set<string>()
-  for (const scene of scenes) if (scene.asset_id) used.add(scene.asset_id)
-  for (const overlay of overlays) if (overlay.asset_id) used.add(overlay.asset_id)
-  if (!revisionFragment) for (const clip of spec.audio ?? []) used.add(clip.asset_id)
-  for (const job of materialJobs) {
-    if (job.input_asset_id) used.add(job.input_asset_id)
+  const collectUsedMaterialIds = (candidate: {
+    scenes?: RemotionTimelineSpecV1['scenes']
+    overlays?: RemotionTimelineSpecV1['overlays']
+    audio?: RemotionTimelineSpecV1['audio']
+    material_jobs?: RemotionTimelineSpecV1['material_jobs']
+  }) => {
+    const used = new Set<string>()
+    for (const scene of candidate.scenes ?? []) if (scene.asset_id) used.add(scene.asset_id)
+    for (const overlay of candidate.overlays ?? []) if (overlay.asset_id) used.add(overlay.asset_id)
+    for (const clip of candidate.audio ?? []) used.add(clip.asset_id)
+    for (const job of candidate.material_jobs ?? []) if (job.input_asset_id) used.add(job.input_asset_id)
+    return used
   }
-  const missing = [...required].filter((id) => !used.has(id))
+  const usedInSpec = collectUsedMaterialIds(spec)
+  const usedInFragment = revisionFragment ? collectUsedMaterialIds(revisionFragment) : undefined
+  const missing = [...required].filter((id) =>
+    !usedInSpec.has(id) || (usedInFragment !== undefined && !usedInFragment.has(id)))
   if (missing.length > 0) {
     throw timelineFieldRepairError(
       `Timeline does not use required material IDs: ${missing.join(', ')}`,
@@ -1369,6 +1435,7 @@ function timelineFieldRepairPrompt(input: {
       : 'This is a revision fragment; remain inside the fragment schema and its authorized revision scope.',
     'Use only server-provided asset IDs and remove or replace rejected references when the error requires it.',
     'A catalog id is the assets[].id itself, not an alias. Copy that id unchanged into assets[] and use the same id for input_asset_id.',
+    'To faithfully display an available image, use image_motion with a fulfilled reuse_asset job whose output_asset_id is that image id. Use ai_video only with generate_video; then scene.asset_id is the generated output and input_asset_id is the source image. Never use request_user_material for an asset already present in the server catalog.',
     'For ai_video, scene.asset_id must remain equal to its generate_video job output_asset_id. Never replace it with the input image id or add the unresolved output id to assets[].',
     `Server-owned asset catalog (IDs and types only): ${JSON.stringify(input.assets)}`,
     `Authoritative revision constraints: ${JSON.stringify(input.revisionConstraints ?? null)}`,

@@ -328,6 +328,8 @@ function projectV2TimelineRevisionGroupDigest(
 ): V2TimelineFactDigest {
   const scopes = new Set(group.items.map((item) => item.scope))
   const overlayIds = new Set(group.items.flatMap((item) => item.overlayIds ?? []))
+  const includesSceneCaptionAdd = group.items.some((item) =>
+    item.scope === 'subtitle' && !item.overlayIds?.length)
   const transitionIds = new Set(group.items.flatMap((item) => item.transitionIds ?? []))
   const sceneIds = new Set([group.sceneId])
   for (const transition of digest.transitions) {
@@ -341,7 +343,8 @@ function projectV2TimelineRevisionGroupDigest(
       : undefined,
     scenes: digest.scenes.filter((scene) => sceneIds.has(scene.id)).map((scene) =>
       scene.id === group.sceneId ? scene : { ...scene, material_jobs: [] }),
-    visible_text: digest.visible_text.filter((item) => overlayIds.has(item.id)),
+    visible_text: digest.visible_text.filter((item) =>
+      overlayIds.has(item.id) || Boolean(includesSceneCaptionAdd && item.scene_id === group.sceneId)),
     transitions: digest.transitions.filter((transition) => transitionIds.has(transition.id)),
     audio: [],
     notes: [],

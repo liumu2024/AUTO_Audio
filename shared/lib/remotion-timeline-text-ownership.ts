@@ -45,7 +45,7 @@ function sceneForOverlay(
     return scenes.find(
       (scene) =>
         overlay.start_sec >= scene.start_sec &&
-        overlay.start_sec <= scene.start_sec + scene.duration_sec,
+        overlay.start_sec < scene.start_sec + scene.duration_sec,
     )
   }
   return undefined

@@ -31,7 +31,7 @@ function sceneForOverlay(overlay, scenes) {
         return scenes.find((scene) => scene.id === overlay.scene_id);
     if (isFiniteNumber(overlay.start_sec)) {
         return scenes.find((scene) => overlay.start_sec >= scene.start_sec &&
-            overlay.start_sec <= scene.start_sec + scene.duration_sec);
+            overlay.start_sec < scene.start_sec + scene.duration_sec);
     }
     return undefined;
 }

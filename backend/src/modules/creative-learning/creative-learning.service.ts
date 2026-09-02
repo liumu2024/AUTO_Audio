@@ -115,11 +115,45 @@ const MIN_INDEPENDENT_KNOWLEDGE_SOURCES = 2
 
 function parseStructured<T>(schema: z.ZodType<T>, raw: unknown): T {
   const extracted = extractStructuredJsonCandidate(raw, (candidate) => schema.safeParse(candidate).success)
+  if (extracted.candidate === null) {
+    throw new Error(extracted.report.failure_reason ?? 'Structured learning response is invalid.')
+  }
   return schema.parse(extracted.candidate)
 }
 
-async function defaultObserveUserTurn(input: Parameters<NonNullable<CreativeLearningDependencies['observeUserTurn']>>[0]) {
-  const response = await callResponsesApi({
+async function requestStructuredLearningResult<T>(input: {
+  schema: z.ZodType<T>
+  promptText: string
+  outputName: string
+  maxOutputTokens: number
+  responsesApi?: typeof callResponsesApi
+}) {
+  const responsesApi = input.responsesApi ?? callResponsesApi
+  const request = (retry: boolean) => responsesApi({
+    promptText: retry
+      ? `${input.promptText}\n上次响应未形成完整、合规的结构化结果。请重新判断并只输出完整 JSON。`
+      : input.promptText,
+    maxOutputTokens: input.maxOutputTokens,
+    structuredOutput: {
+      name: input.outputName,
+      schema: z.toJSONSchema(input.schema, { target: 'draft-7' }) as Record<string, unknown>,
+    },
+  })
+  const firstResponse = await request(false)
+  try {
+    return parseStructured(input.schema, firstResponse.raw)
+  } catch {
+    const retryResponse = await request(true)
+    return parseStructured(input.schema, retryResponse.raw)
+  }
+}
+
+export async function defaultObserveUserTurn(
+  input: Parameters<NonNullable<CreativeLearningDependencies['observeUserTurn']>>[0],
+  responsesApi: typeof callResponsesApi = callResponsesApi,
+) {
+  return requestStructuredLearningResult({
+    schema: MemoryDecisionSchema,
     promptText: [
       '你负责从用户本轮原话中识别可长期复用的创作偏好证据，不负责回复用户、修改项目要求或创建视频方案。',
       '只提取用户明确表达的长期偏好，或可作为候选观察的弱偏好信号。单次项目对象、故事内容、镜头操作、交付参数和当前实现要求不是长期偏好。',
@@ -132,20 +166,18 @@ async function defaultObserveUserTurn(input: Parameters<NonNullable<CreativeLear
       `recalledMemories=${JSON.stringify(input.recalledMemories)}`,
       '只输出符合 JSON Schema 的结果。',
     ].join('\n'),
-    maxOutputTokens: 1_200,
-    structuredOutput: {
-      name: 'creative_memory_observations',
-      schema: z.toJSONSchema(MemoryDecisionSchema, { target: 'draft-7' }) as Record<string, unknown>,
-    },
+    maxOutputTokens: 2_400,
+    outputName: 'creative_memory_observations',
+    responsesApi,
   })
-  return parseStructured(MemoryDecisionSchema, response.raw)
 }
 
 async function defaultJudgeMemoryRelation(
   observation: CreativeMemoryLearningObservation,
   candidates: Array<Pick<CreativeMemoryRecord, 'id' | 'statement' | 'scopeType' | 'status'>>,
 ) {
-  const response = await callResponsesApi({
+  return requestStructuredLearningResult({
+    schema: MemoryRelationSchema,
     promptText: [
       '判断一条新的用户创作偏好与候选偏好的语义关系。只判断偏好对象、属性、方向和适用条件，不按表面共享词语合并。',
       'equivalent 表示可以作为同一偏好累计证据；contradictory 表示相同对象与条件下方向相反；其他情况使用 unrelated。',
@@ -154,20 +186,17 @@ async function defaultJudgeMemoryRelation(
       `candidates=${JSON.stringify(candidates)}`,
       '只输出符合 JSON Schema 的结果。',
     ].join('\n'),
-    maxOutputTokens: 300,
-    structuredOutput: {
-      name: 'creative_memory_relation',
-      schema: z.toJSONSchema(MemoryRelationSchema, { target: 'draft-7' }) as Record<string, unknown>,
-    },
+    maxOutputTokens: 800,
+    outputName: 'creative_memory_relation',
   })
-  return parseStructured(MemoryRelationSchema, response.raw)
 }
 
 async function defaultJudgeKnowledgeRelation(
   observation: { statement: string; applicability: string },
   candidates: Array<Pick<CreativeKnowledgeRecord, 'id' | 'statement' | 'applicability' | 'status'>>,
 ) {
-  const response = await callResponsesApi({
+  return requestStructuredLearningResult({
+    schema: KnowledgeRelationSchema,
     promptText: [
       '判断新提取的创作方法与候选知识是否表达同一种可迁移方法。只有方法、目的和适用条件基本一致时才是 equivalent；共享题材词但方法不同必须是 unrelated。',
       'targetId 只能来自 candidates；unrelated 不填写 targetId。低置信度时选择 unrelated。',
@@ -175,13 +204,9 @@ async function defaultJudgeKnowledgeRelation(
       `candidates=${JSON.stringify(candidates)}`,
       '只输出符合 JSON Schema 的结果。',
     ].join('\n'),
-    maxOutputTokens: 300,
-    structuredOutput: {
-      name: 'creative_knowledge_relation',
-      schema: z.toJSONSchema(KnowledgeRelationSchema, { target: 'draft-7' }) as Record<string, unknown>,
-    },
+    maxOutputTokens: 800,
+    outputName: 'creative_knowledge_relation',
   })
-  return parseStructured(KnowledgeRelationSchema, response.raw)
 }
 
 function receiptStatus(changes: unknown[], errors: string[]) {

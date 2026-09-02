@@ -65,7 +65,7 @@ const scopedTimelinePatchArgumentsSchema = z.discriminatedUnion('scope', [
     instruction: patchInstructionSchema,
     resolvesPendingCallId: resolvesPendingCallIdSchema,
   }).strict(),
-  z.object({ scope: z.literal('scene'), sceneId: z.string().trim().min(1).max(200).optional(), requiredMaterialIds: requiredMaterialIdsSchema, instruction: patchInstructionSchema, resolvesPendingCallId: resolvesPendingCallIdSchema }).strict(),
+  z.object({ scope: z.literal('scene'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema, resolvesPendingCallId: resolvesPendingCallIdSchema }).strict(),
   z.object({
     scope: z.literal('structure'),
     sceneIds: z.array(z.string().trim().min(1).max(200)).min(1).max(20)
@@ -238,7 +238,7 @@ export const V2_AGENT_TOOLS: readonly V2AgentToolDefinition[] = [
   { id: 'material.inspect', name: '检查素材', summary: '检查已上传的候选素材与可用角色。', status: 'available', effect: 'read', cost: 'none', skills: ['v2-timeline-authoring'], inputSchema: materialInspectInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '补充可用素材或继续文生视频。' },
   { id: 'timeline.plan', name: '创建方案', summary: '根据当前输入创建完整、可编辑的视频方案。', status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'sample-reference-analysis'], inputSchema: timelinePlanInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保留当前对话信息，修正要求后重新规划。' },
   { id: 'timeline.patch', name: '局部修订', summary: `按 V2 范围修订已有草稿：字幕（subtitle）、单镜头内容（scene）、连续镜头结构调整（structure）、单镜头视觉呈现（visual_strategy）、一个或多个明确转场（transition）、全片总纲或整案重写（global）。内置转场为 ${REMOTION_TIMELINE_TRANSITION_TYPES.join('、')}；其他效果使用已注册或新创作的 transition custom_render。`, status: 'available', effect: 'draft', cost: 'low', skills: ['v2-timeline-authoring', 'subtitle-track-authoring'], inputSchema: timelinePatchInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: false, recovery: '保持基础版本，缩小或澄清修订范围后重试。' },
-  { id: 'timeline.pending.dismiss', name: '放弃失败修改', summary: '仅在用户明确放弃一项已记录的失败修改时解除等待状态；不会改变当前方案。', status: 'available', effect: 'draft', cost: 'none', skills: ['v2-timeline-authoring'], inputSchema: timelinePendingDismissInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '保留当前方案与待处理项；请明确选择要放弃的失败修改。' },
+  { id: 'timeline.pending.dismiss', name: '放弃失败修改', summary: '仅在用户明确放弃一项或多项已记录的失败修改时解除对应等待状态；不会改变当前方案。', status: 'available', effect: 'draft', cost: 'none', skills: ['v2-timeline-authoring'], inputSchema: timelinePendingDismissInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '保留当前方案与待处理项；请明确选择要放弃的失败修改。' },
   { id: 'timeline.render', name: '生成成片', summary: '根据已经保存的当前方案生成成片。', status: 'available', effect: 'delivery', cost: 'external', skills: ['v2-render-delivery'], inputSchema: timelineRenderInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '保留当前方案与失败原因，修复后由用户重新确认。' },
   { id: 'audio.plan', name: '规划音频', summary: '未来独立音频轨规划接口。', status: 'planned', effect: 'draft', cost: 'low', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },
   { id: 'audio.generate_tts', name: '生成旁白', summary: '未来 TTS 旁白生成接口。', status: 'planned', effect: 'delivery', cost: 'external', skills: [], inputSchema: emptyInputSchema, outputSchema: objectOutputSchema, requiresExplicitAuthorization: true, recovery: '当前未启用。' },
