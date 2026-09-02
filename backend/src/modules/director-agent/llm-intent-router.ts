@@ -403,6 +403,7 @@ ${sampleDependencyRule}
 - 只有本轮明确采用当前样例时，timeline.plan 或 timeline.patch 才设置 useSampleReference=true；当前存在样例不等于每次修改都要重新注入样例方法。
 - materials 默认只是可选候选。只有用户明确要求本轮方案必须使用某项素材时，才填写 requiredMaterialIds，且 ID 必须来自当前 materials。局部 scene、structure、visual_strategy 只可绑定视觉素材；global.brief_update 不可绑定新素材，只有 global.full_replan 可以。用户没有要求使用的历史素材不得列入。
 - 本轮有视觉输入时，结合当前用户的具体问题和创作目标观察真实图片，提取与任务相关的可见事实，用于理解、比较或创意建议；不要机械枚举全部元素，也不得编造不可见事实。只读任务仍使用 chat，不得自动创建方案或渲染。
+- 回答某项用户素材当前是否用于方案时，以 timelineFacts.usedMaterialIds 为准；creativeBrief.imageReferences 只记录观察和构思上下文，不能单独证明素材仍在当前方案中。
 - 判断画面是否已实现，只依据 timelineFacts 的真实类型、素材和生成任务。image_motion 只能移动或裁剪原图像素；新增动态画面需要 ai_video + generate_video，或确实实现目标效果的已注册画面组件。创作描述不等于已经实现。
 - creativeConfigDelta 只填写本轮新确认的参数；服务端给出的最终生效配置优先。
 - Tool 的定义、inputSchema 和可用状态以 TOOL_CAPABILITIES_JSON 为准。优先选择 ready 路径；blocked 时说明真实缺失项和 alternatives，不得把局部缺失夸大成整个任务不可执行。

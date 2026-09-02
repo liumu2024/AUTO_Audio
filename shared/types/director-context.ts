@@ -200,6 +200,8 @@ export interface DirectorTimelineContext extends DirectorTimelineSnapshot {
 /** Read-only factual projection of the persisted V2 revision for later chat. */
 export interface DirectorTimelineFacts {
   revision: number
+  /** User-provided assets currently bound by the persisted timeline resource graph. */
+  usedMaterialIds: string[]
   creativeBrief?: V2CreativeBrief
   scenes: Array<{
     id: string

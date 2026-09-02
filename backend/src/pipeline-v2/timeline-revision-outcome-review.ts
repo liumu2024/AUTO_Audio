@@ -398,8 +398,20 @@ export function buildDirectorTimelineFacts(
   spec: RemotionTimelineSpecV1,
 ): DirectorTimelineFacts {
   const digest = buildV2TimelineFactDigest(spec)
+  const referencedMaterialIds = new Set([
+    ...spec.scenes.flatMap((scene) => scene.asset_id ? [scene.asset_id] : []),
+    ...spec.overlays.flatMap((overlay) => overlay.asset_id ? [overlay.asset_id] : []),
+    ...(spec.audio ?? []).map((clip) => clip.asset_id),
+    ...spec.material_jobs.flatMap((job) => [
+      ...(job.input_asset_id ? [job.input_asset_id] : []),
+      ...(job.type === 'reuse_asset' && job.output_asset_id ? [job.output_asset_id] : []),
+    ]),
+  ])
   return {
     revision,
+    usedMaterialIds: spec.assets
+      .filter((asset) => asset.source === 'user_asset' && referencedMaterialIds.has(asset.id))
+      .map((asset) => asset.id),
     creativeBrief: digest.creative_brief,
     scenes: digest.scenes.map((scene) => ({
       id: scene.id,
