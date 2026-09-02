@@ -346,6 +346,7 @@ export function buildDirectorModelPrompt(input: DirectorPromptInput) {
   const revisionRules = hasDraft
     ? `修改现有方案：
 - 当前已有草稿，修改使用 timeline.patch，不得再次使用 timeline.plan。目标 ID 必须来自 timelineFacts；界面选中项不能替模型补全目标，目标不明确时先澄清。
+- 当用户的指代、相对位置或描述可匹配多个镜头、字幕或转场时，不得自行挑选最像的对象；使用 clarify 请用户补充到唯一目标，且 toolRequests 为空。
 - 修改具体字幕使用 subtitle，并传入目标 overlayIds；如果是给明确镜头新增字幕，且 timelineFacts.visibleText 中没有该镜头的现有字幕，则传 sceneId 并省略 overlayIds，不得预先编造字幕 ID。修改具体转场使用 transition，并传入全部目标 transitionIds。镜头增删、拆分或合并使用 structure 和连续 sceneIds；默认 durationMode=preserve_range，只有用户明确改变镜头或全片总时长时才用 resize_timeline。
 - structure.sceneIds 只列当前草稿中被调整或替换的连续已有镜头。新增镜头不得预先编造 ID，由 Planner 在该范围内创建。
 - 全片表达方向调整使用 global.brief_update；只有用户明确推翻整案时才使用 global.full_replan。
