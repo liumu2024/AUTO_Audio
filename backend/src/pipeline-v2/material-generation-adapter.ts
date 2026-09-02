@@ -23,7 +23,11 @@ export interface V2MaterialGenerationResult {
   asset?: V2GeneratedMaterialAsset
   providerTaskId?: string
   submissionState?: 'not_submitted' | 'submitted' | 'unknown'
-  failureCode?: 'provider_submit_state_unknown' | 'provider_receipt_persist_failed'
+  failureCode?:
+    | 'provider_submit_state_unknown'
+    | 'provider_receipt_persist_failed'
+    | 'provider_task_pending'
+    | 'provider_task_terminal'
   metadata?: Record<string, unknown>
   error?: string
 }
@@ -35,6 +39,11 @@ export interface V2MaterialGenerationAdapter {
       onProviderTaskSubmitted?: (providerTaskId: string) => void | Promise<void>
       signal?: AbortSignal
     },
+  ): Promise<V2MaterialGenerationResult>
+  resume?(
+    input: V2MaterialGenerationRequest,
+    providerTaskId: string,
+    options?: { signal?: AbortSignal },
   ): Promise<V2MaterialGenerationResult>
   getTaskStatus?(providerTaskId: string): Promise<{
     status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'unknown'

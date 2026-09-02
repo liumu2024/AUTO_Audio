@@ -139,6 +139,68 @@ async function generateWithIdempotency(input: {
       })),
     }
   }
+  const recoverReceipt = async (receipt: V2IdempotencyReceiptRecord) => {
+    if (receipt.status === 'completed' && receipt.resultRef) {
+      const readable = !path.isAbsolute(receipt.resultRef) || await isReadableVideo(receipt.resultRef)
+      if (readable) {
+        let replaySource = receipt.resultRef
+        if (input.outputDir && path.isAbsolute(receipt.resultRef)) {
+          const replayDir = path.join(input.outputDir, 'timeline-idempotent-replay')
+          await mkdir(replayDir, { recursive: true })
+          replaySource = path.join(replayDir, `${input.outputAssetId.replace(/[^a-zA-Z0-9_.-]/g, '_')}.mp4`)
+          if (path.resolve(receipt.resultRef) !== path.resolve(replaySource)) {
+            await copyFile(receipt.resultRef, replaySource)
+          }
+        }
+        return {
+          receipt,
+          generated: {
+            ok: true,
+            submissionState: receipt.providerTaskId ? 'submitted' as const : 'not_submitted' as const,
+            providerTaskId: receipt.providerTaskId,
+            asset: { id: input.outputAssetId, type: 'video' as const, src: replaySource, source: 'generated_asset' as const },
+          },
+        }
+      }
+    }
+    if (receipt.providerTaskId && input.adapter.resume) {
+      const generated: V2MaterialGenerationResult = await input.adapter.resume(
+        input.request,
+        receipt.providerTaskId,
+        { signal: input.signal },
+      )
+        .catch((error: unknown) => ({
+          ok: false,
+          providerTaskId: receipt.providerTaskId,
+          submissionState: 'submitted' as const,
+          error: error instanceof Error ? error.message : String(error),
+        }))
+      if (generated.failureCode !== 'provider_task_terminal') return { generated, receipt }
+    }
+    if (receipt.status === 'running') {
+      return {
+        receipt,
+        generated: {
+          ok: false,
+          providerTaskId: receipt.providerTaskId,
+          submissionState: receipt.providerTaskId ? 'submitted' as const : 'not_submitted' as const,
+          failureCode: 'provider_task_pending' as const,
+          error: receipt.failure?.message ?? 'Material generation is still running.',
+        },
+      }
+    }
+    return undefined
+  }
+  const priorReceipts = await input.context.repository.list({
+    userId: input.context.userId,
+    draftId: input.context.draftId,
+    operation: 'material.generate',
+  })
+  for (const receipt of priorReceipts.reverse()) {
+    if (receipt.requestHash !== input.requestFingerprint) continue
+    const recovered = await recoverReceipt(receipt)
+    if (recovered) return recovered
+  }
   const idempotencyKey = v2IdempotencyRequestHash({ renderKey: input.context.renderKey, jobId: input.jobId })
   const reservation = await input.context.repository.reserve({
     userId: input.context.userId,
@@ -150,26 +212,8 @@ async function generateWithIdempotency(input: {
   })
   if (reservation.kind === 'replay') {
     const receipt = reservation.receipt
-    if (receipt.status === 'completed' && receipt.resultRef) {
-      let replaySource = receipt.resultRef
-      if (input.outputDir && path.isAbsolute(receipt.resultRef)) {
-        const replayDir = path.join(input.outputDir, 'timeline-idempotent-replay')
-        await mkdir(replayDir, { recursive: true })
-        replaySource = path.join(replayDir, `${input.outputAssetId.replace(/[^a-zA-Z0-9_.-]/g, '_')}.mp4`)
-        if (path.resolve(receipt.resultRef) !== path.resolve(replaySource)) {
-          await copyFile(receipt.resultRef, replaySource)
-        }
-      }
-      return {
-        receipt,
-        generated: {
-          ok: true,
-          submissionState: receipt.providerTaskId ? 'submitted' : 'not_submitted',
-          providerTaskId: receipt.providerTaskId,
-          asset: { id: input.outputAssetId, type: 'video', src: replaySource, source: 'generated_asset' },
-        },
-      }
-    }
+    const recovered = await recoverReceipt(receipt)
+    if (recovered) return recovered
     return {
       receipt,
       generated: {
@@ -209,15 +253,19 @@ async function generateWithIdempotency(input: {
     : await startGeneration()
   const generated: V2MaterialGenerationResult = await started.generation
   if (!generated.ok) {
-    await input.context.repository.update({
+    const pending = generated.failureCode === 'provider_task_pending'
+    const receipt = await input.context.repository.update({
       id: reservation.receipt.id,
-      status: 'failed',
+      ...(pending ? { phase: 'polling' as const } : { status: 'failed' as const }),
       providerTaskId: generated.providerTaskId,
-      failure: {
-        code: generated.failureCode ?? 'material_generation_failed',
-        message: generated.error ?? 'Material generation failed.',
-      },
+      ...(!pending ? {
+        failure: {
+          code: generated.failureCode ?? 'material_generation_failed',
+          message: generated.error ?? 'Material generation failed.',
+        },
+      } : {}),
     })
+    return { generated, receipt }
   }
   return { generated, receipt: reservation.receipt }
 }
@@ -550,7 +598,7 @@ export async function resolveRemotionTimelineMaterialJobs(input: {
         standardized_src: normalized.standardizedSrc,
         output_sha256: path.isAbsolute(normalized.asset.src) ? await sha256File(normalized.asset.src) : undefined,
       }
-      if (execution.receipt && input.idempotency && execution.receipt.status === 'running') {
+      if (execution.receipt && input.idempotency) {
         await input.idempotency.repository.update({
           id: execution.receipt.id,
           status: 'completed',

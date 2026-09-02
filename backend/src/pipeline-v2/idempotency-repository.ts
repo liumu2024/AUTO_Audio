@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type { Prisma } from '@prisma/client'
+import { Prisma } from '@prisma/client'
 
 import { prisma } from '../shared/prisma.service.js'
 
@@ -208,7 +208,9 @@ export function createV2IdempotencyRepository(): V2IdempotencyRepository {
             ? { resultJson: input.resultJson as Prisma.InputJsonValue }
             : {}),
           ...(input.providerTaskId ? { providerTaskId: input.providerTaskId } : {}),
-          ...(input.failure ? { failureJson: input.failure } : {}),
+          ...(input.status === 'completed'
+            ? { failureJson: Prisma.JsonNull }
+            : input.failure ? { failureJson: input.failure } : {}),
           ...(input.status === 'completed' || input.status === 'failed' ? { completedAt: new Date() } : {}),
         },
       })

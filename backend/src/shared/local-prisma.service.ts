@@ -876,6 +876,7 @@ function makeLocalPrisma() {
           if (!receipt) throw new Error('V2 idempotency receipt not found')
           const data = args.data as Record<string, unknown>
           Object.assign(receipt, clone(args.data), { updatedAt: new Date().toISOString() })
+          if (data.status === 'completed') receipt.failureJson = null
           if (data.completedAt instanceof Date) receipt.completedAt = data.completedAt.toISOString()
           return idempotencyReceiptOut(receipt)
         }),

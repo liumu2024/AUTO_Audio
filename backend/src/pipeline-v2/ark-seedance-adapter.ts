@@ -112,6 +112,9 @@ function safeFilePart(value: string): string {
   return value.replace(/[^a-zA-Z0-9_.-]/g, '_')
 }
 
+class ProviderTaskPendingError extends Error {}
+class ProviderTaskTerminalError extends Error {}
+
 async function readJsonResponse(response: Response): Promise<unknown> {
   const text = await response.text()
   try {
@@ -212,11 +215,15 @@ export function createArkSeedanceMaterialGenerationAdapter(
         return { raw, videoUrl }
       }
       if (currentStatus && ['failed', 'error', 'cancelled', 'canceled'].includes(currentStatus)) {
-        throw new Error(extractError(raw) ?? `Ark Seedance task ${taskId} failed with status ${currentStatus}.`)
+        throw new ProviderTaskTerminalError(
+          extractError(raw) ?? `Ark Seedance task ${taskId} failed with status ${currentStatus}.`,
+        )
       }
       await delay(pollIntervalMs, undefined, { signal })
     }
-    throw new Error(`Ark Seedance task ${taskId} timed out. Last response: ${JSON.stringify(lastRaw).slice(0, 1000)}`)
+    throw new ProviderTaskPendingError(
+      `Ark Seedance task ${taskId} timed out. Last response: ${JSON.stringify(lastRaw).slice(0, 1000)}`,
+    )
   }
 
   async function downloadVideo(input: {
@@ -333,7 +340,45 @@ export function createArkSeedanceMaterialGenerationAdapter(
           ok: false,
           providerTaskId,
           submissionState: providerTaskId ? 'submitted' : requestDispatched ? 'unknown' : 'not_submitted',
-          failureCode: !providerTaskId && requestDispatched ? 'provider_submit_state_unknown' : undefined,
+          failureCode: error instanceof ProviderTaskPendingError
+            ? 'provider_task_pending'
+            : error instanceof ProviderTaskTerminalError
+              ? 'provider_task_terminal'
+              : providerTaskId
+                ? 'provider_task_pending'
+                : requestDispatched ? 'provider_submit_state_unknown' : undefined,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
+    },
+    async resume(input, providerTaskId, generationOptions): Promise<V2MaterialGenerationResult> {
+      try {
+        const completed = await pollTask(providerTaskId, generationOptions?.signal)
+        const src = await downloadVideo({
+          url: completed.videoUrl,
+          outputAssetId: input.outputAssetId,
+          signal: generationOptions?.signal,
+        })
+        return {
+          ok: true,
+          providerTaskId,
+          submissionState: 'submitted',
+          metadata: { final_response: completed.raw, video_url: completed.videoUrl },
+          asset: {
+            id: input.outputAssetId,
+            type: 'video',
+            src,
+            source: 'generated_asset',
+          },
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          providerTaskId,
+          submissionState: 'submitted',
+          failureCode: error instanceof ProviderTaskTerminalError
+            ? 'provider_task_terminal'
+            : 'provider_task_pending',
           error: error instanceof Error ? error.message : String(error),
         }
       }
