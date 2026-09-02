@@ -360,6 +360,24 @@ function requirementEvidenceError(userPrompt: string, action?: DirectorStateActi
   return undefined
 }
 
+function explicitPreferenceRequirementStatements(
+  action: DirectorStateAction | undefined,
+  receipt: CreativePreferenceLearningReceipt,
+) {
+  const preferenceEvidence = receipt.changes
+    .filter((change) => change.observationKind === 'explicit_preference' && change.scopeType === 'user')
+    .map((change) => change.sourceExcerpt.trim())
+    .filter(Boolean)
+  if (!action || preferenceEvidence.length === 0) return new Set<string>()
+  return new Set(action.operations.flatMap((operation) => {
+    if (operation.operation !== 'add') return []
+    const evidence = operation.sourceExcerpt.trim()
+    const sameSource = preferenceEvidence.some((candidate) =>
+      evidence === candidate || evidence.includes(candidate) || candidate.includes(evidence))
+    return sameSource ? [operation.statement.replace(/\s+/g, ' ').trim()] : []
+  }))
+}
+
 interface DirectorActionReceipt {
   ref: string
   kind: 'requirements.update' | 'tool.call'
@@ -1511,7 +1529,31 @@ export async function* streamDirectorAgentChat(
     : shouldReportToolOutcome
     ? toolConfirmation
     : routed.result.assistantMessage
-  const shouldReportRequirement = Boolean(stateAction) && !requirementEvidenceFailure
+  const creativeLearning = await creativeLearningPromise
+  const preferenceOwnedRequirements = explicitPreferenceRequirementStatements(stateAction, creativeLearning)
+  if (preferenceOwnedRequirements.size > 0) {
+    const suppressedIds = new Set(requirementResult.changes.added
+      .filter((item) => preferenceOwnedRequirements.has(item.statement))
+      .map((item) => item.id))
+    workspaceState = {
+      ...workspaceState,
+      confirmedRequirements: workspaceState.confirmedRequirements
+        .filter((item) => !suppressedIds.has(item.id)),
+    }
+    requirementResult.changes.added = requirementResult.changes.added
+      .filter((item) => !suppressedIds.has(item.id))
+    const requirementChanged = requirementResult.changes.added.length > 0
+      || requirementResult.changes.replaced.length > 0
+      || requirementResult.changes.revoked.length > 0
+      || requirementResult.changes.unchanged.length > 0
+    if (!requirementChanged && stateAction) {
+      const receiptIndex = actionReceipts.findIndex((receipt) => receipt.ref === stateAction.ref)
+      if (receiptIndex >= 0) actionReceipts.splice(receiptIndex, 1)
+    }
+  }
+  const shouldReportRequirement = Boolean(stateAction)
+    && !requirementEvidenceFailure
+    && actionReceipts.some((receipt) => receipt.ref === stateAction?.ref)
   const requirementMessage = !shouldReportRequirement
     ? ''
     : requirementResult.ok
@@ -1535,7 +1577,6 @@ export async function* streamDirectorAgentChat(
     const group = revisionGroupByCallId.get(receipt.callId)
     return !group || group.items[0]?.callId === receipt.callId
   })
-  const creativeLearning = await creativeLearningPromise
   const finalReplyFacts = [...userFacingActionReceipts.map((receipt) => {
     const toolResult = receipt.kind === 'tool.call'
       ? toolResults.find((item) => item.callId === receipt.callId)
@@ -1637,7 +1678,10 @@ export async function* streamDirectorAgentChat(
     effective_config_changed:
       JSON.stringify(before.context.effectiveCreativeConfig) !==
       JSON.stringify(saved.state.context.effectiveCreativeConfig),
-    requirement_changes: traceRequirementChanges(requirementResult.changes),
+    requirement_changes: {
+      ...traceRequirementChanges(requirementResult.changes),
+      suppressed_as_explicit_user_preferences: [...preferenceOwnedRequirements],
+    },
     creative_memory_retrieval: {
       active: creativeMemoryRetrieval.active,
       candidate: creativeMemoryRetrieval.candidate,

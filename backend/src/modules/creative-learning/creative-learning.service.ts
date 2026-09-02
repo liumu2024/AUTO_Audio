@@ -93,6 +93,9 @@ export interface CreativePreferenceLearningReceipt {
     relation: 'created' | 'equivalent' | 'contradictory' | 'revoked'
     observationCreated: boolean
     effectiveStatus: 'active' | 'candidate' | 'revoked'
+    observationKind: CreativeMemoryObservationKind
+    scopeType: CreativeMemoryScope
+    sourceExcerpt: string
   }>
   errors: string[]
 }
@@ -310,6 +313,9 @@ export async function learnCreativePreferencesFromUserTurn(input: {
             relation: 'revoked',
             observationCreated: recorded.created,
             effectiveStatus: revoked.status,
+            observationKind: observation.kind,
+            scopeType: observation.scopeType,
+            sourceExcerpt,
           })
           continue
         }
@@ -440,6 +446,9 @@ export async function learnCreativePreferencesFromUserTurn(input: {
           relation: relation === 'unrelated' ? 'created' : relation,
           observationCreated: recorded.created,
           effectiveStatus: effective.status,
+          observationKind: observation.kind,
+          scopeType: observation.scopeType,
+          sourceExcerpt,
         })
       } catch (error) {
         errors.push(error instanceof Error ? error.message : String(error))
