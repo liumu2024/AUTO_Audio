@@ -90,7 +90,6 @@ export interface V2PlannerInput {
    * Other materials remain optional candidates. */
   requiredMaterialIds?: string[]
   durationSec?: number
-  plannerMode?: 'deterministic' | 'llm'
   canvas?: {
     width?: number
     height?: number

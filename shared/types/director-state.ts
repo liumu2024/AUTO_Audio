@@ -13,7 +13,7 @@ export type DirectorTimelineStatus =
   | 'failed'
 
 export interface DirectorTimelineSnapshot {
-  kind: 'v2_timeline' | 'legacy_timeline'
+  kind: 'v2_timeline'
   status: DirectorTimelineStatus
   draftId?: string
   currentRevision?: number

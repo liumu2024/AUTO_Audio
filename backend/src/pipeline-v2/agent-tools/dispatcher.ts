@@ -184,7 +184,6 @@ function plannerInput(input: {
     })),
     requiredMaterialIds: input.requiredMaterialIds,
     durationSec: input.context.effectiveCreativeConfig?.durationSec ?? input.context.userIntent.durationSec ?? input.context.slots.durationSec,
-    plannerMode: 'llm',
     canvas: canvas(input.context.effectiveCreativeConfig?.aspectRatio ?? input.context.slots.aspectRatio),
     planningContext: {
       kind: input.workspace.draftId ? 'revision' : 'initial',

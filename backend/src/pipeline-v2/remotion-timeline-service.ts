@@ -18,10 +18,7 @@ import {
   type V2ProviderSubmissionPermit,
   type V2TimelineMaterialResolutionReport,
 } from './remotion-timeline-material-resolver.js'
-import {
-  buildDeterministicRemotionTimelineSpec,
-  type V2RemotionTimelinePlannerInput,
-} from './remotion-timeline-planner.js'
+import type { V2RemotionTimelinePlannerInput } from './remotion-timeline-planner.js'
 import { renderV2RemotionTimeline, type V2TimelineRenderResult } from './remotion-timeline-renderer.js'
 import {
   buildV2TimelinePlanningReview,
@@ -142,10 +139,6 @@ function semanticCaptionPolicy(plannerSource: string, attachedImages: number): s
   return 'fallback_preserves_only_explicit_user_caption_requirements'
 }
 
-async function buildTimelineSpec(input: V2PlannerInput & { imageSrc?: string }): Promise<RemotionTimelineSpecV1> {
-  return buildDeterministicRemotionTimelineSpec(plannerInputFrom(input))
-}
-
 async function resolveTimelineSpec(input: {
   plannerInput: V2PlannerInput & { imageSrc?: string }
   trace: ReturnType<typeof createV2TraceWriter>
@@ -165,7 +158,7 @@ async function resolveTimelineSpec(input: {
     }
   }
 
-  if (input.plannerInput.plannerMode === 'llm') {
+  {
     try {
       const { runV2TimelineLlmPlanner } = await import('./remotion-timeline-llm-planner.js')
       let llmPlanner = await runV2TimelineLlmPlanner(plannerInputFrom(input.plannerInput))
@@ -320,11 +313,6 @@ async function resolveTimelineSpec(input: {
     }
   }
 
-  const spec = await buildTimelineSpec(input.plannerInput)
-  return {
-    spec,
-    plannerSource: input.plannerInput.plannerMode ?? 'deterministic',
-  }
 }
 
 export async function previewV2RemotionTimeline(
