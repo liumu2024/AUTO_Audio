@@ -45,6 +45,7 @@ import {
   appendDirectorWorkspaceTurn,
   applyDirectorRequirementChange,
   applyDirectorWorkspacePatch,
+  compactDirectorConversationContext,
   compactDirectorWorkspaceContext,
   compactDirectorWorkspaceTurns,
   createDirectorWorkspaceState,
@@ -467,7 +468,7 @@ export async function* streamDirectorAgentChat(
   })
   workspaceState = applyDirectorWorkspacePatch(workspaceState, {
     context: {
-      conversationSummary: JSON.stringify(compactDirectorWorkspaceContext(workspaceState)),
+      conversationSummary: JSON.stringify(compactDirectorConversationContext(workspaceState)),
     },
   })
   const turnOperationId = `turn_${turnRequestId}`

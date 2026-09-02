@@ -293,7 +293,6 @@ export function compactDirectorContextForPrompt(input: DirectorPromptInput) {
       visualInputCount: input.visualInputCount ?? 0,
     },
     creative: {
-      goal: input.context.userIntent.goal,
       contentDomain: input.context.slots.contentDomain,
       effectiveConfig,
     },

@@ -400,6 +400,7 @@ export function buildDirectorTimelineFacts(
   const digest = buildV2TimelineFactDigest(spec)
   return {
     revision,
+    creativeBrief: digest.creative_brief,
     scenes: digest.scenes.map((scene) => ({
       id: scene.id,
       title: scene.title,

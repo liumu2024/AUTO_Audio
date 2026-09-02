@@ -303,6 +303,17 @@ export function compactDirectorWorkspaceTurns(
   return { ...state, rollingSummary, turns: state.turns.slice(-maxRecentTurns) }
 }
 
+/** Conversation continuity only; durable workspace facts are injected separately. */
+export function compactDirectorConversationContext(state: DirectorWorkspaceState) {
+  return {
+    rollingSummary: state.rollingSummary,
+    recentTurns: state.turns,
+    pendingQuestion: state.pendingQuestion,
+    pendingCreationProposal: state.pendingTimelinePlanConfirmation?.creationSummary,
+    pendingRevisionProposal: state.pendingTimelineRevisionConfirmation?.revisionIntents,
+  }
+}
+
 export function compactDirectorWorkspaceContext(state: DirectorWorkspaceState) {
   const confirmedRequirements = state.confirmedRequirements.filter((item) => item.status === 'active')
   const recentRequirementChanges = state.confirmedRequirements

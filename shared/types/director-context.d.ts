@@ -1,6 +1,6 @@
 import type { DirectorSessionState, DirectorTimelineSnapshot } from './director-state.js';
 import type { V2SampleUnderstandingResult } from './v2-sample-understanding.js';
-import type { RemotionTimelineMaterialJob, RemotionTimelineScene } from './remotion-timeline-spec.v1.js';
+import type { RemotionTimelineMaterialJob, RemotionTimelineScene, V2CreativeBrief } from './remotion-timeline-spec.v1.js';
 export type DirectorGoal = 'analyze_sample' | 'analyze_materials' | 'generate_timeline' | 'revise_timeline' | 'render';
 export type DirectorAspectRatio = '9:16' | '16:9' | '1:1' | '4:3';
 /** 对话层识别的用户意图（比 goal 更细，含澄清/未知） */
@@ -146,6 +146,7 @@ export interface DirectorTimelineContext extends DirectorTimelineSnapshot {
 /** Read-only factual projection of the persisted V2 revision for later chat. */
 export interface DirectorTimelineFacts {
     revision: number;
+    creativeBrief?: V2CreativeBrief;
     scenes: Array<{
         id: string;
         title?: string;
