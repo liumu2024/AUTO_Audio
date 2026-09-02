@@ -844,6 +844,36 @@ function revisionFragmentScopeRules(input: V2RemotionTimelinePlannerInput): stri
   throw new Error('Revision fragment prompt requires a non-full-replan revision scope.')
 }
 
+function reservedIdsForNewStructureObjects(input: V2RemotionTimelinePlannerInput) {
+  if (input.revisionScope !== 'structure' || !input.revisionBaseSpec || !input.revisionSceneIds?.length) {
+    return undefined
+  }
+  const targetSceneIds = new Set(input.revisionSceneIds)
+  const protectedSceneIds = new Set(input.revisionBaseSpec.scenes
+    .filter((scene) => !targetSceneIds.has(scene.id))
+    .map((scene) => scene.id))
+  const protectedOverlays = input.revisionBaseSpec.overlays.filter((overlay) =>
+    !overlay.scene_id || protectedSceneIds.has(overlay.scene_id))
+  const protectedJobs = input.revisionBaseSpec.material_jobs.filter((job) =>
+    protectedSceneIds.has(job.scene_id))
+  const protectedTrackIds = new Set(protectedOverlays.flatMap((overlay) =>
+    overlay.track_id ? [overlay.track_id] : []))
+  return {
+    scene_ids: [...protectedSceneIds],
+    transition_ids: input.revisionBaseSpec.transitions
+      .filter((transition) => !targetSceneIds.has(transition.from_scene_id)
+        && !targetSceneIds.has(transition.to_scene_id))
+      .map((transition) => transition.id),
+    overlay_ids: protectedOverlays.map((overlay) => overlay.id),
+    caption_track_ids: (input.revisionBaseSpec.caption_tracks ?? [])
+      .filter((track) => protectedTrackIds.has(track.id))
+      .map((track) => track.id),
+    material_job_ids: protectedJobs.map((job) => job.id),
+    generated_output_asset_ids: protectedJobs.flatMap((job) =>
+      job.type === 'generate_video' && job.output_asset_id ? [job.output_asset_id] : []),
+  }
+}
+
 export function buildV2TimelineRevisionPlannerPrompt(
   input: V2RemotionTimelinePlannerInput,
   visualInputReport?: V2TimelineVisualInputReport,
@@ -991,6 +1021,7 @@ export function buildV2TimelineRevisionPlannerPrompt(
       revision_scene_ids: input.revisionSceneIds ?? null,
       revision_overlay_ids: input.revisionOverlayIds ?? null,
       revision_transition_ids: input.revisionTransitionIds ?? null,
+      protected_object_ids: reservedIdsForNewStructureObjects(input) ?? null,
       server_asset_catalog: assetCatalog,
       required_material_ids: input.requiredMaterialIds ?? [],
     }, null, 2),
@@ -1451,6 +1482,7 @@ function timelineFieldRepairPrompt(input: {
   assets: Array<{ id: string; type: string }>
   outputContract: PlannerOutputContract
   revisionConstraints?: NonNullable<V2RemotionTimelinePlannerInput['revisionContext']>['constraints']
+  protectedObjectIds?: ReturnType<typeof reservedIdsForNewStructureObjects>
   requiredMaterialIds?: string[]
 }) {
   return [
@@ -1464,6 +1496,7 @@ function timelineFieldRepairPrompt(input: {
     'For ai_video, scene.asset_id must remain equal to its generate_video job output_asset_id. Never replace it with the input image id or add the unresolved output id to assets[].',
     `Server-owned asset catalog (IDs and types only): ${JSON.stringify(input.assets)}`,
     `Authoritative revision constraints: ${JSON.stringify(input.revisionConstraints ?? null)}`,
+    `IDs reserved by protected structure objects: ${JSON.stringify(input.protectedObjectIds ?? null)}. Existing boundary references may keep these values, but newly introduced objects must not claim them.`,
     `Required material IDs: ${JSON.stringify(input.requiredMaterialIds ?? [])}`,
     input.outputContract.kind === 'fragment'
       ? 'Preserve fields in the fragment that are unrelated to the validation error.'
@@ -1722,6 +1755,7 @@ export async function runV2TimelineLlmPlanner(
       })),
       outputContract,
       revisionConstraints: input.revisionContext?.constraints,
+      protectedObjectIds: reservedIdsForNewStructureObjects(input),
       requiredMaterialIds: input.requiredMaterialIds,
     })
     try {

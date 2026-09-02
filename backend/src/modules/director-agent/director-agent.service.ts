@@ -30,6 +30,7 @@ import {
   composeDirectorFinalReply,
   routeDirectorIntentWithLlm,
   type DirectorFinalReplyResult,
+  type DirectorStateAction,
   type LlmIntentRouterOutput,
 } from './llm-intent-router.js'
 import {
@@ -191,10 +192,9 @@ function proposalReply(input: {
   userPrompt: string
   modelMessage: string
   kind: 'creation' | 'revision'
-  forceFallback?: boolean
 }) {
-  if (!input.forceFallback && (!input.userPrompt.trim()
-    || usesChineseAsPrimaryLanguage(input.userPrompt) === usesChineseAsPrimaryLanguage(input.modelMessage))) {
+  if (!input.userPrompt.trim()
+    || usesChineseAsPrimaryLanguage(input.userPrompt) === usesChineseAsPrimaryLanguage(input.modelMessage)) {
     return input.modelMessage
   }
   if (!usesChineseAsPrimaryLanguage(input.userPrompt)) {
@@ -231,8 +231,9 @@ function creativeSummary(input: {
     const normalizedValue = value?.trim().toLocaleLowerCase()
     if (!normalizedValue) return false
     if (!normalizedPrompt) return true
-    return usesChinese === usesChineseAsPrimaryLanguage(normalizedValue)
-      || (allowExplicitFragment && normalizedPrompt.includes(normalizedValue))
+    return allowExplicitFragment
+      ? normalizedPrompt.includes(normalizedValue)
+      : usesChinese === usesChineseAsPrimaryLanguage(normalizedValue)
   }
   const modelGoal = input.modelSummary?.goal.trim()
   return {
@@ -346,6 +347,16 @@ function traceRequirementChanges(changes: RequirementChanges) {
     unchanged: changes.unchanged.map((item) => ({ id: item.id, statement: item.statement, status: item.status })),
     rejected: changes.rejected,
   }
+}
+
+function requirementEvidenceError(userPrompt: string, action?: DirectorStateAction) {
+  for (const operation of action?.operations ?? []) {
+    const evidence = operation.sourceExcerpt.trim()
+    if (!userPrompt.includes(evidence)) {
+      return 'Requirement evidence must be copied from the current user input.'
+    }
+  }
+  return undefined
 }
 
 interface DirectorActionReceipt {
@@ -734,13 +745,24 @@ export async function* streamDirectorAgentChat(
   }
 
   const stateAction = routed.stateActions[0]
-  const requirementResult = applyDirectorRequirementChange(
-    workspaceState,
-    stateAction
-      ? { type: 'apply', operations: stateAction.operations }
-      : { type: 'none' },
-    turnOperationId,
-  )
+  const requirementEvidenceFailure = requirementEvidenceError(input.prompt, stateAction)
+  const requirementResult = requirementEvidenceFailure
+    ? {
+        ok: false as const,
+        state: workspaceState,
+        changes: {
+          added: [], replaced: [], revoked: [], unchanged: [],
+          rejected: [requirementEvidenceFailure],
+        },
+        error: requirementEvidenceFailure,
+      }
+    : applyDirectorRequirementChange(
+        workspaceState,
+        stateAction
+          ? { type: 'apply', operations: stateAction.operations }
+          : { type: 'none' },
+        turnOperationId,
+      )
   workspaceState = requirementResult.state
   const actionReceipts: DirectorActionReceipt[] = stateAction
     ? [{
@@ -1478,24 +1500,23 @@ export async function* streamDirectorAgentChat(
         userPrompt: input.prompt,
         modelMessage: routed.result.assistantMessage,
         kind: 'creation',
-        forceFallback: routed.proposalReplyFallbackRequired,
       })
     : awaitsRevisionConfirmation
     ? proposalReply({
         userPrompt: input.prompt,
         modelMessage: routed.result.assistantMessage,
         kind: 'revision',
-        forceFallback: routed.proposalReplyFallbackRequired,
       })
     : shouldReportToolOutcome
     ? toolConfirmation
     : routed.result.assistantMessage
-  const requirementMessage = !stateAction
+  const shouldReportRequirement = Boolean(stateAction) && !requirementEvidenceFailure
+  const requirementMessage = !shouldReportRequirement
     ? ''
     : requirementResult.ok
       ? requirementConfirmation(requirementResult.changes)
       : '本轮要求变更未通过校验，因此没有保存这些要求。'
-  const baseAssistantMessage = stateAction
+  const baseAssistantMessage = shouldReportRequirement
     ? [requirementMessage, modelAssistantMessage]
         .filter(Boolean)
         .map((message) => message.replace(/[。！!？?]+$/u, ''))
@@ -1503,6 +1524,7 @@ export async function* streamDirectorAgentChat(
     : modelAssistantMessage
   const seenDismissalOutcomes = new Set<string>()
   const userFacingActionReceipts = actionReceipts.filter((receipt) => {
+    if (receipt.kind === 'requirements.update' && requirementEvidenceFailure) return false
     if (receipt.kind !== 'tool.call' || !receipt.callId) return true
     if (receipt.toolId === 'timeline.pending.dismiss') {
       const key = `${receipt.status}:${receipt.reason ?? ''}`

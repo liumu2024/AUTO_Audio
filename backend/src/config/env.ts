@@ -117,7 +117,6 @@ export const env = {
     arkApiKey,
   directorAgentModel:
     readEnv('DIRECTOR_AGENT_MODEL') ??
-    readEnv('VIDEO_UNDERSTANDING_MODEL') ??
     defaultArkModel,
   directorAgentResponsesUrl:
     readEnv('DIRECTOR_AGENT_RESPONSES_URL') ??

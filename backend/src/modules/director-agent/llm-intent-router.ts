@@ -44,12 +44,21 @@ const ContentDomainSchema = z.enum([
 const CanonicalIntentSchema = z.enum(['chat', 'create', 'revise', 'execute', 'clarify'])
 const MAX_DIRECTOR_IMAGE_INPUTS = 12
 const RequirementOperationSchema = z.discriminatedUnion('operation', [
-  z.object({ operation: z.literal('add'), statement: z.string().trim().min(1).max(500) }).strict(),
+  z.object({
+    operation: z.literal('add'),
+    statement: z.string().trim().min(1).max(500),
+    sourceExcerpt: z.string().trim().min(1).max(1_000),
+  }).strict(),
   z.object({
     operation: z.literal('replace'), targetRequirementId: z.string().trim().min(1),
     statement: z.string().trim().min(1).max(500),
+    sourceExcerpt: z.string().trim().min(1).max(1_000),
   }).strict(),
-  z.object({ operation: z.literal('revoke'), targetRequirementId: z.string().trim().min(1) }).strict(),
+  z.object({
+    operation: z.literal('revoke'),
+    targetRequirementId: z.string().trim().min(1),
+    sourceExcerpt: z.string().trim().min(1).max(1_000),
+  }).strict(),
 ])
 const CreativeConfigDeltaSchema = z.object({
   contentDomain: ContentDomainSchema.optional(),
@@ -71,28 +80,42 @@ const ToolRequestSchema = z.object({
   dependsOn: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
 }).strict()
 
+const CreationSummarySchema = z.object({
+  goal: z.string().trim().min(1).max(500),
+  audience: z.string().trim().max(300).optional(),
+  openQuestions: z.array(z.string().trim().min(1).max(300)).max(10).default([]),
+}).strict()
 const DecisionFields = {
   replyDraft: z.string().trim().min(1),
-  creationSummary: z.object({
-    goal: z.string().trim().min(1).max(500),
-    audience: z.string().trim().min(1).max(300).optional(),
-    openQuestions: z.array(z.string().trim().min(1).max(300)).max(10).default([]),
-  }).strict().optional(),
   creativeConfigDelta: CreativeConfigDeltaSchema.default({}),
   stateActions: z.array(StateActionSchema).max(1).default([]),
   skillRequests: z.array(z.object({ skillId: z.string().trim().min(1), purpose: z.string().trim().min(1) }).strict()).default([]),
-  missingInformation: z.array(z.string().trim().min(1).max(500)).max(20).default([]),
 } as const
 const LlmIntentResultSchema = z.discriminatedUnion('intent', [
   z.object({
     ...DecisionFields,
-    intent: z.enum(['chat', 'clarify']),
+    intent: z.literal('chat'),
     toolRequests: z.array(ToolRequestSchema).max(0).default([]),
+    missingInformation: z.array(z.string()).max(0).default([]),
   }).strict(),
   z.object({
     ...DecisionFields,
-    intent: z.enum(['create', 'revise', 'execute']),
-    toolRequests: z.array(ToolRequestSchema).max(20).default([]),
+    intent: z.literal('clarify'),
+    toolRequests: z.array(ToolRequestSchema).max(0).default([]),
+    missingInformation: z.array(z.string().trim().min(1).max(500)).min(1).max(20),
+  }).strict(),
+  z.object({
+    ...DecisionFields,
+    intent: z.literal('create'),
+    creationSummary: CreationSummarySchema,
+    toolRequests: z.array(ToolRequestSchema).min(1).max(20),
+    missingInformation: z.array(z.string()).max(0).default([]),
+  }).strict(),
+  z.object({
+    ...DecisionFields,
+    intent: z.enum(['revise', 'execute']),
+    toolRequests: z.array(ToolRequestSchema).min(1).max(20),
+    missingInformation: z.array(z.string()).max(0).default([]),
   }).strict(),
 ]).superRefine((decision, context) => {
   const refs = [
@@ -124,9 +147,7 @@ const DirectorFinalReplyJsonSchema = z.toJSONSchema(DirectorFinalReplySchema, {
   target: 'draft-7',
 }) as Record<string, unknown>
 
-type LlmIntentResult = z.infer<typeof LlmIntentResultSchema> & {
-  normalizedActionableQuestion?: boolean
-}
+type LlmIntentResult = z.infer<typeof LlmIntentResultSchema>
 export type DirectorStateAction = z.infer<typeof StateActionSchema>
 
 export interface LlmIntentRouterOutput {
@@ -142,7 +163,6 @@ export interface LlmIntentRouterOutput {
   protocolError?: { kind: 'json_syntax' | 'field_validation'; message: string }
   structuredOutput?: { requested: boolean; providerFallback: boolean; reason?: string }
   imageInputWarnings?: string[]
-  proposalReplyFallbackRequired?: boolean
   jsonRepair?: {
     request: string
     responseAudit?: unknown
@@ -322,7 +342,7 @@ export function buildDirectorModelPrompt(input: DirectorPromptInput) {
   const creationRules = hasDraft
     ? ''
     : `首次创建：
-- 当前不存在草稿时使用 timeline.plan。creationSummary 只概括本轮目标、用户已提供的受众和真正待确认的问题，不得编造信息或替代 toolRequests。
+- 当前不存在草稿时使用 timeline.plan。creationSummary 只概括本轮目标和真正待确认的问题；audience 只有在用户原话明确给出受众时才填写，并直接使用原话中的受众表述。不得编造信息或替代 toolRequests。
 - 首次创建先形成提案，用户确认后才执行；当前回复不得宣称方案已经创建。`
   const revisionRules = hasDraft
     ? `修改现有方案：
@@ -391,7 +411,9 @@ ${sampleDependencyRule}
 ${stateRules}
 
 当前项目要求：
-- requirements.update 只维护用户明确要求长期约束当前项目的独立规则；普通咨询、一次创建或修改指令本身已经由 Tool 承接，不要重复写入项目要求。replace/revoke 只能引用 requirements 中的 active id，并填写 targetRequirementId。
+- requirements.update 只维护用户明确授权在后续轮次或修改中继续生效的当前项目规则；一次创建、修改或执行指令本身由 Tool 承接，不得把整段任务目标、时长、镜头清单或 Tool instruction 复制成项目要求。
+- 项目规则可以单独提出，也可以和创建、修改或执行动作出现在同一句中。每个 operation 的 sourceExcerpt 必须逐字截取自本轮用户原话，并且该片段本身明确表达“记录为项目要求”或“后续修改继续遵守”；不能用整段创建/修改命令代替持续性证据。statement 可以做原子化归纳。replace/revoke 只能引用 requirements 中的 active id，并填写 targetRequirementId。
+- 对照：“创建一条 12 秒三镜头短片，使用中文标题并保持冷色调”中的时长、镜头数、标题语言和色调都由 timeline.plan 承接，stateActions 为空；“后续修改都保留中文标题，并先创建一条 12 秒三镜头短片”同时新增“保留中文标题”的项目要求并请求 timeline.plan，方案规划同时遵守该要求。
 - memories 只用于理解用户可能延续的偏好，不是已确认的当前项目要求；偏好沉淀由独立学习链路处理，本轮不要输出偏好操作。
 
 动作、依赖与技能：
@@ -462,17 +484,7 @@ function extractJson(text: string): unknown {
 
 /** Exported for the routing smoke test and for a single, audited model boundary. */
 export function parseDirectorModelDecision(text: string): LlmIntentResult {
-  const decision = LlmIntentResultSchema.parse(extractJson(text))
-  return decision.toolRequests.length > 0 && decision.missingInformation.length > 0
-    ? {
-        ...decision,
-        creationSummary: decision.creationSummary
-          ? { ...decision.creationSummary, openQuestions: [] }
-          : undefined,
-        missingInformation: [],
-        normalizedActionableQuestion: true,
-      }
-    : decision
+  return LlmIntentResultSchema.parse(extractJson(text))
 }
 
 function responseAudit(raw: unknown, finalText: string) {
@@ -670,13 +682,13 @@ function decisionForSurface(
 ): LlmIntentResult {
   if (!isReadOnlySurface(surfaceMode)) return candidate
   return {
-    ...candidate,
+    replyDraft: candidate.replyDraft,
     intent: 'chat',
-    creationSummary: undefined,
     creativeConfigDelta: {},
     stateActions: [],
     skillRequests: [],
     toolRequests: [],
+    missingInformation: [],
   }
 }
 
@@ -739,7 +751,7 @@ function toDirectorIntentResult(
     nextAction: nextActionFor(candidate),
     executionEffect: executionEffectFor(candidate),
     assistantMessage: candidate.replyDraft,
-    creationSummary: candidate.creationSummary,
+    creationSummary: candidate.intent === 'create' ? candidate.creationSummary : undefined,
     skillRequests: candidate.skillRequests,
     toolRequests: candidate.toolRequests,
   }
@@ -936,7 +948,6 @@ export async function routeDirectorIntentWithLlm(input: {
           missingInformation: repaired.missingInformation,
           structuredOutput: response.structuredOutput,
           imageInputWarnings,
-          proposalReplyFallbackRequired: repaired.normalizedActionableQuestion,
           jsonRepair: { request: repairPrompt, responseAudit: repairAudit },
         }
       } catch (repairError) {
@@ -979,7 +990,6 @@ export async function routeDirectorIntentWithLlm(input: {
       missingInformation: parsed.missingInformation,
       structuredOutput: response.structuredOutput,
       imageInputWarnings,
-      proposalReplyFallbackRequired: parsed.normalizedActionableQuestion,
     }
   } catch (error) {
     const fallback = buildDirectorContextFallback({
