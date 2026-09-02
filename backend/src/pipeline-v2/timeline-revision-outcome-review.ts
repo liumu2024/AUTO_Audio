@@ -745,7 +745,6 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
       : []),
     '- 画幅以全片结构摘要中的 canvas_width 和 canvas_height 为准；不要因为受影响事实投影里没有画布字段就判定画幅缺失。',
     '- 可见文字必须是观众文案；技术说明、文件名、内部 ID、布局约束和规划指令不得成为字幕，除非用户明确要求逐字展示。',
-    '- 用户明确要求程序化画面时，对应镜头必须由 remotion_card、caption_scene、data_viz 或已授权 custom_render 实现；ai_video + generate_video 不算程序化实现。',
     ...(visibleTextRiskApplies
       ? ['- 用户要求重写或创作字幕时，旧字幕允许被替换；不要因为基础方案存在旧文案就要求逐字保留。布局、行数和位置要求应检查结构化字段，不把约束文字本身当字幕。']
       : []),
