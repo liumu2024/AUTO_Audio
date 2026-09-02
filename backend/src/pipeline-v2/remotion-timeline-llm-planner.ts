@@ -16,7 +16,7 @@ import {
   type RemotionTimelineSpecV1,
 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import {
-  buildDeterministicRemotionTimelineSpec,
+  buildPlannerAssets,
   type V2RemotionTimelinePlannerInput,
 } from './remotion-timeline-planner.js'
 import {
@@ -431,7 +431,7 @@ export interface V2TimelineLlmPlannerResult {
   extractionReport: StructuredJsonExtractionReport
   promptText: string
   visualInputReport: V2TimelineVisualInputReport
-  repairs: Array<{ job_id: string; scene_id: string; field: 'prompt' | 'status' | 'audio' | 'asset_id' | 'input_asset_id' | 'provider'; reason: string }>
+  repairs: Array<{ job_id: string; scene_id: string; field: 'prompt' | 'status' | 'audio' | 'asset_id' | 'input_asset_id' | 'output_asset_id' | 'provider'; reason: string }>
   structuredOutput: { requested: boolean; providerFallback: boolean; reason?: string }
   jsonRepair?: { request: string; responseAudit?: unknown; error?: string }
 }
@@ -500,6 +500,15 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
       if (job.type === 'reuse_asset') {
         let nextJob = job
         if (job.input_asset_id) {
+          if (!job.output_asset_id && resolvedAssetIds.has(job.input_asset_id)) {
+            nextJob = { ...nextJob, output_asset_id: job.input_asset_id }
+            repairs.push({
+              job_id: job.id,
+              scene_id: job.scene_id,
+              field: 'output_asset_id',
+              reason: '复用任务已将现有素材标识归一到 output_asset_id。',
+            })
+          }
           const { input_asset_id: _discarded, ...withoutInput } = nextJob
           nextJob = withoutInput
           repairs.push({
@@ -509,7 +518,7 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
             reason: 'reuse_asset 直接复用 output_asset_id，不使用生成任务专属的 input_asset_id。',
           })
         }
-        if (job.output_asset_id && resolvedAssetIds.has(job.output_asset_id) && job.status !== 'fulfilled') {
+        if (nextJob.output_asset_id && resolvedAssetIds.has(nextJob.output_asset_id) && nextJob.status !== 'fulfilled') {
           nextJob = { ...nextJob, status: 'fulfilled' }
           repairs.push({
             job_id: job.id,
@@ -531,6 +540,22 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
       }
       if (job.type !== 'generate_video') return job
       let nextJob = job
+      const existingOutput = job.output_asset_id
+        ? spec.assets.find((asset) => asset.id === job.output_asset_id)
+        : undefined
+      if (job.status === 'planned' && existingOutput && existingOutput.source !== 'generated_asset') {
+        const stem = `generated_${job.id}`
+        let outputAssetId = stem
+        let suffix = 2
+        while (resolvedAssetIds.has(outputAssetId)) outputAssetId = `${stem}_${suffix++}`
+        nextJob = { ...nextJob, output_asset_id: outputAssetId }
+        repairs.push({
+          job_id: job.id,
+          scene_id: job.scene_id,
+          field: 'output_asset_id',
+          reason: '待生成结果不能覆盖已有素材，已分配独立的输出资产标识。',
+        })
+      }
       if (
         job.status === 'fulfilled' &&
         (!job.output_asset_id || !resolvedAssetIds.has(job.output_asset_id))
@@ -574,8 +599,16 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
     }
   }
   const assets = spec.assets.filter((asset) => !unresolvedGeneratedAssets.has(asset.id))
+  const effectivePlannedJobsByScene = new Map<string, RemotionTimelineSpecV1['material_jobs']>()
+  for (const job of material_jobs) {
+    if (job.type !== 'generate_video' || job.status !== 'planned' || !job.output_asset_id) continue
+    effectivePlannedJobsByScene.set(job.scene_id, [
+      ...(effectivePlannedJobsByScene.get(job.scene_id) ?? []),
+      job,
+    ])
+  }
   const normalizedScenes = spec.scenes.map((scene) => {
-    const jobs = plannedJobsByScene.get(scene.id)
+    const jobs = effectivePlannedJobsByScene.get(scene.id)
     if (scene.type !== 'ai_video' || jobs?.length !== 1) return scene
     const job = jobs[0]!
     const outputAssetId = job.output_asset_id!
@@ -607,7 +640,7 @@ export function repairV2LlmGeneratedMaterialPrompts(spec: RemotionTimelineSpecV1
     ...(audio?.length !== spec.audio?.length ? { audio } : {}),
     ...(material_jobs.length !== spec.material_jobs.length || repairs.some((repair) =>
       repair.field === 'prompt' || repair.field === 'status' || repair.field === 'input_asset_id'
-      || repair.field === 'provider') ? { material_jobs } : {}),
+      || repair.field === 'output_asset_id' || repair.field === 'provider') ? { material_jobs } : {}),
   }
   return { spec: repairs.length || assets.length !== spec.assets.length || audio?.length !== spec.audio?.length ? nextSpec : spec, repairs }
 }
@@ -632,7 +665,7 @@ export function buildV2TimelinePlannerPrompt(
   input: V2RemotionTimelinePlannerInput,
   visualInputReport?: V2TimelineVisualInputReport,
 ): string {
-  const example = buildDeterministicRemotionTimelineSpec(input)
+  const assets = buildPlannerAssets(input)
   const useSampleReference = input.useSampleReference === true
   const creationMode =
     input.creationMode ??
@@ -657,6 +690,7 @@ export function buildV2TimelinePlannerPrompt(
     '- image_motion cannot invent new visual elements; it only pans, zooms, or crops pixels from its bound image asset. If the requested shot adds a person, animal, vehicle, weather event, or other content absent from the source image, use ai_video with a generate_video job.',
     '- To faithfully display an available image, use an image_motion scene bound to that image and a fulfilled reuse_asset job whose output_asset_id is the same image id. When the material already exists in material_assets, never use request_user_material for it.',
     '- remotion_card is an intentional typography or motion-graphics scene, not a placeholder for missing photographic footage. Use it only when a card or graphic is part of the creative design; use ai_video with generate_video for a requested realistic moving shot.',
+    '- When the user explicitly requests a programmatic, Remotion, typography, motion-graphics, or data-driven scene instead of generated footage, realize it with remotion_card, caption_scene, data_viz, or an authorized custom_render component. Merely writing “programmatic” in a generate_video prompt does not satisfy that request.',
     '- The planner does not own execution status. New generate_video jobs must use status "planned"; only the backend may mark them fulfilled after a real output asset exists.',
     '- creative_brief.direction is the single whole-video creative direction. material_job.prompt contains only scene-specific semantics.',
     '- For every attached image actually used, record only visible facts in creative_brief.image_references.observed_facts and explain its intended use. Do not invent unseen facts.',
@@ -687,6 +721,7 @@ export function buildV2TimelinePlannerPrompt(
     '- Never turn an instruction, layout constraint, filename ban, technical note, or planning explanation into visible overlay text unless the user explicitly asks to display that exact wording.',
     '- caption_tracks defines reusable defaults for caption overlays. Each caption overlay may reference track_id and can override a track default. When the user asks for multiple lines of narration in one shot, create multiple timed caption overlays on one track rather than merging planning notes into one caption.',
     '- When the user asks for original subtitles from themes or keywords, create audience-facing copy yourself; do not repeat the instruction text. If the user asks for a line limit or placement, express it with caption track defaults and overlay geometry/max_lines while preserving or creating appropriate copy.',
+    '- When the user requests audience-facing titles or subtitles but provides only a topic or tone, write suitable original lines with concrete timing in overlays. A direction or note that mentions this copy without providing the actual lines is incomplete.',
     '- A narrow revision such as audio strategy, transition, subtitle layout, or one selected scene must not replace unrelated subject matter, visual intent, confirmed captions, or sample-use boundaries.',
     '- revision_scope is the tool-authorized boundary: subtitle changes captions only and, when revision_overlay_ids is present, must leave every other caption unchanged; scene changes only the narrative content (subject, location, action, event or prop) of revision_scene_id and its generation prompt, while preserving timing, captions, transitions and visual-strategy fields; structure may split, merge, insert, or remove only the contiguous revision_scene_ids range. Preserve that range duration unless revision_duration_mode is resize_timeline; when resizing, shift later scene-bound timing consistently. visual_strategy changes only the visual strategy fields (type/fit/motion/background/asset binding) of revision_scene_id and its presentation prompt without changing narrative facts; transition changes only revision_transition_ids; global brief_update changes the creative brief direction without rewriting direct timeline fields, while full_replan is reserved for an explicit whole-plan replacement.',
     '- When the user requests an effect (filter, compositing, animation, transition) outside the preset set and the instruction explicitly names a sedimented component id, reference it with custom_render { component_id, params } on the target scene or transition. Do not invent component ids that are not explicitly given; do not output React/Remotion code here (components are authored separately through render.author).',
@@ -747,11 +782,11 @@ export function buildV2TimelinePlannerPrompt(
         revision_transition_ids: input.revisionTransitionIds ?? null,
         agent_skill_context: input.agentSkillContext ?? null,
         agent_tool_context: input.agentToolContext ?? null,
-        main_video_asset_id: example.assets.find((asset) => asset.id === 'main_video_asset')?.id ?? null,
-        main_video_path: example.assets.find((asset) => asset.id === 'main_video_asset')?.src ?? null,
+        main_video_asset_id: assets.find((asset) => asset.id === 'main_video_asset')?.id ?? null,
+        main_video_path: assets.find((asset) => asset.id === 'main_video_asset')?.src ?? null,
         reference_video_path: input.referenceVideoPath ?? null,
-        optional_image_asset_id: example.assets.find((asset) => asset.type === 'image')?.id ?? null,
-        material_assets: example.assets.map((asset) => ({
+        optional_image_asset_id: assets.find((asset) => asset.type === 'image')?.id ?? null,
+        material_assets: assets.map((asset) => ({
           id: asset.id,
           type: asset.type,
           label: asset.label,
@@ -770,14 +805,16 @@ export function buildV2TimelinePlannerPrompt(
           warnings: [],
         },
         seedance_default_image_available: Boolean(env.v2VideoGenerationDefaultImageUrl),
-        canvas: example.canvas,
+        canvas: {
+          width: input.canvas?.width ?? 720,
+          height: input.canvas?.height ?? 1280,
+          fps: input.canvas?.fps ?? 24,
+          requested_duration_sec: input.durationSec ?? null,
+        },
       },
       null,
       2,
     ),
-    '',
-    'A valid compact example using the same runtime fields:',
-    JSON.stringify(example, null, 2),
   ].join('\n')
 }
 
@@ -1139,7 +1176,7 @@ export function assertRequiredMaterialCoverage(
 function authoritativePlannerAssets(input: V2RemotionTimelinePlannerInput) {
   return new Map(
     [
-      ...buildDeterministicRemotionTimelineSpec(input).assets,
+      ...buildPlannerAssets(input),
       ...(input.revisionBaseSpec?.assets ?? []),
     ].map((asset) => [asset.id, asset]),
   )

@@ -18,7 +18,10 @@ import {
   type V2AgentToolProgress,
   type V2AgentToolResult,
 } from '../../pipeline-v2/agent-tools/dispatcher.js'
-import { resolveV2AgentExecutionPlan } from '../../pipeline-v2/agent-skills/registry.js'
+import {
+  completeV2SampleAnalysisDependencies,
+  resolveV2AgentExecutionPlan,
+} from '../../pipeline-v2/agent-skills/registry.js'
 import {
   deliveryAuthorizationFromDirectorDecision,
   pendingDismissalAuthorizationFromDirectorDecision,
@@ -194,14 +197,14 @@ function proposalReply(input: {
     || usesChineseAsPrimaryLanguage(input.userPrompt) === usesChineseAsPrimaryLanguage(input.modelMessage))) {
     return input.modelMessage
   }
-  if (usesChineseAsPrimaryLanguage(input.userPrompt)) {
+  if (!usesChineseAsPrimaryLanguage(input.userPrompt)) {
     return input.kind === 'creation'
-      ? '我先把你的目标整理成了下面这份创作摘要。你确认无误后，我再生成完整方案。'
-      : '我把这次需要调整的内容整理在下面了。你确认无误后，我再应用到当前方案。'
+      ? 'I summarized your goal below. Please confirm it before I generate the full plan.'
+      : 'I summarized the requested changes below. Please confirm them before I update the current plan.'
   }
   return input.kind === 'creation'
-    ? 'I summarized your goal below. Please confirm it before I generate the full plan.'
-    : 'I summarized the requested changes below. Please confirm them before I update the current plan.'
+    ? '我先把你的目标整理成了下面这份创作摘要。你确认无误后，我再生成完整方案。'
+    : '我把这次需要调整的内容整理在下面了。你确认无误后，我再应用到当前方案。'
 }
 
 function stateDiff(before: DirectorWorkspaceState, after: DirectorWorkspaceState) {
@@ -228,8 +231,7 @@ function creativeSummary(input: {
     const normalizedValue = value?.trim().toLocaleLowerCase()
     if (!normalizedValue) return false
     if (!normalizedPrompt) return true
-    const usesChineseValue = usesChineseAsPrimaryLanguage(normalizedValue)
-    return usesChinese === usesChineseValue
+    return usesChinese === usesChineseAsPrimaryLanguage(normalizedValue)
       || (allowExplicitFragment && normalizedPrompt.includes(normalizedValue))
   }
   const modelGoal = input.modelSummary?.goal.trim()
@@ -246,22 +248,6 @@ function creativeSummary(input: {
       .map((item) => item.statement),
     openQuestions: (input.modelSummary?.openQuestions ?? []).filter((question) => followsPromptLanguage(question)),
   }
-}
-
-const requirementPersistenceClaim = /(?:我|本轮|现已|已经).{0,12}(?:记录|保存|沉淀|更新|撤销|作废).{0,20}(?:要求|偏好|约束)|(?:已|已经|现已)(?:为你)?(?:成功)?(?:记录|保存|沉淀)(?:了)?(?::|：|(?:本轮|该|这|您的|你的)?(?:要求|偏好|约束))|(?:已|已经|现已)(?:成功)?(?:撤销|更新).{0,30}(?:偏好|要求|约束)|已将.{0,20}(?:要求|偏好|约束).{0,8}(?:更新|撤销|作废)|\b(?:I|this turn|now).{0,12}(?:recorded|saved|updated|revoked).{0,20}(?:requirement|preference|constraint)s?\b/i
-
-function hasUnsupportedRequirementPersistenceClaim(message: string) {
-  const withoutNegatedActions = message
-    .replace(/(?:不|不会|不要|未|没有|无需).{0,4}(?:记录|保存|更新|撤销|作废)/gu, '')
-    .replace(/\b(?:do not|don't|will not|won't|did not|not)\s+(?:record|save|update|revoke)\b/giu, '')
-  return requirementPersistenceClaim.test(withoutNegatedActions)
-}
-
-function stripUnsupportedPersistenceClaims(message: string) {
-  return (message.match(/[^。！？!?；;\n]+[。！？!?；;]?/gu) ?? [message])
-    .filter((sentence) => !hasUnsupportedRequirementPersistenceClaim(sentence))
-    .join('')
-    .trim()
 }
 
 function requirementConfirmation(changes: RequirementChanges) {
@@ -441,10 +427,7 @@ export async function* streamDirectorAgentChat(
   const effectiveRuntime = {
     ...input.runtime,
     sampleUrl: workspaceState.context.sampleVideo?.url ?? '',
-    isSampleParsed: Boolean(
-      workspaceState.context.sampleVideo?.reference
-      || workspaceState.context.sampleVideo?.sampleUnderstanding,
-    ),
+    isSampleParsed: workspaceState.context.sampleVideo?.sampleUnderstanding?.source === 'llm',
     hasVisualMaterial: workspaceState.context.materials.some(
       (material) => material.type === 'image' || material.type === 'video',
     ),
@@ -775,6 +758,7 @@ export async function* streamDirectorAgentChat(
         workspaceSessionId: id,
         turnId: turnOperationId,
         userText: input.prompt,
+        turnIntent: routed.conversationIntent ?? 'chat',
         currentDraftId: workspaceState.draftId,
         requirementStatements: workspaceState.confirmedRequirements
           .filter((item) => item.status === 'active')
@@ -810,7 +794,11 @@ export async function* streamDirectorAgentChat(
       styleIntensity: effectiveCreativeConfig.styleIntensity,
     },
   }
-  const modelToolProposals = routed.result.toolRequests ?? []
+  const modelToolProposals = completeV2SampleAnalysisDependencies({
+    proposals: routed.result.toolRequests ?? [],
+    sampleAvailable: Boolean(workspaceState.context.sampleVideo?.url),
+    sampleReady: workspaceState.context.sampleVideo?.sampleUnderstanding?.source === 'llm',
+  })
   const shouldExecute = modelToolProposals.length > 0
 
   workspaceState = applyDirectorWorkspacePatch(workspaceState, {
@@ -1508,16 +1496,11 @@ export async function* streamDirectorAgentChat(
       ? requirementConfirmation(requirementResult.changes)
       : '本轮要求变更未通过校验，因此没有保存这些要求。'
   const baseAssistantMessage = stateAction
-    ? toolResults.length > 0
-      ? [requirementMessage, modelAssistantMessage]
-          .filter(Boolean)
-          .map((message) => message.replace(/[。！!？?]+$/u, ''))
-          .join('。')
-      : requirementMessage
-    : toolResults.length === 0 && hasUnsupportedRequirementPersistenceClaim(modelAssistantMessage)
-      ? stripUnsupportedPersistenceClaims(modelAssistantMessage)
-        || '我理解了你的意思，可以继续按这个方向讨论。'
-      : modelAssistantMessage
+    ? [requirementMessage, modelAssistantMessage]
+        .filter(Boolean)
+        .map((message) => message.replace(/[。！!？?]+$/u, ''))
+        .join('。')
+    : modelAssistantMessage
   const seenDismissalOutcomes = new Set<string>()
   const userFacingActionReceipts = actionReceipts.filter((receipt) => {
     if (receipt.kind !== 'tool.call' || !receipt.callId) return true
@@ -1546,7 +1529,8 @@ export async function* streamDirectorAgentChat(
       summary: userFacingExecutionText(summary),
     }
   })
-  const fallbackAssistantMessage = !awaitsRevisionConfirmation && finalReplyFacts.length > 0
+  const awaitsProposalConfirmation = awaitsRevisionConfirmation || awaitsPlanConfirmation
+  const fallbackAssistantMessage = !awaitsProposalConfirmation && finalReplyFacts.length > 0
     ? finalReplyFacts.map((fact) => fact.summary)
         .map((message) => message.replace(/[。！!？?]+$/u, ''))
         .filter(Boolean)
@@ -1556,7 +1540,7 @@ export async function* streamDirectorAgentChat(
     message: fallbackAssistantMessage,
     source: 'fallback',
   }
-  if (!awaitsRevisionConfirmation && finalReplyFacts.length > 0) {
+  if (!awaitsProposalConfirmation && finalReplyFacts.length > 0) {
     try {
       finalReply = await (dependencies.composeFinalReply ?? composeDirectorFinalReply)({
         userPrompt: executionPrompt,

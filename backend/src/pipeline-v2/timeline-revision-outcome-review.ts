@@ -31,6 +31,7 @@ export interface V2TimelineFactDigest {
     id: string
     title?: string
     description?: string
+    card_copy?: { title?: string; subtitle?: string; body?: string }
     visual_role?: string
     duration_sec: number
     type: RemotionTimelineSpecV1['scenes'][number]['type']
@@ -205,6 +206,13 @@ export function buildV2TimelineFactDigest(spec: RemotionTimelineSpecV1): V2Timel
       id: scene.id,
       title: nonBlank(scene.creative_intent?.title) ?? nonBlank(scene.title),
       description: nonBlank(scene.creative_intent?.description) ?? nonBlank(scene.body),
+      card_copy: scene.type === 'remotion_card' || scene.type === 'caption_scene' || scene.type === 'data_viz'
+        ? {
+            ...(nonBlank(scene.title) ? { title: nonBlank(scene.title) } : {}),
+            ...(nonBlank(scene.subtitle) ? { subtitle: nonBlank(scene.subtitle) } : {}),
+            ...(nonBlank(scene.body) ? { body: nonBlank(scene.body) } : {}),
+          }
+        : undefined,
       visual_role: scene.visual_role,
       duration_sec: scene.duration_sec,
       type: scene.type,
@@ -619,6 +627,11 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
   revisionGroup?: V2TimelineRevisionGroup
   imageContextAvailable?: boolean
   sampleContextAvailable?: boolean
+  requiredCorrections?: V2TimelineRevisionReviewVerdict['violations']
+  fullTimelineSummary?: {
+    base?: { scene_count: number; duration_sec: number }
+    candidate: { scene_count: number; duration_sec: number }
+  }
 }) {
   const componentsById = new Map((input.availableComponents ?? []).map((item) => [item.id, item]))
   const effectiveComponents = [
@@ -725,9 +738,13 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
     '通用判断',
     '- 使用语义判断，不使用固定关键词命中。必要的范围内改写不算越界，范围外字段变化才算 unrelated_change。',
     ...(input.revisionScope === 'structure'
-      ? ['- structure 的 scene_ids 表示基础方案中允许整体替换的连续范围，不是候选方案的镜头 ID 白名单。候选可以在该范围内新增、删除或重新编号镜头；只有改变范围外对象或越过保留锚点才算越界。']
+      ? [
+          '- structure 的 scene_ids 表示基础方案中允许整体替换的连续范围，不是候选方案的镜头 ID 白名单。候选可以在该范围内新增、删除或重新编号镜头；只有改变范围外对象或越过保留锚点才算越界。',
+          '- 插入或删除镜头所必需的相邻转场重连属于结构修改的一部分；不要要求保留已不再成立的旧相邻关系，只保护编辑范围之外的转场。',
+        ]
       : []),
     '- 可见文字必须是观众文案；技术说明、文件名、内部 ID、布局约束和规划指令不得成为字幕，除非用户明确要求逐字展示。',
+    '- 用户明确要求程序化画面时，对应镜头必须由 remotion_card、caption_scene、data_viz 或已授权 custom_render 实现；ai_video + generate_video 不算程序化实现。',
     ...(visibleTextRiskApplies
       ? ['- 用户要求重写或创作字幕时，旧字幕允许被替换；不要因为基础方案存在旧文案就要求逐字保留。布局、行数和位置要求应检查结构化字段，不把约束文字本身当字幕。']
       : []),
@@ -755,6 +772,14 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
     '',
     '当前用户要求',
     input.prompt,
+    ...(input.requiredCorrections?.length
+      ? [
+          '',
+          '必须重新核对的上次违规项',
+          JSON.stringify(input.requiredCorrections),
+          '只有候选方案事实已经逐项解决上述违规时才可通过；不得因说明文字声称已修复而通过。',
+        ]
+      : []),
     '',
     '服务端授权边界',
     JSON.stringify(authorizedBoundary),
@@ -764,6 +789,14 @@ export function buildV2TimelineOutcomeReviewPrompt(input: {
     '',
     '相关有效要求',
     input.confirmedContext ?? '[]',
+    ...(input.fullTimelineSummary
+      ? [
+          '',
+          '全片结构摘要',
+          JSON.stringify(input.fullTimelineSummary),
+          '下方基础与候选方案事实可能只是受影响范围的投影；全片镜头数和总时长必须以上述摘要为准。',
+        ]
+      : []),
     '',
     '基础方案事实',
     input.hasBase ? JSON.stringify(input.baseDigest) : '无基础方案；这是首次创建。',
@@ -854,6 +887,7 @@ export async function reviewV2TimelineRevisionOutcome(input: {
   revisionGroup?: V2TimelineRevisionGroup
   imageContextAvailable?: boolean
   sampleContextAvailable?: boolean
+  requiredCorrections?: V2TimelineRevisionReviewVerdict['violations']
   assess?: (input: {
     prompt: string
     baseDigest: V2TimelineFactDigest
@@ -926,6 +960,21 @@ export async function reviewV2TimelineRevisionOutcome(input: {
     revisionGroup: input.revisionGroup,
     imageContextAvailable: input.imageContextAvailable,
     sampleContextAvailable: input.sampleContextAvailable,
+    requiredCorrections: input.requiredCorrections,
+    fullTimelineSummary: {
+      ...(input.baseSpec
+        ? {
+            base: {
+              scene_count: input.baseSpec.scenes.length,
+              duration_sec: input.baseSpec.canvas.duration_sec,
+            },
+          }
+        : {}),
+      candidate: {
+        scene_count: input.candidateSpec.scenes.length,
+        duration_sec: input.candidateSpec.canvas.duration_sec,
+      },
+    },
   })
   const requested = env.directorAgentStructuredOutputMode === 'auto'
   let raw: unknown

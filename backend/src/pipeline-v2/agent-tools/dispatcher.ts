@@ -385,6 +385,17 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
         ? { sessionId: input.traceSessionId, operationId: `sample_${request.callId}` }
         : undefined,
     })
+    if (result.understanding.source !== 'llm') {
+      return {
+        callId: request.callId,
+        toolId: request.toolId,
+        ok: false,
+        gate: 'sample_understanding',
+        summary: '只读取到样例的媒体信息，没有得到可靠的画面与创作方法理解。',
+        recovery: '样例理解服务可用后重试；不参考该样例的其他任务不受影响。',
+        output: { traceDir: result.traceDir },
+      }
+    }
     return {
       callId: request.callId,
       toolId: request.toolId,

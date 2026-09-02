@@ -72,6 +72,7 @@ export type CreativeKnowledgeRelation = z.infer<typeof KnowledgeRelationSchema>
 export interface CreativeLearningDependencies {
   observeUserTurn?: (input: {
     userText: string
+    turnIntent: 'chat' | 'clarify' | 'create' | 'revise' | 'execute'
     requirementStatements: string[]
     recalledMemories: Array<Pick<CreativeMemoryRecord, 'id' | 'statement' | 'scopeType' | 'status'>>
   }) => Promise<CreativeMemoryLearningDecision>
@@ -160,8 +161,11 @@ export async function defaultObserveUserTurn(
       'statement 使用简洁、原子化、可跨任务复用的规范表达；一句话包含多个独立偏好时拆开。不要把人物、地点、题材内容或本次任务目标混入 statement，除非它明确限定偏好的适用题材。',
       'sourceExcerpt 必须逐字截取自本轮 userText，且单独阅读时必须支持 statement 的对象、方向和适用条件；statement 可以进行语义归纳。',
       '用户明确说明长期、以后、一贯偏好时使用 explicit_preference；仅表达本次感觉、可能倾向或尚不确定时使用 behavioral_signal；明确撤销已有偏好时使用 revocation，并且只能引用 recalledMemories 中的 targetMemoryId。',
+      'turnIntent 只表示本轮主要业务动作，不决定是否存在长期偏好。create、revise 或 execute 中也可能同时包含明确的跨项目偏好；只提取原话中具有长期含义的独立偏好表达。',
+      '对照：“这条产品短片使用快节奏剪辑”是当前作品要求，不提取；“以后做产品介绍时，我都偏好快节奏剪辑”是长期偏好。',
       '当前项目要求与偏好同时出现时，只提取其中可跨任务复用的偏好部分。没有可靠偏好证据时返回空 observations。',
       `userText=${JSON.stringify(input.userText)}`,
+      `turnIntent=${JSON.stringify(input.turnIntent)}`,
       `currentRequirements=${JSON.stringify(input.requirementStatements)}`,
       `recalledMemories=${JSON.stringify(input.recalledMemories)}`,
       '只输出符合 JSON Schema 的结果。',
@@ -238,6 +242,7 @@ export async function learnCreativePreferencesFromUserTurn(input: {
   workspaceSessionId: string
   turnId: string
   userText: string
+  turnIntent?: 'chat' | 'clarify' | 'create' | 'revise' | 'execute'
   currentDraftId?: string
   requirementStatements: string[]
   recalledMemories?: CreativeMemoryRecord[]
@@ -256,6 +261,7 @@ export async function learnCreativePreferencesFromUserTurn(input: {
     }
     const decision = MemoryDecisionSchema.parse(await (dependencies.observeUserTurn ?? defaultObserveUserTurn)({
       userText: input.userText,
+      turnIntent: input.turnIntent ?? 'chat',
       requirementStatements: input.requirementStatements,
       recalledMemories: recalled.map(({ id, statement, scopeType, status }) => ({ id, statement, scopeType, status })),
     }))

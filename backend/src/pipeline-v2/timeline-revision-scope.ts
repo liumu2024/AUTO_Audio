@@ -1,6 +1,7 @@
 import type {
   RemotionTimelineScene,
   RemotionTimelineSpecV1,
+  V2CreativeBrief,
 } from '../../../shared/types/remotion-timeline-spec.v1.js'
 import { retainV2TimelineResourceClosure } from './timeline-resource-closure.js'
 
@@ -111,7 +112,10 @@ function mergeImageReferencesForJobs(input: {
     ...(job.type === 'reuse_asset' && job.output_asset_id ? [job.output_asset_id] : []),
   ]))
   if (referencedImageAssetIds.size === 0) return input.baseSpec.creative_brief
-  const candidateReferences = (input.candidateSpec.creative_brief?.image_references ?? [])
+  const candidateReferences = preserveObservedImageFacts(
+    input.baseSpec.creative_brief,
+    input.candidateSpec.creative_brief?.image_references ?? [],
+  )
     .filter((reference) => referencedImageAssetIds.has(reference.asset_id))
   const candidateReferenceIds = new Set(candidateReferences.map((reference) => reference.asset_id))
   const baseBrief = input.baseSpec.creative_brief
@@ -123,6 +127,21 @@ function mergeImageReferencesForJobs(input: {
       ...candidateReferences,
     ],
   }
+}
+
+function preserveObservedImageFacts(
+  baseBrief: V2CreativeBrief | undefined,
+  candidateReferences: V2CreativeBrief['image_references'],
+) {
+  const baseReferences = new Map(
+    (baseBrief?.image_references ?? []).map((reference) => [reference.asset_id, reference]),
+  )
+  return candidateReferences.map((reference) => {
+    const existing = baseReferences.get(reference.asset_id)
+    return existing
+      ? { ...reference, observed_facts: existing.observed_facts }
+      : reference
+  })
 }
 
 /**
@@ -477,10 +496,17 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
     const candidateScene = input.candidateSpec.scenes.find((scene) => scene.id === sceneId)
     const baseScene = input.baseSpec.scenes.find((scene) => scene.id === sceneId)
     const assetIds = new Set(input.candidateSpec.assets.map((asset) => asset.id))
+    const plannedAssetIds = new Set(input.candidateSpec.material_jobs
+      .filter((job) => job.scene_id === sceneId
+        && job.type === 'generate_video'
+        && job.status === 'planned'
+        && (!job.input_asset_id || assetIds.has(job.input_asset_id)))
+      .flatMap((job) => job.output_asset_id ? [job.output_asset_id] : []))
     const assetBackedTypes = new Set(['user_video', 'ai_video', 'image_motion'])
     const effectiveCandidateScene = baseScene && candidateScene
       && assetBackedTypes.has(candidateScene.type)
-      && (!candidateScene.asset_id || !assetIds.has(candidateScene.asset_id))
+      && (!candidateScene.asset_id
+        || (!assetIds.has(candidateScene.asset_id) && !plannedAssetIds.has(candidateScene.asset_id)))
       ? { ...candidateScene, type: baseScene.type, asset_id: baseScene.asset_id }
       : candidateScene
     const strategyChanged = Boolean(
@@ -493,7 +519,11 @@ function applyV2TimelineRevisionScopeUnchecked(input: {
       job.scene_id === sceneId
       && (
         baseTargetJobIds.has(job.id)
-        || Boolean(job.output_asset_id && assetIds.has(job.output_asset_id))
+        || Boolean(job.type === 'generate_video'
+          ? job.output_asset_id && (job.status === 'fulfilled'
+            ? assetIds.has(job.output_asset_id)
+            : job.status === 'planned' && (!job.input_asset_id || assetIds.has(job.input_asset_id)))
+          : job.output_asset_id && assetIds.has(job.output_asset_id))
       ))
     return {
       ...input.baseSpec,
@@ -605,12 +635,13 @@ function candidateBriefWithReferences(
     if (imageReferences.length === 0) return undefined
     throw new Error('Image-conditioned revision requires an existing creative brief.')
   }
-  const replacementIds = new Set(imageReferences.map((reference) => reference.asset_id))
+  const authoritativeReferences = preserveObservedImageFacts(baseSpec.creative_brief, imageReferences)
+  const replacementIds = new Set(authoritativeReferences.map((reference) => reference.asset_id))
   return {
     ...baseSpec.creative_brief,
     image_references: [
       ...baseSpec.creative_brief.image_references.filter((reference) => !replacementIds.has(reference.asset_id)),
-      ...imageReferences,
+      ...authoritativeReferences,
     ],
   }
 }
@@ -867,7 +898,13 @@ export function applyV2TimelineRevisionGroupFragment(input: {
     job.scene_id === input.group.sceneId
     && (
       targetJobIds.has(job.id)
-      || Boolean(scopes.has('visual_strategy') && job.output_asset_id && assetIds.has(job.output_asset_id))
+      || Boolean(scopes.has('visual_strategy') && (
+        job.type === 'generate_video'
+          ? job.output_asset_id && (job.status === 'fulfilled'
+            ? assetIds.has(job.output_asset_id)
+            : job.status === 'planned' && (!job.input_asset_id || assetIds.has(job.input_asset_id)))
+          : job.output_asset_id && assetIds.has(job.output_asset_id)
+      ))
     )).map((job) => {
       const stableOutputAssetId = baseTargetJobById.get(job.id)?.output_asset_id
       return !job.output_asset_id && stableOutputAssetId

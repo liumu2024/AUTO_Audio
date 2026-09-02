@@ -82,7 +82,7 @@ function applyDirectorWorkspaceContext(
       id: sample.id,
       url: sample.url,
       name: sample.name,
-      parsed: Boolean(sample.reference || sample.sampleUnderstanding),
+      parsed: sample.sampleUnderstanding?.source === 'llm',
     }
     : undefined, acknowledgeLocalChanges)
 }

@@ -48,7 +48,7 @@ export interface V2AgentToolDefinition {
 const emptyArgumentsSchema = z.object({}).strict()
 const sampleAnalyzeArgumentsSchema = emptyArgumentsSchema
 const materialInspectArgumentsSchema = emptyArgumentsSchema
-const requiredMaterialIdsSchema = z.array(z.string().trim().min(1).max(200)).min(1).max(20)
+const requiredMaterialIdsSchema = z.array(z.string().trim().min(1).max(200)).max(20)
   .refine((ids) => new Set(ids).size === ids.length, 'requiredMaterialIds must be unique.').optional()
 const useSampleReferenceSchema = z.boolean().optional()
 const timelinePlanArgumentsSchema = z.object({

@@ -113,34 +113,12 @@ const DirectorDecisionJsonSchema = z.toJSONSchema(LlmIntentResultSchema, {
   target: 'draft-7',
 }) as Record<string, unknown>
 
-const DirectorFinalReplyOpeningSchema = z.enum([
-  '',
-  '我看过这次的处理结果了',
-  '我把这次的处理结果整理好了',
-  '我把刚才的处理情况核对了一遍',
-  '这次的处理情况我已经梳理好了',
-  '我按你的要求逐项看过结果了',
-  '刚才的处理结果我已经逐项确认过了',
-])
-const DirectorFinalReplyNextStepSchema = z.enum([
-  '',
-  '你可以继续告诉我接下来想怎么调整',
-  '你可以先看看当前结果，再决定下一步',
-  '如果需要，我可以继续按当前结果往下处理',
-  '你可以先确认这些结果，再告诉我下一步想怎么处理',
-  '接下来想继续调整哪一部分，直接告诉我就可以',
-  '如果想换一种处理方式，也可以继续告诉我',
-  '你可以根据当前结果决定继续调整还是先保留',
-])
-const DirectorFinalReplyConnectorSchema = z.enum(['', '另外，', '同时，', '不过，', '至于另一项，'])
 const DirectorFinalReplySchema = z.object({
-  opening: DirectorFinalReplyOpeningSchema,
+  message: z.string().trim().min(1).max(2_000),
   outcomes: z.array(z.object({
     ref: z.string().trim().min(1).max(80),
     status: z.enum(['succeeded', 'failed', 'skipped']),
-    connector: DirectorFinalReplyConnectorSchema,
   }).strict()).max(50),
-  nextStep: DirectorFinalReplyNextStepSchema,
 }).strict()
 const DirectorFinalReplyJsonSchema = z.toJSONSchema(DirectorFinalReplySchema, {
   target: 'draft-7',
@@ -390,7 +368,7 @@ export function buildDirectorModelPrompt(input: DirectorPromptInput) {
 - intent 只使用 chat、create、revise、execute、clarify。讨论、建议、评价、假设和只读问答使用 chat，不请求 Tool。
 - 只有当前输入明确授权创建、修订或执行时才请求 Tool。交付操作使用 execute；用户明确要求渲染、导出、提交或生成成片即构成本轮授权，服务端仍会做最终权限校验。
 - 目标和 ID 只能来自服务端提供的事实；不得编造样例、素材、草稿、版本、项目、用户或时间线对象 ID。
-- replyDraft 不得宣称要求或执行动作已成功保存或完成；最终结果以服务端真实回执为准。
+- replyDraft 只回答本轮对话、待确认提案或准备执行的内容；不得宣称要求、偏好或执行动作已保存、撤销或完成。要求与执行结果由服务端真实回执补充，偏好由独立学习链路处理。
 - toolRequests 必须完整覆盖用户明确要求且实际受影响的范围，不得遗漏，也不得增加用户未要求的修改。
 
 意图对照示例：
@@ -616,16 +594,7 @@ function validateFinalReply(input: {
     if (!fact || outcome.ref !== fact.ref || outcome.status !== fact.status) {
       throw new Error(`outcome order or status mismatch at index ${index}`)
     }
-    if ((index === 0) !== (outcome.connector === '')) {
-      throw new Error('only the first outcome may omit its connector')
-    }
   })
-}
-
-function punctuateReplyPart(value: string) {
-  const trimmed = value.trim()
-  if (!trimmed) return ''
-  return /[。！？!?；;]$/u.test(trimmed) ? trimmed : `${trimmed}。`
 }
 
 function finalReplyPrompt(input: {
@@ -634,16 +603,16 @@ function finalReplyPrompt(input: {
   facts: DirectorFinalReplyFact[]
 }) {
   return [
-    '你是直接与视频创作者对话的 AI 导演。请根据已经发生的真实结果，写一段自然、简洁的中文回复。',
-    'outcomes 是唯一事实来源；replyDraft 只供参考语气，不能覆盖真实结果。',
-    '请为 opening 和 nextStep 各选择一个最合适的安全承接语。outcomes 必须严格保持给定顺序；第一项 connector 必须为空，后续项根据并列或转折关系选择 connector。',
-    'outcomes 只返回 ref 和 status；不要复述 summary。服务端会按 ref 放回对应的权威事实，不能改写、对调或遗漏。',
-    '不要使用“模块已执行/未执行”式清单。最终回复会由 opening、按你排列的权威结果和 nextStep 组成。',
+    '你是直接与视频创作者对话的 AI 导演。请根据已经发生的真实结果，用与用户原话一致的主要语言写一段自然、简洁的回复。',
+    'facts 是唯一事实来源；replyDraft 只供参考对话语气，不能覆盖真实结果。',
+    'message 必须用正常对话方式准确说明每项 fact 的 summary，可以合并表达，但不得改变、遗漏或猜测结果。',
+    'outcomes 只按给定顺序返回每项 fact 的 ref 和 status，用于服务端验证回复覆盖了全部真实回执。',
+    '不要使用“模块已执行/未执行”式清单，也不必每次都加固定开场和结尾。',
     '不要向用户展示内部版本号、revision、V2 Timeline、Tool、Skill、Provider、Backend、Worker、调用 ID 或协议字段。',
     '失败、跳过或部分完成时必须如实保留对应 summary，不能把计划、尝试、预览或失败说成已经完成。',
     `用户原话：${JSON.stringify(input.userPrompt)}`,
     `执行前回复草稿：${JSON.stringify(input.replyDraft)}`,
-    `权威 outcomes：${JSON.stringify(input.facts)}`,
+    `权威 facts：${JSON.stringify(input.facts)}`,
     '只输出符合给定 JSON Schema 的 JSON。',
   ].join('\n')
 }
@@ -670,13 +639,8 @@ export async function composeDirectorFinalReply(input: {
     rawText = extractText(response.raw)
     const candidate = DirectorFinalReplySchema.parse(extractJson(rawText))
     validateFinalReply({ candidate, facts: input.facts })
-    const message = [
-      candidate.opening,
-      ...candidate.outcomes.map((outcome, index) => `${outcome.connector}${input.facts[index]?.summary ?? ''}`),
-      candidate.nextStep,
-    ].map(punctuateReplyPart).filter(Boolean).join('')
     return {
-      message,
+      message: candidate.message,
       source: 'llm',
       responseId: responseIdFrom(response.raw),
       audit: responseAudit(response.raw, rawText),

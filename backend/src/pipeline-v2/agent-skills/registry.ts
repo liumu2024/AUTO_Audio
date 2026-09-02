@@ -60,6 +60,38 @@ export interface V2AgentExecutionPlan {
   stages: V2AgentExecutionStage[]
 }
 
+export function completeV2SampleAnalysisDependencies(input: {
+  proposals: V2AgentToolProposal[]
+  sampleAvailable: boolean
+  sampleReady: boolean
+}): V2AgentToolProposal[] {
+  const sampleConsumers = input.proposals.filter((proposal) =>
+    (proposal.toolId === 'timeline.plan' || proposal.toolId === 'timeline.patch')
+    && proposal.arguments.useSampleReference === true)
+  if (!input.sampleAvailable || input.sampleReady || sampleConsumers.length === 0) {
+    return input.proposals
+  }
+
+  const existingAnalysis = input.proposals.find((proposal) => proposal.toolId === 'sample.analyze')
+  const usedRefs = new Set(input.proposals.map((proposal) => proposal.ref))
+  let analysisRef = existingAnalysis?.ref ?? 'sample_reference_analysis'
+  while (!existingAnalysis && usedRefs.has(analysisRef)) analysisRef = `${analysisRef}_next`
+  const analysis = existingAnalysis ?? {
+    ref: analysisRef,
+    toolId: 'sample.analyze',
+    skillId: 'sample-reference-analysis',
+    arguments: {},
+    requestedMode: 'preview' as const,
+    dependsOn: [],
+  }
+  const remaining = input.proposals
+    .filter((proposal) => proposal !== existingAnalysis)
+    .map((proposal) => sampleConsumers.includes(proposal)
+      ? { ...proposal, dependsOn: [...new Set([...proposal.dependsOn, analysisRef])] }
+      : proposal)
+  return [analysis, ...remaining]
+}
+
 function canonicalToolCallId(input: {
   workspaceSessionId: string
   turnRequestId: string

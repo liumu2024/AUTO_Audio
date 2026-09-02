@@ -72,7 +72,7 @@ function materialLabel(input: { name?: string; id: string; type: string }): stri
   return input.name?.trim() || `${input.type} ${input.id}`
 }
 
-function buildPlannerAssets(input: V2RemotionTimelinePlannerInput): RemotionTimelineAsset[] {
+export function buildPlannerAssets(input: V2RemotionTimelinePlannerInput): RemotionTimelineAsset[] {
   if (input.materials?.length) {
     return input.materials.map((material) => ({
       id: material.id,

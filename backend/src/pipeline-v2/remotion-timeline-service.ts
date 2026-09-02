@@ -279,6 +279,7 @@ async function resolveTimelineSpec(input: {
             revisionGlobalMode: input.plannerInput.revisionGlobalMode,
             revisionDurationMode: input.plannerInput.revisionDurationMode,
             revisionGroup: input.plannerInput.revisionGroup,
+            requiredCorrections: outcomeReview.violations,
             ...reviewSourceContext,
           })
           await input.trace.writeJson('02-planning', 'timeline-outcome-correction-review.json', outcomeReview)
