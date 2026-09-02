@@ -7,7 +7,6 @@ import type {
 export interface V2TimelineHardRequirements {
   schema_version: 'v2_timeline_hard_requirements.v1'
   required_captions: string[]
-  use_all_visual_materials: boolean
 }
 
 function uniqueText(items: string[]): string[] {
@@ -63,8 +62,6 @@ export function extractV2TimelineHardRequirements(prompt: string): V2TimelineHar
   return {
     schema_version: 'v2_timeline_hard_requirements.v1',
     required_captions: uniqueText(requiredCaptions),
-    use_all_visual_materials:
-      /全部|所有|每张|每个|都用|用完|全用|use all/i.test(prompt),
   }
 }
 

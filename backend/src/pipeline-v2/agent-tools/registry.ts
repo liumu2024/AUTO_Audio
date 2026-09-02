@@ -48,12 +48,15 @@ export interface V2AgentToolDefinition {
 const emptyArgumentsSchema = z.object({}).strict()
 const sampleAnalyzeArgumentsSchema = emptyArgumentsSchema
 const materialInspectArgumentsSchema = emptyArgumentsSchema
+const requiredMaterialIdsSchema = z.array(z.string().trim().min(1).max(200)).min(1).max(20)
+  .refine((ids) => new Set(ids).size === ids.length, 'requiredMaterialIds must be unique.').optional()
 const timelinePlanArgumentsSchema = z.object({
   instruction: z.string().trim().min(1).max(4_000).optional(),
+  requiredMaterialIds: requiredMaterialIdsSchema,
 }).strict()
 const patchInstructionSchema = z.string().trim().min(1).max(4_000).optional()
 const resolvesPendingCallIdSchema = z.string().trim().min(1).max(200).optional()
-const timelinePatchArgumentsSchema = z.discriminatedUnion('scope', [
+const scopedTimelinePatchArgumentsSchema = z.discriminatedUnion('scope', [
   z.object({
     scope: z.literal('subtitle'),
     sceneId: z.string().trim().min(1).max(200).optional(),
@@ -62,16 +65,17 @@ const timelinePatchArgumentsSchema = z.discriminatedUnion('scope', [
     instruction: patchInstructionSchema,
     resolvesPendingCallId: resolvesPendingCallIdSchema,
   }).strict(),
-  z.object({ scope: z.literal('scene'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema, resolvesPendingCallId: resolvesPendingCallIdSchema }).strict(),
+  z.object({ scope: z.literal('scene'), sceneId: z.string().trim().min(1).max(200).optional(), requiredMaterialIds: requiredMaterialIdsSchema, instruction: patchInstructionSchema, resolvesPendingCallId: resolvesPendingCallIdSchema }).strict(),
   z.object({
     scope: z.literal('structure'),
     sceneIds: z.array(z.string().trim().min(1).max(200)).min(1).max(20)
       .refine((ids) => new Set(ids).size === ids.length, 'sceneIds must be unique.'),
     durationMode: z.enum(['preserve_range', 'resize_timeline']).default('preserve_range'),
+    requiredMaterialIds: requiredMaterialIdsSchema,
     instruction: patchInstructionSchema,
     resolvesPendingCallId: resolvesPendingCallIdSchema,
   }).strict(),
-  z.object({ scope: z.literal('visual_strategy'), sceneId: z.string().trim().min(1).max(200).optional(), instruction: patchInstructionSchema, resolvesPendingCallId: resolvesPendingCallIdSchema }).strict(),
+  z.object({ scope: z.literal('visual_strategy'), sceneId: z.string().trim().min(1).max(200).optional(), requiredMaterialIds: requiredMaterialIdsSchema, instruction: patchInstructionSchema, resolvesPendingCallId: resolvesPendingCallIdSchema }).strict(),
   z.object({
     scope: z.literal('transition'),
     transitionIds: z.array(z.string().trim().min(1).max(200)).min(1).max(20)
@@ -79,12 +83,25 @@ const timelinePatchArgumentsSchema = z.discriminatedUnion('scope', [
     instruction: patchInstructionSchema,
     resolvesPendingCallId: resolvesPendingCallIdSchema,
   }).strict(),
+])
+const globalTimelinePatchArgumentsSchema = z.discriminatedUnion('mode', [
   z.object({
     scope: z.literal('global'),
-    mode: z.enum(['brief_update', 'full_replan']),
+    mode: z.literal('brief_update'),
     instruction: patchInstructionSchema,
     resolvesPendingCallId: resolvesPendingCallIdSchema,
   }).strict(),
+  z.object({
+    scope: z.literal('global'),
+    mode: z.literal('full_replan'),
+    requiredMaterialIds: requiredMaterialIdsSchema,
+    instruction: patchInstructionSchema,
+    resolvesPendingCallId: resolvesPendingCallIdSchema,
+  }).strict(),
+])
+const timelinePatchArgumentsSchema = z.union([
+  scopedTimelinePatchArgumentsSchema,
+  globalTimelinePatchArgumentsSchema,
 ])
 const timelineRenderArgumentsSchema = emptyArgumentsSchema
 const timelinePendingDismissArgumentsSchema = z.object({

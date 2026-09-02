@@ -163,6 +163,7 @@ function plannerInput(input: {
   recalledCreativeKnowledge?: string[]
   availableComponents?: RenderComponentSummary[]
   toolArguments?: Record<string, unknown>
+  requiredMaterialIds?: string[]
 }): V2PlannerInput {
   return {
     taskId: input.taskId,
@@ -177,6 +178,7 @@ function plannerInput(input: {
       src: material.url,
       tags: material.tags,
     })),
+    requiredMaterialIds: input.requiredMaterialIds,
     durationSec: input.context.effectiveCreativeConfig?.durationSec ?? input.context.userIntent.durationSec ?? input.context.slots.durationSec,
     plannerMode: 'llm',
     canvas: canvas(input.context.effectiveCreativeConfig?.aspectRatio ?? input.context.slots.aspectRatio),
@@ -419,6 +421,51 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
     ? input.revisionGroup?.resolvesPendingCallId
       ?? checked.arguments.resolvesPendingCallId as string | undefined
     : undefined
+  const requestedRequiredMaterialIds = [...new Set(
+    input.revisionGroup
+      ? input.revisionGroup.items.flatMap((item) => item.requiredMaterialIds ?? [])
+      : Array.isArray(checked.arguments.requiredMaterialIds)
+        ? checked.arguments.requiredMaterialIds as string[]
+        : [],
+  )]
+  const availableMaterialIds = new Set(input.context.materials.map((material) => material.id))
+  const unknownRequiredMaterialIds = requestedRequiredMaterialIds.filter((id) => !availableMaterialIds.has(id))
+  if (unknownRequiredMaterialIds.length > 0) {
+    return {
+      callId: request.callId,
+      toolId: request.toolId,
+      ok: false,
+      gate: 'dispatcher_target',
+      summary: `指定的必用素材不存在：${unknownRequiredMaterialIds.join('、')}。`,
+      recovery: '请从当前素材列表中重新选择。',
+    }
+  }
+  if (request.toolId === 'timeline.patch'
+    && checked.arguments.scope === 'global'
+    && checked.arguments.mode !== 'full_replan'
+    && requestedRequiredMaterialIds.length > 0) {
+    return {
+      callId: request.callId,
+      toolId: request.toolId,
+      ok: false,
+      gate: 'dispatcher_target',
+      summary: '仅更新全片创作方向时不能同时新增必用素材。',
+      recovery: '若要改变素材使用，请提出完整重规划或具体镜头修改。',
+    }
+  }
+  if (request.toolId === 'timeline.patch'
+    && ['scene', 'structure', 'visual_strategy'].includes(String(checked.arguments.scope))
+    && requestedRequiredMaterialIds.some((id) =>
+      input.context.materials.find((material) => material.id === id)?.type === 'audio')) {
+    return {
+      callId: request.callId,
+      toolId: request.toolId,
+      ok: false,
+      gate: 'dispatcher_target',
+      summary: '当前局部画面修改不能同时绑定音频素材。',
+      recovery: '请将音频要求作为全片重规划处理。',
+    }
+  }
   const pendingResolution = requestedPendingCallId
     ? (await drafts.getDraft(input.workspace.draftId!, input.userId))?.pendingTimelineRevisions
         .find((item) => item.callId === requestedPendingCallId)
@@ -546,6 +593,7 @@ async function dispatchV2AgentToolOnce(input: V2AgentToolDispatchInput): Promise
       recalledCreativeKnowledge: input.recalledCreativeKnowledge,
       availableComponents,
       toolArguments: plannerRequest.toolArguments,
+      requiredMaterialIds: requestedRequiredMaterialIds,
     })
     if (existing && input.workspace.draftId && input.workspace.baseRevision) {
       plan = {

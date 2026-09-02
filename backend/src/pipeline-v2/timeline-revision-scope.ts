@@ -22,6 +22,7 @@ export interface V2TimelineRevisionGroupItem {
   sceneId: string
   overlayIds?: string[]
   transitionIds?: string[]
+  requiredMaterialIds?: string[]
 }
 
 /** Server-authorized same-scene revision bundle. It is never accepted from a
@@ -925,6 +926,7 @@ export function resolveV2TimelineRevisionGroup(input: {
     sceneId?: unknown
     overlayIds?: unknown
     transitionIds?: unknown
+    requiredMaterialIds?: unknown
     resolvesPendingCallId?: unknown
   }>
 }): V2TimelineRevisionGroup | undefined {
@@ -969,6 +971,9 @@ export function resolveV2TimelineRevisionGroup(input: {
     const memberTransitionIds = Array.isArray(item.transitionIds)
       ? item.transitionIds.filter((id): id is string => typeof id === 'string')
       : undefined
+    const memberRequiredMaterialIds = Array.isArray(item.requiredMaterialIds)
+      ? item.requiredMaterialIds.filter((id): id is string => typeof id === 'string')
+      : undefined
     if (scope === 'subtitle' && (!memberOverlayIds?.length || memberOverlayIds.some((id) =>
       !input.baseSpec.overlays.some((overlay) => overlay.id === id && overlay.scene_id === sceneId)))) {
       throw new Error('Same-scene revision group caption target is invalid.')
@@ -986,6 +991,7 @@ export function resolveV2TimelineRevisionGroup(input: {
       sceneId,
       ...(memberOverlayIds?.length ? { overlayIds: memberOverlayIds } : {}),
       ...(memberTransitionIds?.length ? { transitionIds: memberTransitionIds } : {}),
+      ...(memberRequiredMaterialIds?.length ? { requiredMaterialIds: memberRequiredMaterialIds } : {}),
     })
   }
   return {
@@ -1010,6 +1016,7 @@ export function partitionV2TimelineRevisionGroups(input: {
     sceneId?: unknown
     overlayIds?: unknown
     transitionIds?: unknown
+    requiredMaterialIds?: unknown
     resolvesPendingCallId?: unknown
   }>
 }): V2TimelineRevisionGroupPartition {

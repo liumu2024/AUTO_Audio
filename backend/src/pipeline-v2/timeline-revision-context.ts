@@ -4,6 +4,10 @@ import type { V2TimelineRevisionGroup, V2TimelineRevisionScope } from './timelin
 export interface V2TimelineRevisionContext {
   draft_id: string
   base_revision: number
+  constraints?: {
+    target_range_start_sec: number
+    target_range_duration_sec: number
+  }
   timeline: {
     creative_brief?: RemotionTimelineSpecV1['creative_brief']
     canvas: RemotionTimelineSpecV1['canvas']
@@ -116,9 +120,21 @@ export function buildV2TimelineRevisionContext(input: {
   }
   const includeBrief = full || input.scope === 'scene' || input.scope === 'visual_strategy'
     || input.scope === 'structure' || input.scope === 'global'
+  const structuralTargetScenes = input.scope === 'structure'
+    ? spec.scenes.filter((scene) => structuralTargets.has(scene.id))
+    : []
+  const structureConstraints = structuralTargetScenes.length > 0
+    ? {
+        target_range_start_sec: Math.min(...structuralTargetScenes.map((scene) => scene.start_sec)),
+        target_range_duration_sec: Number(structuralTargetScenes
+          .reduce((sum, scene) => sum + scene.duration_sec, 0)
+          .toFixed(3)),
+      }
+    : undefined
   return {
     draft_id: input.draftId,
     base_revision: input.baseRevision,
+    ...(structureConstraints ? { constraints: structureConstraints } : {}),
     timeline: {
       creative_brief: includeBrief ? spec.creative_brief : undefined,
       canvas: spec.canvas,

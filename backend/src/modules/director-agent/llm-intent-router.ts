@@ -146,7 +146,9 @@ const DirectorFinalReplyJsonSchema = z.toJSONSchema(DirectorFinalReplySchema, {
   target: 'draft-7',
 }) as Record<string, unknown>
 
-type LlmIntentResult = z.infer<typeof LlmIntentResultSchema>
+type LlmIntentResult = z.infer<typeof LlmIntentResultSchema> & {
+  normalizedActionableQuestion?: boolean
+}
 export type DirectorStateAction = z.infer<typeof StateActionSchema>
 
 export interface LlmIntentRouterOutput {
@@ -162,6 +164,7 @@ export interface LlmIntentRouterOutput {
   protocolError?: { kind: 'json_syntax' | 'field_validation'; message: string }
   structuredOutput?: { requested: boolean; providerFallback: boolean; reason?: string }
   imageInputWarnings?: string[]
+  proposalReplyFallbackRequired?: boolean
   jsonRepair?: {
     request: string
     responseAudit?: unknown
@@ -206,11 +209,13 @@ interface DirectorPromptInput {
   prompt: string
   surfaceMode?: DirectorSurfaceMode
   currentTurnId?: string
+  currentTurnMaterialIds?: string[]
   context: DirectorContext
   runtime: DirectorConversationRuntime
   visualInputCount?: number
   confirmedRequirements?: ConfirmedRequirement[]
   pendingTimelineRevisions?: DirectorWorkspaceState['pendingTimelineRevisions']
+  recentFailure?: DirectorWorkspaceState['recentFailure']
   retrievedCreativeMemories?: CreativeMemorySearchResult
   promotedComponents?: RenderComponentSummary[]
   timelineSpec?: RemotionTimelineSpecV1
@@ -305,7 +310,8 @@ export function compactDirectorContextForPrompt(input: DirectorPromptInput) {
             message: lastError.message,
             suggestions: lastError.suggestions.map((suggestion) => suggestion.label),
           }
-        : undefined,
+          : undefined,
+      recentFailure: input.recentFailure,
     },
     references: {
       sampleVideo: input.context.sampleVideo
@@ -330,6 +336,7 @@ export function compactDirectorContextForPrompt(input: DirectorPromptInput) {
         type: item.type,
         tags: item.tags ?? [],
         hasSummary: Boolean(item.summary),
+        attachedThisTurn: input.currentTurnMaterialIds?.includes(item.id) || undefined,
       })),
     },
     requirements: (input.confirmedRequirements ?? []).filter((item) => item.status === 'active'),
@@ -386,9 +393,16 @@ export function buildDirectorModelPrompt(input: DirectorPromptInput) {
 - replyDraft 不得宣称要求或执行动作已成功保存或完成；最终结果以服务端真实回执为准。
 - toolRequests 必须完整覆盖用户明确要求且实际受影响的范围，不得遗漏，也不得增加用户未要求的修改。
 
+意图对照示例：
+- 征求建议：“我想做一条校园宣传片，你有什么建议？” → intent=chat，自然给出建议，stateActions 和 toolRequests 均为空。
+- 采纳建议并创建：“就按刚才建议的方向创建方案。” → intent=create，请求 timeline.plan；先形成可核对的创作摘要，不宣称已经创建。
+- 已有草稿修改：“把第二个镜头拆成两个，其他内容不变。” → intent=revise，请求 structure 范围的 timeline.patch；先形成修改提案，不宣称已经修改。
+- 同一句中先咨询再明确执行时，回答咨询内容并只为明确授权的动作请求 Tool；不能因为提到视频目标就把咨询本身当成创建授权。
+
 通用判断：
 - 单独记录、替换、撤销或查询创作要求时使用 chat；不得因为要求中出现画面、字幕或风格就自动修改草稿。
 - sampleVideo 只提供结构、节奏和表达方法参考，materials 才是候选成片素材。
+- materials 默认只是可选候选。只有用户明确要求本轮方案必须使用某项素材时，才填写 requiredMaterialIds，且 ID 必须来自当前 materials。局部 scene、structure、visual_strategy 只可绑定视觉素材；global.brief_update 不可绑定新素材，只有 global.full_replan 可以。用户没有要求使用的历史素材不得列入。
 - 本轮有视觉输入时，结合当前用户的具体问题和创作目标观察真实图片，提取与任务相关的可见事实，用于理解、比较或创意建议；不要机械枚举全部元素，也不得编造不可见事实。只读任务仍使用 chat，不得自动创建方案或渲染。
 - 判断画面是否已实现，只依据 timelineFacts 的真实类型、素材和生成任务。image_motion 只能移动或裁剪原图像素；新增动态画面需要 ai_video + generate_video，或确实实现目标效果的已注册画面组件。创作描述不等于已经实现。
 - creativeConfigDelta 只填写本轮新确认的参数；服务端给出的最终生效配置优先。
@@ -397,7 +411,7 @@ export function buildDirectorModelPrompt(input: DirectorPromptInput) {
 ${stateRules}
 
 当前项目要求：
-- 当前项目要求使用 requirements.update。replace/revoke 只能引用 requirements 中的 active id，并填写 targetRequirementId。
+- requirements.update 只维护用户明确要求长期约束当前项目的独立规则；普通咨询、一次创建或修改指令本身已经由 Tool 承接，不要重复写入项目要求。replace/revoke 只能引用 requirements 中的 active id，并填写 targetRequirementId。
 - memories 只用于理解用户可能延续的偏好，不是已确认的当前项目要求；偏好沉淀由独立学习链路处理，本轮不要输出偏好操作。
 
 动作、依赖与技能：
@@ -408,8 +422,9 @@ ${stateRules}
 
 回复与输出：
 - replyDraft 只自然说明当前理解、真正待确认的信息或准备执行的内容，不得暴露内部版本、实现名、调用标识、对象 ID 或协议字段。
-- replyDraft、creationSummary 和 Tool arguments 中面向 Planner 的 instruction 必须使用当前用户输入的主要语言；不得擅自翻译用户要求。协议字段、ID 和枚举保持原定义。
+- 所有自然语言输出必须使用当前用户输入的主要语言，包括 replyDraft、creationSummary、requirements.update 的 statement、skillRequests 的 purpose，以及 Tool arguments 中面向 Planner 的 instruction；不得擅自翻译用户要求。协议字段、ID 和枚举保持原定义。
 - missingInformation 只列真正阻塞当前目标的事实。
+- missingInformation 非空时使用 clarify，toolRequests 必须为空；不得一边追问阻塞信息，一边猜测答案并创建提案。
 - 严格按照给定协议输出 replyDraft、creationSummary、intent、creativeConfigDelta、stateActions、skillRequests、toolRequests、missingInformation，不增加字段。
 
 精简技能卡（SKILL_CARDS_JSON）：
@@ -467,7 +482,17 @@ function extractJson(text: string): unknown {
 
 /** Exported for the routing smoke test and for a single, audited model boundary. */
 export function parseDirectorModelDecision(text: string): LlmIntentResult {
-  return LlmIntentResultSchema.parse(extractJson(text))
+  const decision = LlmIntentResultSchema.parse(extractJson(text))
+  return decision.toolRequests.length > 0 && decision.missingInformation.length > 0
+    ? {
+        ...decision,
+        creationSummary: decision.creationSummary
+          ? { ...decision.creationSummary, openQuestions: [] }
+          : undefined,
+        missingInformation: [],
+        normalizedActionableQuestion: true,
+      }
+    : decision
 }
 
 function responseAudit(raw: unknown, finalText: string) {
@@ -880,6 +905,7 @@ export async function routeDirectorIntentWithLlm(input: {
   previousResponseId?: string
   confirmedRequirements?: ConfirmedRequirement[]
   pendingTimelineRevisions?: DirectorWorkspaceState['pendingTimelineRevisions']
+  recentFailure?: DirectorWorkspaceState['recentFailure']
   retrievedCreativeMemories?: CreativeMemorySearchResult
   timelineSpec?: RemotionTimelineSpecV1
 }): Promise<LlmIntentRouterOutput> {
@@ -944,6 +970,7 @@ export async function routeDirectorIntentWithLlm(input: {
           missingInformation: repaired.missingInformation,
           structuredOutput: response.structuredOutput,
           imageInputWarnings,
+          proposalReplyFallbackRequired: repaired.normalizedActionableQuestion,
           jsonRepair: { request: repairPrompt, responseAudit: repairAudit },
         }
       } catch (repairError) {
@@ -986,6 +1013,7 @@ export async function routeDirectorIntentWithLlm(input: {
       missingInformation: parsed.missingInformation,
       structuredOutput: response.structuredOutput,
       imageInputWarnings,
+      proposalReplyFallbackRequired: parsed.normalizedActionableQuestion,
     }
   } catch (error) {
     const fallback = buildDirectorContextFallback({

@@ -133,10 +133,6 @@ function parseRequestedSceneCount(prompt: string): number | undefined {
   return zh ? zhMap[zh[1]!] : undefined
 }
 
-function wantsFullMaterialCoverage(prompt: string): boolean {
-  return /全部|所有|每张|每个|都用|用完|全用|use all/i.test(prompt)
-}
-
 function distributeDurations(durationSec: number, count: number): number[] {
   const base = durationSec / count
   return Array.from({ length: count }, (_, index) => {
@@ -209,7 +205,6 @@ export function buildDeterministicRemotionTimelineSpec(
   const conditioningImageAssetId = assets.find((asset) => asset.type === 'image')?.id
   const requestedSceneCount = parseRequestedSceneCount(input.prompt)
   const segmentCount = structuredSegmentCount(input.prompt)
-  const shouldCoverAll = wantsFullMaterialCoverage(input.prompt)
   const neutralSampleSceneCount = Math.max(4, Math.min(
     8,
     Math.round((input.durationSec ?? input.sampleUnderstanding?.sample.duration_sec ?? 12) / 2.5),
@@ -225,7 +220,7 @@ export function buildDeterministicRemotionTimelineSpec(
       MAX_TIMELINE_SCENES,
       requestedSceneCount ??
         segmentCount ??
-        (shouldCoverAll && visualAssets.length ? visualAssets.length : defaultSceneCount),
+        defaultSceneCount,
     ),
   )
   const durationSec =

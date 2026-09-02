@@ -188,9 +188,10 @@ function proposalReply(input: {
   userPrompt: string
   modelMessage: string
   kind: 'creation' | 'revision'
+  forceFallback?: boolean
 }) {
-  if (!input.userPrompt.trim()
-    || usesChineseAsPrimaryLanguage(input.userPrompt) === usesChineseAsPrimaryLanguage(input.modelMessage)) {
+  if (!input.forceFallback && (!input.userPrompt.trim()
+    || usesChineseAsPrimaryLanguage(input.userPrompt) === usesChineseAsPrimaryLanguage(input.modelMessage))) {
     return input.modelMessage
   }
   if (usesChineseAsPrimaryLanguage(input.userPrompt)) {
@@ -457,11 +458,9 @@ export async function* streamDirectorAgentChat(
       workspaceState.context.materials.some((material) => material.id === materialId && material.type === 'image'))
       .slice(0, 12)
     : []
-  if (input.currentTurnMaterialIds?.length) {
-    workspaceState = applyDirectorWorkspacePatch(workspaceState, {
-      recentVisualMaterialIds: explicitlyAttachedImages,
-    })
-  }
+  workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+    recentVisualMaterialIds: explicitlyAttachedImages,
+  })
   const persistedTimelineRevision = workspaceState.draftId && workspaceState.baseRevision
     ? await timelineDrafts.getRevision(workspaceState.draftId, workspaceState.baseRevision, userId)
     : null
@@ -713,6 +712,7 @@ export async function* streamDirectorAgentChat(
     context: workspaceState.context,
     confirmedRequirements: workspaceState.confirmedRequirements,
     pendingTimelineRevisions: workspaceState.pendingTimelineRevisions,
+    recentFailure: workspaceState.recentFailure,
     retrievedCreativeMemories: creativeMemoryRetrieval,
     previousResponseId:
       workspaceState.responseContinuityDisabled ? undefined : workspaceState.responseId,
@@ -1045,6 +1045,7 @@ export async function* streamDirectorAgentChat(
           sceneId: request.arguments.sceneId,
           overlayIds: request.arguments.overlayIds,
           transitionIds: request.arguments.transitionIds,
+          requiredMaterialIds: request.arguments.requiredMaterialIds,
           resolvesPendingCallId: request.arguments.resolvesPendingCallId,
         })),
       })
@@ -1115,6 +1116,7 @@ export async function* streamDirectorAgentChat(
     }
   }
   const revisionGroupResults = new Map<string, V2AgentToolResult>()
+  let latestTurnFailure: DirectorWorkspaceState['recentFailure'] | undefined
   const preResolvedDependencyRefs = new Set(confirmedProposal?.resolvedStateActionRefs ?? [])
   if (shouldExecute) {
     for (const request of executionRequests) {
@@ -1296,6 +1298,16 @@ export async function* streamDirectorAgentChat(
       }
       if (revisionGroupPrimary) revisionGroupResults.set(request.callId, result)
       toolResults.push(result)
+      if (!result.ok && !failedDependencyRef) {
+        const diagnostic = internalDispatchError?.message
+          .replace(/https?:\/\/\S+/giu, '[url]')
+          .replace(/\s+/gu, ' ')
+          .slice(0, 500)
+        latestTurnFailure = {
+          reason: diagnostic || result.summary,
+          recovery: result.recovery,
+        }
+      }
       if (
         request.toolId === 'timeline.patch'
         && !result.ok
@@ -1402,7 +1414,6 @@ export async function* streamDirectorAgentChat(
           ? [...(workspaceState.recentToolCallIds ?? []), request.callId].slice(-48)
           : workspaceState.recentToolCallIds,
         latestExecution: { action: request.toolId, outcome: result.ok ? result.summary : `failed: ${result.summary}`, traceDir: result.draft?.traceDir },
-        recentFailure: result.ok ? null : { reason: result.summary, recovery: result.recovery },
         pendingTimelineRevisions: request.toolId === 'timeline.patch' || request.toolId === 'timeline.pending.dismiss'
           ? result.ok
             ? result.draft
@@ -1448,6 +1459,9 @@ export async function* streamDirectorAgentChat(
           : undefined,
       }
     }
+    workspaceState = applyDirectorWorkspacePatch(workspaceState, {
+      recentFailure: latestTurnFailure ?? null,
+    })
   }
   if (confirmedRevisionProposal) {
     workspaceState = applyDirectorWorkspacePatch(workspaceState, {
@@ -1467,12 +1481,14 @@ export async function* streamDirectorAgentChat(
         userPrompt: input.prompt,
         modelMessage: routed.result.assistantMessage,
         kind: 'creation',
+        forceFallback: routed.proposalReplyFallbackRequired,
       })
     : awaitsRevisionConfirmation
     ? proposalReply({
         userPrompt: input.prompt,
         modelMessage: routed.result.assistantMessage,
         kind: 'revision',
+        forceFallback: routed.proposalReplyFallbackRequired,
       })
     : shouldReportToolOutcome
     ? toolConfirmation

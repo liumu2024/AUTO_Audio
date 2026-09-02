@@ -589,6 +589,10 @@ export function buildV2TimelinePlannerPrompt(
     'Hard rules:',
     '- Output JSON only. No markdown or prose outside JSON.',
     `- schema_version must be "${REMOTION_TIMELINE_SPEC_SCHEMA_VERSION}".`,
+    '- All natural-language fields visible to the user must use the same primary language as user_prompt. This includes the creative brief, image observations and uses, sample methods, scene intent, card copy, overlays, displayed material-job prompts, and notes. Keep protocol ids and enum values unchanged.',
+    '- Honor requested content coverage before applying a generic opening-middle-ending template. If the user asks to introduce each of several distinct subjects and does not specify a smaller scene count or grouping, give every subject its own concrete scene or segment.',
+    '- A generate_video prompt must describe the concrete subject, environment, lighting, camera movement, and intended action; never copy the user request as a meta instruction.',
+    '- material_assets are candidates. required_material_ids is the authoritative subset that must actually be used; never force optional candidates into the plan merely to fill a quota.',
     '- Do not output React, Remotion code, HTML, CSS, FFmpeg commands, or free-form component code.',
     '- Remotion may compose scenes, transitions, captions, text cards, image motion, labels, shapes, and light sweep overlays.',
     '- Realistic missing visual content must be represented as material_jobs with type "generate_video".',
@@ -635,13 +639,10 @@ export function buildV2TimelinePlannerPrompt(
         ]
       : []),
     '- Avoid unnecessary generated video jobs, but do not hide user images just to keep the plan short.',
-    '- If multiple image materials are provided and the user does not request a smaller scene count, promote each visual image to a main scene up to 12 scenes.',
     '- If the user explicitly requests a scene count, output exactly that many scenes unless it would violate the schema.',
-    '- If the user asks to use all images/materials, every visual material_asset must appear in the plan; prefer main scene usage, and use image_badge only when the requested scene count is smaller than the material count.',
     '- Do not use product-marketing labels such as demo, selling point, proof, or CTA unless the user/materials are clearly product or marketing oriented.',
     '- Choose user-facing scene wording from the detected content domain instead of a fixed template. Examples: product can use 展示/卖点/转化; narrative can use 起因/推进/转折/结尾; landscape/music can use 氛围/节奏/视觉重点; education can use 问题/解释/示例/总结.',
     '- If the content domain is unclear, use neutral structure labels such as 开篇引入、内容推进、重点展开、衔接过渡、结尾收束.',
-    '- All user-visible plan text must use the same primary language as user_prompt. This includes creative_brief.direction, image-reference facts and intended use, sample_methods, scene creative_intent title/description/material_label, scene card copy, overlay text, material job prompts shown in the plan, and notes. Keep protocol ids and enum values unchanged.',
     '- For user_video, ai_video, and image_motion scenes, do not use title, subtitle, or body as visible copy. Put the shot explanation in creative_intent { title, description, material_label }; only overlays[].text is visible in the finished video.',
     '- For remotion_card, caption_scene, and data_viz scenes, title, subtitle, and body are intentional on-screen card copy. Do not put internal filenames or planning prose there.',
     '- Scene creative_intent should tell a normal user what appears in the shot, which material is used, how it moves, and how it connects to the next shot.',
@@ -653,7 +654,6 @@ export function buildV2TimelinePlannerPrompt(
     '- For a scene-content revision, keep creative_intent and that scene\'s material-job prompt semantically aligned. For an ai_video visual_strategy revision, carry the requested palette, lighting, composition or camera treatment into that scene\'s material-job prompt so the rendered shot changes; do not introduce a new subject, location, action, event or prop only in the prompt.',
     '- For global brief_update, copy direct timeline fields and materially revise creative_brief.direction to express the requested whole-video direction. Do not claim success by changing notes only.',
     '- For every ai_video scene, set asset_id to the output_asset_id of that scene\'s generate_video material job. The generated asset may be absent from assets until material resolution.',
-    '- A generate_video prompt must describe the concrete subject, environment, lighting, camera movement, and intended action; do not copy the user request as a meta instruction.',
     '- hard_requirements.required_captions are mandatory user-provided caption lines. Every required caption must appear verbatim in overlays[].text exactly once or more.',
     '- Every scene must have concrete time, type, render role, and a valid asset reference when the scene type needs an asset.',
     '- Every asset id, scene id, transition id, overlay id, and material job id must be unique.',
@@ -697,6 +697,7 @@ export function buildV2TimelinePlannerPrompt(
           label: asset.label,
           source: asset.source,
         })),
+        required_material_ids: input.requiredMaterialIds ?? [],
         sample_understanding: compactSampleUnderstanding(input),
         hard_requirements: hardRequirements,
         attached_image_inputs: visualInputReport ?? {
@@ -738,7 +739,9 @@ function revisionFragmentScopeRules(input: V2RemotionTimelinePlannerInput): stri
     '- structure：只返回授权连续范围的替换 scenes，以及它们需要的 transitions、overlays、caption tracks、material jobs 和 image references；不得返回范围外受保护镜头，范围边界由服务端提供。',
     input.revisionDurationMode === 'resize_timeline'
       ? '- 本轮明确允许改变范围时长；保持范围内场景相对时间一致。'
-      : '- 替换镜头必须保持原目标范围的总时长。',
+      : input.revisionContext?.constraints
+        ? `- 替换镜头必须保持原目标范围总时长为 ${input.revisionContext.constraints.target_range_duration_sec} 秒，并从 ${input.revisionContext.constraints.target_range_start_sec} 秒开始。`
+        : '- 替换镜头必须保持原目标范围的总时长。',
   ]
   if (input.revisionScope === 'global' && input.revisionGlobalMode === 'brief_update') return [
     '- global.brief_update：只返回完整 creative_brief，并实质更新 direction；除非本轮明确要求，保留 image references、sample methods 和 applied preferences。不得返回或改写 scenes、时间、字幕、assets、transitions、audio、material jobs 或服务端 planning_gaps。',
@@ -827,10 +830,13 @@ export function buildV2TimelineRevisionPlannerPrompt(
     '- Fragment 省略的对象由服务端原样保留；需要返回的对象必须是当前 Scope 内的完整对象，不使用 JSON Patch。',
     '- 只能使用权威素材目录和组件目录中的 ID。不得填写 planning_gaps、执行回执、input_image_url 或虚假 fulfilled 状态。',
     '- 只实现本轮明确要求。授权目标之外的镜头、字幕、时间、转场、素材和创作事实必须保持不变。',
+    ...(input.requiredMaterialIds?.length
+      ? ['- required_material_ids 中的素材必须在本轮结果中被目标镜头、覆盖层、音频或生成任务真实引用；目录中的其他素材只是候选。']
+      : []),
     '- Fragment 返回 creative_brief 时，applied_preferences 只能包含本轮实际采用的 recalled_user_preferences 原句。',
-    `- 当前创作模式：${creationMode}。用户未要求改变素材策略时必须继承现有方案。`,
+    `- 当前草稿最初的创作模式：${creationMode}。它描述起稿方式，不代表后续轮次始终没有新素材；用户未要求改变的既有素材策略仍须继承。`,
     ...(creationMode === 'text_to_video'
-      ? ['- text_to_video 没有用户视觉素材；需要真实动态画面的镜头继续使用 ai_video + generate_video，不得改成 request_user_material。']
+      ? ['- 对没有绑定本轮 required_material_ids 的真实动态镜头，继续使用 ai_video + generate_video，不得仅因原草稿以 text_to_video 起稿就改成 request_user_material；本轮明确要求加入的素材仍可用于授权目标。']
       : []),
     ...(input.originalUserPrompt?.trim()
       ? ['- 面向用户的可见文本必须跟随“用户原始输入”的主要语言；该输入仅用于可见文本的语言判断，不扩大修订范围。']
@@ -890,6 +896,7 @@ export function buildV2TimelineRevisionPlannerPrompt(
       revision_overlay_ids: input.revisionOverlayIds ?? null,
       revision_transition_ids: input.revisionTransitionIds ?? null,
       server_asset_catalog: assetCatalog,
+      required_material_ids: input.requiredMaterialIds ?? [],
       hard_requirements: hardRequirements,
     }, null, 2),
     ...(hasImageRule ? ['', '真实图片输入报告', JSON.stringify(visualInputReport ?? null)] : []),
@@ -1004,6 +1011,7 @@ export function buildV2TimelineSemanticCorrectionPrompt(input: {
     '修正必需的权威事实',
     JSON.stringify({
       server_asset_catalog: assetCatalog,
+      required_material_ids: plannerInput.requiredMaterialIds ?? [],
       creative_context: creativeContext,
     }, null, 2),
     ...(hasImageContext
@@ -1046,61 +1054,28 @@ export function buildV2TimelineSemanticCorrectionPrompt(input: {
   ].join('\n')
 }
 
-function hasExplicitSceneCount(prompt: string): boolean {
-  return /(\d{1,2})\s*(段|个镜头|镜头|个场景|场景|幕|scene|scenes)/i.test(prompt) ||
-    /[一二两三四五六七八九十]\s*(段|个镜头|镜头|个场景|场景|幕)/.test(prompt)
-}
-
-function wantsFullMaterialCoverage(prompt: string): boolean {
-  return /全部|所有|每张|每个|都用|用完|全用|use all/i.test(prompt)
-}
-
-function assertLlmMainSceneMaterialCoverage(input: V2RemotionTimelinePlannerInput, spec: RemotionTimelineSpecV1) {
-  const expected = buildDeterministicRemotionTimelineSpec(input).assets.filter(
-    (asset) => asset.source === 'user_asset' && (asset.type === 'image' || asset.type === 'video'),
-  )
-  const fullCoverageRequested = wantsFullMaterialCoverage(input.prompt)
-  if (fullCoverageRequested) {
-    const assetById = new Map(spec.assets.map((asset) => [asset.id, asset]))
-    const usedSrcs = new Set<string>()
-    for (const scene of spec.scenes) {
-      const sceneAsset = scene.asset_id ? assetById.get(scene.asset_id) : undefined
-      if (sceneAsset) usedSrcs.add(sceneAsset.src)
-    }
-    for (const overlay of spec.overlays) {
-      const overlayAsset = overlay.asset_id ? assetById.get(overlay.asset_id) : undefined
-      if (overlayAsset) usedSrcs.add(overlayAsset.src)
-    }
-    for (const job of spec.material_jobs) {
-      const inputAsset = job.input_asset_id ? assetById.get(job.input_asset_id) : undefined
-      if (inputAsset) usedSrcs.add(inputAsset.src)
-    }
-    const missing = expected.filter((asset) => !usedSrcs.has(asset.src))
-    if (missing.length) {
-      throw new Error(
-        `LLM timeline did not cover all requested visual materials; missing ${missing.length}/${expected.length}.`,
-      )
-    }
-    return
+export function assertRequiredMaterialCoverage(
+  input: Pick<V2RemotionTimelinePlannerInput, 'requiredMaterialIds'>,
+  spec: RemotionTimelineSpecV1,
+  revisionFragment?: V2TimelineRevisionFragment | V2TimelineRevisionGroupFragment,
+) {
+  const required = new Set(input.requiredMaterialIds ?? [])
+  if (required.size === 0) return
+  const scenes = revisionFragment ? revisionFragment.scenes ?? [] : spec.scenes
+  const overlays = revisionFragment ? revisionFragment.overlays ?? [] : spec.overlays
+  const materialJobs = revisionFragment ? revisionFragment.material_jobs ?? [] : spec.material_jobs
+  const used = new Set<string>()
+  for (const scene of scenes) if (scene.asset_id) used.add(scene.asset_id)
+  for (const overlay of overlays) if (overlay.asset_id) used.add(overlay.asset_id)
+  if (!revisionFragment) for (const clip of spec.audio ?? []) used.add(clip.asset_id)
+  for (const job of materialJobs) {
+    if (job.input_asset_id) used.add(job.input_asset_id)
   }
-
-  if (hasExplicitSceneCount(input.prompt)) return
-  if (expected.length < 4) return
-
-  const assetById = new Map(spec.assets.map((asset) => [asset.id, asset]))
-  const mainSceneSrcs = new Set(
-    spec.scenes
-      .map((scene) => (scene.asset_id ? assetById.get(scene.asset_id)?.src : undefined))
-      .filter((src): src is string => Boolean(src)),
-  )
-  for (const job of spec.material_jobs) {
-    const inputAsset = job.input_asset_id ? assetById.get(job.input_asset_id) : undefined
-    if (inputAsset) mainSceneSrcs.add(inputAsset.src)
-  }
-  const missing = expected.filter((asset) => !mainSceneSrcs.has(asset.src))
-  if (missing.length) {
-    throw new Error(
-      `LLM timeline used only ${expected.length - missing.length}/${expected.length} user visual materials as main scenes.`,
+  const missing = [...required].filter((id) => !used.has(id))
+  if (missing.length > 0) {
+    throw timelineFieldRepairError(
+      `Timeline does not use required material IDs: ${missing.join(', ')}`,
+      ['assets', 'scenes', 'overlays', 'audio', 'material_jobs'],
     )
   }
 }
@@ -1384,6 +1359,8 @@ function timelineFieldRepairPrompt(input: {
   allowedRepairPaths: string[]
   assets: Array<{ id: string; type: string }>
   outputContract: PlannerOutputContract
+  revisionConstraints?: NonNullable<V2RemotionTimelinePlannerInput['revisionContext']>['constraints']
+  requiredMaterialIds?: string[]
 }) {
   return [
     'Correct only the fields implicated by the validation error below.',
@@ -1394,6 +1371,8 @@ function timelineFieldRepairPrompt(input: {
     'A catalog id is the assets[].id itself, not an alias. Copy that id unchanged into assets[] and use the same id for input_asset_id.',
     'For ai_video, scene.asset_id must remain equal to its generate_video job output_asset_id. Never replace it with the input image id or add the unresolved output id to assets[].',
     `Server-owned asset catalog (IDs and types only): ${JSON.stringify(input.assets)}`,
+    `Authoritative revision constraints: ${JSON.stringify(input.revisionConstraints ?? null)}`,
+    `Required material IDs: ${JSON.stringify(input.requiredMaterialIds ?? [])}`,
     input.outputContract.kind === 'fragment'
       ? 'Preserve fields in the fragment that are unrelated to the validation error.'
       : 'Preserve unrelated timeline choices, captions, timing, and valid assets.',
@@ -1613,6 +1592,7 @@ export async function runV2TimelineLlmPlanner(
     const authoritative = await bindAuthoritativePlannerAssets(input, scopedSpec, {
       allowPersistedPlanningGaps: Boolean(revisionFragment),
     })
+    assertRequiredMaterialCoverage(input, authoritative, revisionFragment)
     return {
       revisionFragment,
       repaired: { spec: authoritative, repairs: repaired.repairs },
@@ -1649,6 +1629,8 @@ export async function runV2TimelineLlmPlanner(
         type: asset.type,
       })),
       outputContract,
+      revisionConstraints: input.revisionContext?.constraints,
+      requiredMaterialIds: input.requiredMaterialIds,
     })
     try {
       const repaired = await callResponsesApi(repairPrompt, preparedImages.content, {
@@ -1703,7 +1685,6 @@ export async function runV2TimelineLlmPlanner(
   }
 
   const spec = assertValidRemotionTimelineSpec(preparedCandidate.repaired.spec)
-  assertLlmMainSceneMaterialCoverage(input, spec)
 
     return {
       spec,

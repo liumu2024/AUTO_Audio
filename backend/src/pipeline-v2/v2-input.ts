@@ -84,6 +84,9 @@ export interface V2PlannerInput {
   /** Server-confirmed render components available for reference. */
   availableComponents?: RenderComponentSummary[]
   materials?: V2PlannerMaterialInput[]
+  /** Server-validated material IDs that this operation must actually use.
+   * Other materials remain optional candidates. */
+  requiredMaterialIds?: string[]
   durationSec?: number
   plannerMode?: 'deterministic' | 'llm'
   canvas?: {
