@@ -30,7 +30,6 @@ import {
   recordCreativeKnowledgeObservation,
   recordCreativeMemoryObservation,
   type CreativeMemoryObservationKind,
-  type CreativePreferencePolarity,
 } from './creative-learning-observation.repository.js'
 
 const MemoryObservationSchema = z.discriminatedUnion('kind', [

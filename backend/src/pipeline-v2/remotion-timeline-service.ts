@@ -130,13 +130,10 @@ function traceablePlannerInput(input: V2PlannerInput & { imageSrc?: string }) {
 
 function semanticCaptionPolicy(plannerSource: string, attachedImages: number): string {
   if (plannerSource === 'override') return 'render_existing_revision_without_replanning'
-  if (plannerSource.startsWith('llm') && attachedImages > 0) {
+  if (attachedImages > 0) {
     return 'planner_may_create_captions_from_attached_image_inputs'
   }
-  if (plannerSource.startsWith('llm')) {
-    return 'planner_must_not_claim_image_understanding_without_accessible_image_inputs'
-  }
-  return 'fallback_preserves_only_explicit_user_caption_requirements'
+  return 'planner_must_not_claim_image_understanding_without_accessible_image_inputs'
 }
 
 async function resolveTimelineSpec(input: {
