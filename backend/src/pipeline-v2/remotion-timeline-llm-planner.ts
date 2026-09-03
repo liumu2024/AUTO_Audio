@@ -40,6 +40,10 @@ import {
 export const V2_TIMELINE_PLANNER_PROTOCOL_VERSION = 'v2_timeline_planner_protocol.v2'
 
 const MAX_V2_PLANNER_IMAGE_INPUTS = 12
+const secondsSchema = { type: 'number', minimum: 0, description: 'Seconds, not milliseconds or frames.' } as const
+const percentPointSchema = { type: 'number', minimum: 0, maximum: 100, description: 'Percentage points from 0 to 100; write 88 for 88%, never 0.88.' } as const
+const percentSizeSchema = { type: 'number', minimum: 0, description: 'Percentage points; write 60 for 60%, never 0.6.' } as const
+const unitIntervalSchema = { type: 'number', minimum: 0, maximum: 1, description: 'Unitless ratio from 0 to 1.' } as const
 const TimelineJsonSchema = {
   type: 'object',
   required: ['schema_version', 'task_id', 'creative_brief', 'canvas', 'scenes', 'assets', 'transitions', 'caption_tracks', 'overlays', 'audio', 'material_jobs', 'render_policy'],
@@ -71,7 +75,7 @@ const TimelineJsonSchema = {
     },
     canvas: {
       type: 'object', required: ['width', 'height', 'fps', 'duration_sec'],
-      properties: { width: { type: 'number' }, height: { type: 'number' }, fps: { type: 'number' }, duration_sec: { type: 'number' }, background: { type: 'string' } },
+      properties: { width: { type: 'integer', minimum: 1, description: 'Canvas width in pixels.' }, height: { type: 'integer', minimum: 1, description: 'Canvas height in pixels.' }, fps: { type: 'integer', minimum: 1, description: 'Frames per second.' }, duration_sec: secondsSchema, background: { type: 'string' } },
     },
     assets: {
       type: 'array', items: {
@@ -83,32 +87,32 @@ const TimelineJsonSchema = {
       type: 'array', items: {
         type: 'object', required: ['id', 'type', 'start_sec', 'duration_sec'],
         properties: {
-          id: { type: 'string' }, type: { type: 'string', enum: ['user_video', 'ai_video', 'image_motion', 'remotion_card', 'caption_scene', 'data_viz'] }, start_sec: { type: 'number' }, duration_sec: { type: 'number' }, asset_id: { type: 'string' }, fit: { type: 'string', enum: ['cover', 'contain'] }, background: { type: 'string' }, title: { type: 'string' }, subtitle: { type: 'string' }, body: { type: 'string' }, accent_color: { type: 'string' }, motion: { type: 'string', enum: ['none', 'slow_zoom_in', 'slow_zoom_out', 'pan_left', 'pan_right'] }, visual_role: { type: 'string', enum: ['hook', 'proof', 'feature', 'transition', 'cta'] }, creative_intent: { type: 'object', properties: { title: { type: 'string' }, description: { type: 'string' }, material_label: { type: 'string' } } }, note: { type: 'string' }, custom_render: { type: 'object', required: ['component_id'], properties: { component_id: { type: 'string' }, params: { type: 'object' } } },
+          id: { type: 'string' }, type: { type: 'string', enum: ['user_video', 'ai_video', 'image_motion', 'remotion_card', 'caption_scene', 'data_viz'] }, start_sec: secondsSchema, duration_sec: secondsSchema, asset_id: { type: 'string' }, fit: { type: 'string', enum: ['cover', 'contain'] }, background: { type: 'string' }, title: { type: 'string' }, subtitle: { type: 'string' }, body: { type: 'string' }, accent_color: { type: 'string' }, motion: { type: 'string', enum: ['none', 'slow_zoom_in', 'slow_zoom_out', 'pan_left', 'pan_right'] }, visual_role: { type: 'string', enum: ['hook', 'proof', 'feature', 'transition', 'cta'] }, creative_intent: { type: 'object', properties: { title: { type: 'string' }, description: { type: 'string' }, material_label: { type: 'string' } } }, note: { type: 'string' }, custom_render: { type: 'object', required: ['component_id'], properties: { component_id: { type: 'string' }, params: { type: 'object' } } },
         },
       },
     },
     transitions: {
       type: 'array', items: {
         type: 'object', required: ['id', 'from_scene_id', 'to_scene_id', 'type', 'duration_sec'],
-        properties: { id: { type: 'string' }, from_scene_id: { type: 'string' }, to_scene_id: { type: 'string' }, type: { type: 'string', enum: [...REMOTION_TIMELINE_TRANSITION_TYPES] }, duration_sec: { type: 'number' }, direction: { type: 'string', enum: ['from-left', 'from-right', 'from-top', 'from-bottom'] }, custom_render: { type: 'object', required: ['component_id'], properties: { component_id: { type: 'string' }, params: { type: 'object' } } } },
+        properties: { id: { type: 'string' }, from_scene_id: { type: 'string' }, to_scene_id: { type: 'string' }, type: { type: 'string', enum: [...REMOTION_TIMELINE_TRANSITION_TYPES] }, duration_sec: secondsSchema, direction: { type: 'string', enum: ['from-left', 'from-right', 'from-top', 'from-bottom'] }, custom_render: { type: 'object', required: ['component_id'], properties: { component_id: { type: 'string' }, params: { type: 'object' } } } },
       },
     },
     overlays: {
       type: 'array', items: {
         type: 'object', required: ['id', 'type', 'start_sec', 'end_sec', 'x_pct', 'y_pct'],
-        properties: { id: { type: 'string' }, type: { type: 'string', enum: ['caption', 'title', 'label', 'shape', 'image_badge', 'light_sweep'] }, start_sec: { type: 'number' }, end_sec: { type: 'number' }, scene_id: { type: 'string' }, track_id: { type: 'string' }, text: { type: 'string' }, asset_id: { type: 'string' }, x_pct: { type: 'number' }, y_pct: { type: 'number' }, width_pct: { type: 'number' }, height_pct: { type: 'number' }, max_lines: { type: 'integer', minimum: 1, maximum: 8 }, z_index: { type: 'integer' }, color: { type: 'string' }, background: { type: 'string' }, opacity: { type: 'number' }, animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] }, enter_animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] }, exit_animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] } },
+        properties: { id: { type: 'string' }, type: { type: 'string', enum: ['caption', 'title', 'label', 'shape', 'image_badge', 'light_sweep'] }, start_sec: secondsSchema, end_sec: secondsSchema, scene_id: { type: 'string' }, track_id: { type: 'string' }, text: { type: 'string' }, asset_id: { type: 'string' }, x_pct: percentPointSchema, y_pct: percentPointSchema, width_pct: percentSizeSchema, height_pct: percentSizeSchema, max_lines: { type: 'integer', minimum: 1, maximum: 8 }, z_index: { type: 'integer' }, color: { type: 'string' }, background: { type: 'string' }, opacity: unitIntervalSchema, animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] }, enter_animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] }, exit_animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] } },
       },
     },
     caption_tracks: {
       type: 'array', items: {
         type: 'object', required: ['id', 'x_pct', 'y_pct'],
-        properties: { id: { type: 'string' }, x_pct: { type: 'number' }, y_pct: { type: 'number' }, width_pct: { type: 'number' }, max_lines: { type: 'integer', minimum: 1, maximum: 8 }, z_index: { type: 'integer' }, enter_animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] }, exit_animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] }, overlap_policy: { type: 'string', enum: ['forbid', 'allow_crossfade'] } },
+        properties: { id: { type: 'string' }, x_pct: percentPointSchema, y_pct: percentPointSchema, width_pct: { ...percentPointSchema, description: 'Caption width in percentage points; write 60 for 60%, never 0.6.' }, max_lines: { type: 'integer', minimum: 1, maximum: 8 }, z_index: { type: 'integer' }, enter_animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] }, exit_animation: { type: 'string', enum: ['none', 'fade', 'slide_up_fade', 'pop', 'pulse', 'sweep'] }, overlap_policy: { type: 'string', enum: ['forbid', 'allow_crossfade'] } },
       },
     },
     audio: {
       type: 'array', items: {
         type: 'object', required: ['id', 'asset_id', 'start_sec', 'end_sec'],
-        properties: { id: { type: 'string' }, asset_id: { type: 'string' }, start_sec: { type: 'number' }, end_sec: { type: 'number' }, volume: { type: 'number' } },
+        properties: { id: { type: 'string' }, asset_id: { type: 'string' }, start_sec: secondsSchema, end_sec: secondsSchema, volume: unitIntervalSchema },
       },
     },
     material_jobs: {
@@ -701,6 +705,7 @@ export function buildV2TimelinePlannerPrompt(
     '- material_assets are candidates. required_material_ids is the authoritative subset that must actually be used; never force optional candidates into the plan merely to fill a quota.',
     '- Do not output React, Remotion code, HTML, CSS, FFmpeg commands, or free-form component code.',
     '- Remotion may compose scenes, transitions, captions, text cards, image motion, labels, shapes, and light sweep overlays.',
+    '- Numeric units are literal: *_sec values use seconds; canvas width/height use pixels; fps uses frames per second; x_pct/y_pct/width_pct/height_pct use percentage points (write 88 for 88%, never 0.88); only opacity and audio volume use a 0-1 ratio.',
     '- Realistic missing visual content must be represented as material_jobs with type "generate_video".',
     '- image_motion cannot invent new visual elements; it only pans, zooms, or crops pixels from its bound image asset. If the requested shot adds a person, animal, vehicle, weather event, or other content absent from the source image, use ai_video with a generate_video job.',
     '- To faithfully display an available image, use an image_motion scene bound to that image and a fulfilled reuse_asset job whose output_asset_id is the same image id. When the material already exists in material_assets, never use request_user_material for it.',
@@ -708,7 +713,7 @@ export function buildV2TimelinePlannerPrompt(
     '- The planner does not own execution status. New generate_video jobs must use status "planned"; only the backend may mark them fulfilled after a real output asset exists.',
     '- creative_brief.direction is the single whole-video creative direction. material_job.prompt contains only scene-specific semantics.',
     '- For every attached image actually used, record only visible facts in creative_brief.image_references.observed_facts and explain its intended use. Do not invent unseen facts.',
-    '- creative_brief.sample_methods contains only sample methods selected because they help this task; it must not mechanically copy sample chapter boundaries.',
+    '- creative_brief.sample_methods contains only transferable sample methods selected because they help this task; it must not mechanically copy sample chapter boundaries or restate the plan\'s current scene count, total duration, or other mutable plan parameters.',
     '- creative_brief.applied_preferences contains only exact statements from planning_context.recalledCreativeMemories that were actually adopted in this plan. Do not list merely recalled, conflicting, or unused preferences.',
     '- Never output creative_brief.planning_gaps. Only the server records unresolved planning work.',
     '- assets contains only already-resolved, renderable assets and every asset src must be non-empty. Do not add an empty placeholder asset for a planned generation; reference its material_job output_asset_id from the scene instead.',
